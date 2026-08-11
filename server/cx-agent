@@ -1,0 +1,709 @@
+#!/usr/bin/env bash
+# cx-agent — the server half of cx.
+#
+# DELIBERATELY MONOLITHIC. This file is scp'd to servers as a single artifact,
+# so it must not source anything outside itself. Resist the urge to factor it
+# into lib/ — that dependency cannot be satisfied on the far end.
+#
+# CONTRACT
+#   stdout  machine-readable (JSON, or a bare value for `path`)
+#   stderr  human-readable progress and errors
+#   exit    0 ok, 1 error, 2 not found, 3 usage, 4 conflict
+#
+# This split is what lets the client consume output while errors still reach
+# the user's terminal.
+#
+# The client never builds shell command strings for this script — it passes
+# arguments, quoted individually. All quoting lives on the client side of the
+# wire; by the time we get here, "$1" is one intact argument no matter what
+# characters it contains.
+#
+# Targets bash 3.2 for consistency with the client. See docs/ARCHITECTURE.md.
+
+set -eu
+
+CX_AGENT_VERSION="0.1.0"
+
+CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
+CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
+CX_CLAUDE_DIR="${CX_CLAUDE_DIR:-$HOME/.claude}"
+CX_LOCK_DIR="$CX_DATA_DIR/.lock"
+CX_TMUX_PREFIX="cx-"
+
+log() { printf '%s\n' "$*" >&2; }
+die() {
+  printf 'cx-agent: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------------------
+# Portability (self-contained; mirrors lib/compat.sh)
+# ---------------------------------------------------------------------------
+
+if stat -c %Y . >/dev/null 2>&1; then # portable-ok: this IS the probe
+  _STAT=gnu
+elif stat -f %m . >/dev/null 2>&1; then
+  _STAT=bsd
+else
+  _STAT=none
+fi
+
+_mtime() {
+  [ -e "$1" ] || return 1
+  case "$_STAT" in
+    gnu) stat -c %Y -- "$1" 2>/dev/null ;; # portable-ok: guarded by probe
+    bsd) stat -f %m -- "$1" 2>/dev/null ;;
+    *) date -r "$1" +%s 2>/dev/null ;;
+  esac
+}
+
+# mkdir is atomic on every POSIX filesystem; flock is Linux-only.
+_lock() {
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    if mkdir "$CX_LOCK_DIR" 2>/dev/null; then
+      printf '%s' $$ >"$CX_LOCK_DIR/pid" 2>/dev/null || true
+      return 0
+    fi
+    # Reap a lock whose owner died mid-write.
+    local pid age
+    pid=$(cat "$CX_LOCK_DIR/pid" 2>/dev/null || printf '')
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      age=$(($(date +%s) - $(_mtime "$CX_LOCK_DIR" 2>/dev/null || printf 0)))
+      [ "$age" -gt 30 ] && rm -rf "$CX_LOCK_DIR" 2>/dev/null || true
+    fi
+    i=$((i + 1))
+    sleep 0.1
+  done
+  die "could not acquire the registry lock (is another cx command stuck?)" 1
+}
+
+_unlock() { rm -rf "$CX_LOCK_DIR" 2>/dev/null || true; }
+
+# Every registry write goes through this. The rename is atomic, so a reader
+# sees either the whole old file or the whole new one — never a truncation.
+_write_atomic() {
+  local dest="$1" tmp
+  tmp="$(dirname "$dest")/.cx.tmp.$$"
+  cat >"$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
+  mv -f "$tmp" "$dest" || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+_registry_ensure() {
+  [ -e "$CX_REGISTRY" ] && return 0
+  mkdir -p "$(dirname "$CX_REGISTRY")"
+  printf '{"version":1,"root":"%s","projects":[]}\n' "$HOME/projects" |
+    _write_atomic "$CX_REGISTRY"
+}
+
+_registry_root() {
+  _registry_ensure
+  jq -r '.root // empty' "$CX_REGISTRY" 2>/dev/null || printf '%s/projects' "$HOME"
+}
+
+_project_get() {
+  jq -c --arg n "$1" '.projects[] | select(.name == $n)' "$CX_REGISTRY" 2>/dev/null
+}
+
+_project_path() {
+  _project_get "$1" | jq -r '.path // empty'
+}
+
+# Names become directory names, tmux session names, and JSON keys. Reject
+# anything that would be ambiguous or escape the project root.
+_validate_name() {
+  local n="$1"
+  [ -n "$n" ] || die "project name cannot be empty" 3
+  case "$n" in
+    */* | *'	'* | *' '*) die "project name cannot contain spaces, tabs or slashes: $n" 3 ;;
+    .. | . | -*) die "invalid project name: $n" 3 ;;
+    *[!A-Za-z0-9._-]*) die "project name may only contain letters, digits, dot, underscore and hyphen: $n" 3 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Claude session store
+# ---------------------------------------------------------------------------
+#
+# Claude Code stores per-project history under
+#   ~/.claude/projects/<absolute-path-with-slashes-replaced-by-dashes>/*.jsonl
+#
+# Verified empirically: /home/u/projects/api -> -home-u-projects-api
+#
+# This is an OBSERVED layout, not a documented API. Everything here degrades
+# to "unknown" rather than failing if the directory is absent, so a future
+# Claude Code change costs one display column instead of breaking `cx ls`.
+
+_session_dir() {
+  printf '%s/projects/%s' "$CX_CLAUDE_DIR" "$(printf '%s' "$1" | tr '/' '-')"
+}
+
+# _scan_sessions — one pass over the whole session store.
+# Emits: <encoded-dir-name> TAB <count> TAB <newest-mtime>
+#
+# Scanning once for the entire host rather than once per project is what keeps
+# `list` at O(1) subprocesses instead of O(projects).
+_scan_sessions() {
+  local base="$CX_CLAUDE_DIR/projects" d f name count newest m
+  [ -d "$base" ] || return 0
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    count=0
+    newest=0
+    for f in "$d"*.jsonl; do
+      [ -e "$f" ] || continue
+      count=$((count + 1))
+      m=$(_mtime "$f" 2>/dev/null || printf 0)
+      [ "${m:-0}" -gt "$newest" ] && newest="$m"
+    done
+    printf '%s\t%s\t%s\n' "$name" "$count" "$newest"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+cmd_list() {
+  local want_git=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --git) want_git=1 ;;
+      --json) ;; # always JSON; accepted for symmetry with the client
+      *) ;;
+    esac
+    shift
+  done
+
+  _registry_ensure
+
+  # One tmux query for the whole host, not one per project.
+  local live=""
+  if have tmux; then
+    live=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || printf '')
+  fi
+
+  local sessions
+  sessions=$(_scan_sessions)
+
+  local store_present=false
+  [ -d "$CX_CLAUDE_DIR/projects" ] && store_present=true
+
+  # Derived facts as TSV, merged by a single jq invocation below.
+  local derived="" name path branch dirty tmux_live enc scount slast row
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    path=$(_project_path "$name")
+
+    branch=""
+    dirty=""
+    if [ -n "$path" ] && [ -d "$path/.git" ]; then
+      # symbolic-ref first: it names the branch even before the first commit,
+      # where rev-parse --abbrev-ref just reports the literal "HEAD". A fresh
+      # `cx new` project has no commits, so that is the common case.
+      # Falling back to a short sha covers detached HEAD.
+      branch=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null ||
+        git -C "$path" rev-parse --short HEAD 2>/dev/null || printf '')
+      if [ "$want_git" = 1 ]; then
+        # Expensive on large repos: stats the whole worktree. Opt-in only.
+        if [ -n "$(git -C "$path" status --porcelain 2>/dev/null | head -1)" ]; then
+          dirty=1
+        else
+          dirty=0
+        fi
+      fi
+    fi
+
+    tmux_live=0
+    case "
+$live" in
+      *"
+$CX_TMUX_PREFIX$name") tmux_live=1 ;;
+      *"
+$CX_TMUX_PREFIX$name
+"*) tmux_live=1 ;;
+    esac
+
+    scount=""
+    slast=""
+    if [ "$store_present" = true ] && [ -n "$path" ]; then
+      enc=$(printf '%s' "$path" | tr '/' '-')
+      row=$(printf '%s\n' "$sessions" | awk -F'\t' -v k="$enc" '$1 == k {print $2 "\t" $3; exit}')
+      if [ -n "$row" ]; then
+        scount="${row%%	*}"
+        slast="${row##*	}"
+      else
+        # The store exists but this project has no history yet: genuinely zero,
+        # as opposed to "we cannot tell".
+        scount=0
+        slast=0
+      fi
+    fi
+
+    derived="$derived$name	$branch	$dirty	$tmux_live	$scount	$slast
+"
+  done <<EOF
+$(jq -r '.projects[].name' "$CX_REGISTRY" 2>/dev/null)
+EOF
+
+  jq -c --arg derived "$derived" \
+    --arg host "$(hostname 2>/dev/null || printf 'unknown')" \
+    --argjson store "$store_present" '
+    ($derived
+     | split("\n")
+     | map(select(length > 0) | split("\t"))
+     | map({
+         key: .[0],
+         value: {
+           branch:      (if .[1] == "" then null else .[1] end),
+           dirty:       (if .[2] == "" then null else (.[2] == "1") end),
+           tmux_live:   (.[3] == "1"),
+           sessions:    (if .[4] == "" then null else (.[4] | tonumber) end),
+           last_active: (if .[5] == "" or .[5] == "0" then null else (.[5] | tonumber) end)
+         }
+       })
+     | from_entries) as $d
+    | {
+        host: $host,
+        root: .root,
+        session_store: $store,
+        projects: (.projects | map(. + ($d[.name] // {})))
+      }' "$CX_REGISTRY"
+}
+
+# ---------------------------------------------------------------------------
+# new
+# ---------------------------------------------------------------------------
+
+cmd_new() {
+  local name="" repo="" root=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)
+        shift
+        repo="${1:-}"
+        ;;
+      --root)
+        shift
+        root="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  _validate_name "$name"
+  _registry_ensure
+
+  [ -n "$root" ] || root=$(_registry_root)
+  case "$root" in
+    /*) ;;
+    *) root="$HOME/$root" ;; # relative roots hang off the remote HOME
+  esac
+
+  local path="$root/$name"
+
+  if [ -n "$(_project_get "$name")" ]; then
+    die "project '$name' already exists in the registry" 4
+  fi
+
+  # Adopting an existing directory is fine and useful (a repo cloned by hand);
+  # cloning into a non-empty one is not.
+  if [ -n "$repo" ] && [ -d "$path" ] && [ -n "$(ls -A "$path" 2>/dev/null)" ]; then
+    die "$path already exists and is not empty — clone manually or pick another name" 4
+  fi
+
+  mkdir -p "$root" || die "cannot create $root" 1
+
+  if [ -n "$repo" ]; then
+    log "cloning $repo"
+    git clone --quiet "$repo" "$path" >&2 || die "git clone failed" 1
+  elif [ ! -d "$path" ]; then
+    mkdir -p "$path" || die "cannot create $path" 1
+    git -C "$path" init --quiet >&2 2>/dev/null || true
+  fi
+
+  # Record what git actually knows, rather than trusting the argument: a clone
+  # may redirect, and an adopted directory may already have a different remote.
+  local actual_repo=""
+  if [ -d "$path/.git" ]; then
+    actual_repo=$(git -C "$path" remote get-url origin 2>/dev/null || printf '')
+  fi
+  [ -n "$actual_repo" ] || actual_repo="$repo"
+
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+
+  # Re-check under the lock: two concurrent `cx new` calls for the same name
+  # would otherwise both pass the check above and one would be lost.
+  if [ -n "$(_project_get "$name")" ]; then
+    _unlock
+    die "project '$name' already exists in the registry" 4
+  fi
+
+  jq --arg name "$name" --arg path "$path" --arg repo "$actual_repo" \
+    --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    .projects += [{
+      name: $name,
+      path: $path,
+      repo: (if $repo == "" then null else $repo end),
+      created_at: $created
+    }]' "$CX_REGISTRY" >"$CX_REGISTRY.new" || {
+    _unlock
+    die "failed to update the registry" 1
+  }
+  mv -f "$CX_REGISTRY.new" "$CX_REGISTRY"
+
+  _unlock
+  trap - EXIT INT TERM
+
+  # Compact: the contract is one JSON value on stdout, and a line-oriented
+  # client must not have to reassemble a pretty-printed object.
+  jq -nc --arg name "$name" --arg path "$path" --arg repo "$actual_repo" \
+    '{name:$name, path:$path, repo:(if $repo=="" then null else $repo end), created:true}'
+}
+
+# ---------------------------------------------------------------------------
+# rm
+# ---------------------------------------------------------------------------
+
+cmd_rm() {
+  local name="" purge=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --purge) purge=1 ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$name" ] || die "usage: cx-agent rm <name> [--purge]" 3
+  _registry_ensure
+
+  local path
+  path=$(_project_path "$name")
+  [ -n "$path" ] || die "no such project: $name" 2
+
+  # End any live session first, or tmux keeps a working directory open on a
+  # path we are about to delete.
+  if have tmux; then
+    tmux kill-session -t "$CX_TMUX_PREFIX$name" 2>/dev/null || true
+  fi
+
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+
+  jq --arg n "$name" '.projects |= map(select(.name != $n))' \
+    "$CX_REGISTRY" >"$CX_REGISTRY.new" || {
+    _unlock
+    die "failed to update the registry" 1
+  }
+  mv -f "$CX_REGISTRY.new" "$CX_REGISTRY"
+
+  _unlock
+  trap - EXIT INT TERM
+
+  local purged=false
+  if [ "$purge" = 1 ]; then
+    # Guard against deleting something outside a plausible project location,
+    # however the registry came to contain it.
+    case "$path" in
+      / | /bin | /etc | /home | /usr | /var | "$HOME")
+        die "refusing to delete $path" 1
+        ;;
+    esac
+    [ -d "$path" ] && rm -rf "$path" && purged=true
+  fi
+
+  jq -nc --arg name "$name" --arg path "$path" --argjson purged "$purged" \
+    '{name:$name, path:$path, removed:true, purged:$purged}'
+}
+
+# ---------------------------------------------------------------------------
+# path
+# ---------------------------------------------------------------------------
+
+cmd_path() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: cx-agent path <name>" 3
+  _registry_ensure
+  local p
+  p=$(_project_path "$name")
+  [ -n "$p" ] || die "no such project: $name" 2
+  printf '%s\n' "$p"
+}
+
+# ---------------------------------------------------------------------------
+# open / stop / sessions
+# ---------------------------------------------------------------------------
+
+# cmd_open NAME --mode continue|resume|shell
+#
+# Attach to the project's tmux session, creating it if needed.
+#
+# Three properties this shape buys, each learned from how the naive version
+# misbehaves:
+#
+#   * The claude command is sent ONLY on creation. Re-opening an existing
+#     session must reattach to whatever is there, not stack a second Claude on
+#     top of the first.
+#   * `attach -d` detaches other clients. A hard SSH drop leaves a phantom
+#     client attached, and tmux sizes the window to the smallest one — so
+#     without -d, reconnecting gives you a squashed display.
+#   * `claude --continue` falls back to plain `claude`, because --continue
+#     fails on a project that has no prior session — which is every project
+#     the first time it is opened.
+cmd_open() {
+  local name="" mode="continue"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode)
+        shift
+        mode="${1:-continue}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$name" ] || die "usage: cx-agent open <name> [--mode MODE]" 3
+  have tmux || die "tmux is not installed on this server" 1
+
+  _registry_ensure
+  local path
+  path=$(_project_path "$name")
+  [ -n "$path" ] || die "no such project: $name" 2
+  [ -d "$path" ] || die "project directory is missing: $path" 1
+
+  local s="$CX_TMUX_PREFIX$name"
+
+  if ! tmux has-session -t "$s" 2>/dev/null; then
+    tmux new-session -d -s "$s" -c "$path" || die "could not create tmux session" 1
+    case "$mode" in
+      continue) tmux send-keys -t "$s" 'claude --continue 2>/dev/null || claude' C-m ;;
+      resume) tmux send-keys -t "$s" 'claude --resume' C-m ;;
+      shell) : ;;
+      *) die "unknown mode: $mode" 3 ;;
+    esac
+  fi
+
+  exec tmux attach -d -t "$s"
+}
+
+cmd_stop() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: cx-agent stop <name>" 3
+  have tmux || die "tmux is not installed on this server" 1
+
+  local s="$CX_TMUX_PREFIX$name"
+  if ! tmux has-session -t "$s" 2>/dev/null; then
+    jq -nc --arg name "$name" '{name:$name, stopped:false, reason:"no live session"}'
+    return 0
+  fi
+  tmux kill-session -t "$s" 2>/dev/null || die "could not stop the session" 1
+  jq -nc --arg name "$name" '{name:$name, stopped:true}'
+}
+
+# cmd_sessions — live cx sessions on this host.
+#
+# One `tmux list-sessions`, filtered to our prefix. Sessions the user created
+# by hand are none of our business and are excluded.
+cmd_sessions() {
+  local raw=""
+  if have tmux; then
+    raw=$(tmux list-sessions \
+      -F '#{session_name}	#{session_attached}	#{session_created}	#{session_windows}' \
+      2>/dev/null || printf '')
+  fi
+
+  printf '%s\n' "$raw" |
+    jq -Rs --arg prefix "$CX_TMUX_PREFIX" \
+      --arg host "$(hostname 2>/dev/null || printf 'unknown')" '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map(select(.[0] | startswith($prefix)))
+      | map({
+          project:  (.[0] | ltrimstr($prefix)),
+          session:  .[0],
+          attached: (.[1] != "0"),
+          created:  (.[2] | tonumber? // null),
+          windows:  (.[3] | tonumber? // null)
+        })
+      | {host: $host, sessions: .}'
+}
+
+# ---------------------------------------------------------------------------
+# ask
+# ---------------------------------------------------------------------------
+
+# cmd_ask NAME — one-shot question, prompt read from STDIN.
+#
+# The prompt travels over stdin rather than argv so it never passes through a
+# shell at all. A prompt containing quotes, $(...), or newlines is impossible
+# to mangle this way, and there is no length limit to worry about.
+cmd_ask() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: cx-agent ask <name>  (prompt on stdin)" 3
+
+  _registry_ensure
+  local path
+  path=$(_project_path "$name")
+  [ -n "$path" ] || die "no such project: $name" 2
+
+  have claude || die "Claude Code is not installed on this server" 1
+
+  local prompt
+  prompt=$(cat)
+  [ -n "$prompt" ] || die "empty prompt" 3
+
+  cd "$path" || die "cannot enter $path" 1
+  claude -p "$prompt"
+}
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+tool_version() {
+  case "$1" in
+    tmux) tmux -V 2>/dev/null | sed -n 's/^tmux \([0-9][^ ]*\).*/\1/p' ;;
+    git) git --version 2>/dev/null | sed -n 's/^git version \([0-9.]*\).*/\1/p' ;;
+    jq) jq --version 2>/dev/null | sed 's/^jq-//' ;;
+    claude) claude --version 2>/dev/null | head -1 ;;
+    bash) printf '%s' "${BASH_VERSION%%(*}" ;;
+    *) printf '' ;;
+  esac
+}
+
+cmd_doctor() {
+  local claude_logged_in=false registry_ok=false root tmux_running=false
+
+  if [ -d "$CX_CLAUDE_DIR" ] &&
+    { [ -s "$CX_CLAUDE_DIR/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; }; then
+    claude_logged_in=true
+  fi
+
+  if [ -r "$CX_REGISTRY" ] && jq -e . "$CX_REGISTRY" >/dev/null 2>&1; then
+    registry_ok=true
+  fi
+
+  root=$(_registry_root)
+  [ -n "$root" ] || root="$HOME/projects"
+
+  tmux list-sessions >/dev/null 2>&1 && tmux_running=true
+
+  jq -nc \
+    --arg version "$CX_AGENT_VERSION" \
+    --arg hostname "$(hostname 2>/dev/null || printf 'unknown')" \
+    --arg root "$root" \
+    --arg registry "$CX_REGISTRY" \
+    --arg bash_v "$(tool_version bash)" \
+    --arg tmux_v "$(tool_version tmux)" \
+    --arg git_v "$(tool_version git)" \
+    --arg jq_v "$(tool_version jq)" \
+    --arg claude_v "$(tool_version claude)" \
+    --argjson has_tmux "$(have tmux && printf true || printf false)" \
+    --argjson has_git "$(have git && printf true || printf false)" \
+    --argjson has_jq "$(have jq && printf true || printf false)" \
+    --argjson has_claude "$(have claude && printf true || printf false)" \
+    --argjson claude_logged_in "$claude_logged_in" \
+    --argjson registry_ok "$registry_ok" \
+    --argjson tmux_running "$tmux_running" \
+    --argjson session_store "$([ -d "$CX_CLAUDE_DIR/projects" ] && printf true || printf false)" \
+    '{
+      agent_version: $version,
+      hostname: $hostname,
+      project_root: $root,
+      registry: { path: $registry, valid: $registry_ok },
+      claude: {
+        installed: $has_claude,
+        version: (if $claude_v == "" then null else $claude_v end),
+        logged_in: $claude_logged_in,
+        session_store: $session_store
+      },
+      tools: {
+        bash: { present: true,      version: $bash_v },
+        tmux: { present: $has_tmux, version: $tmux_v, server_running: $tmux_running },
+        git:  { present: $has_git,  version: $git_v },
+        jq:   { present: $has_jq,   version: $jq_v }
+      },
+      ok: ($has_tmux and $has_git and $has_jq and $has_claude and $registry_ok)
+    }'
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat >&2 <<'EOF'
+cx-agent — server-side helper for cx (not intended for direct use)
+
+  version                       print the agent version
+  doctor                        dependency and credential state
+  list [--git]                  projects with derived state
+  new <name> [--repo URL] [--root DIR]
+  rm <name> [--purge]
+  path <name>
+  open <name> --mode continue|resume|shell
+  stop <name>                   end a live session
+  sessions                      live cx tmux sessions
+  ask <name>                    one-shot claude -p (prompt on stdin)
+
+Output: JSON on stdout, human-readable messages on stderr.
+EOF
+}
+
+main() {
+  [ $# -gt 0 ] || {
+    usage
+    exit 3
+  }
+  local cmd="$1"
+  shift
+
+  case "$cmd" in
+    version | --version | -V)
+      printf '%s\n' "$CX_AGENT_VERSION"
+      return 0
+      ;;
+    help | --help | -h)
+      usage
+      return 0
+      ;;
+  esac
+
+  have jq || die "jq is required but not installed on this server" 1
+
+  case "$cmd" in
+    doctor) cmd_doctor "$@" ;;
+    list) cmd_list "$@" ;;
+    new) cmd_new "$@" ;;
+    rm) cmd_rm "$@" ;;
+    path) cmd_path "$@" ;;
+    open) cmd_open "$@" ;;
+    stop) cmd_stop "$@" ;;
+    sessions) cmd_sessions "$@" ;;
+    ask) cmd_ask "$@" ;;
+    *) die "unknown command: $cmd" 3 ;;
+  esac
+}
+
+main "$@"
