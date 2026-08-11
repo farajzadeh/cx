@@ -1,0 +1,19 @@
+# cx has no build step and no dependencies to vendor, so this is short by
+# design. Anything listed here is local noise, never project output.
+
+# Editor and OS cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Test scratch. The suite uses mktemp and cleans up after itself, but a run
+# killed mid-flight can leave these behind.
+/tmp/
+*.tmp
+
+# Local overrides a contributor might keep beside the repo while developing.
+# The real config lives in ~/.config/cx/config and is never part of the tree.
+/config.local
