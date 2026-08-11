@@ -194,6 +194,7 @@ there's nothing to install.
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | when something doesn't work |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, and why it's built this way |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | tests, portability rules, sending a patch |
+| [issues/](issues/) | known issues not yet fixed, with full context |
 
 ---
 

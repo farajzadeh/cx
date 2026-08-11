@@ -55,6 +55,7 @@ This has already caused one silent bug.
 | `server/cx-agent` | the server half — **deliberately monolithic**, since it is copied to servers as a single file and cannot source anything |
 | `server/bootstrap.sh` | provisioning — **POSIX sh**, because it may run on a server with no bash yet |
 | `test/` | harness, unit tests, integration tests, portability lint |
+| `issues/` | known issues, one file each — see [issues/README.md](issues/README.md) |
 
 ## Adding a subcommand
 
