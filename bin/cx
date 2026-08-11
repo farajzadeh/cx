@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# cx — multi-server Claude Code workspace manager.
+#
+# The client half. Holds no credentials and never runs Claude Code locally:
+# it reaches servers over SSH and asks cx-agent to do the work.
+#
+# Targets bash 3.2 (macOS's default). See docs/ARCHITECTURE.md and
+# test/lint-portability.sh for the constraints that follow from that.
+
+set -eu
+
+CX_VERSION="0.1.0"
+
+# ---------------------------------------------------------------------------
+# Locate our own installation
+# ---------------------------------------------------------------------------
+#
+# The installed shim exports CX_HOME. When run straight out of a checkout it
+# is absent, so derive it from this script's location. Symlink-resolving by
+# hand because readlink -f is GNU-only.
+
+if [ -z "${CX_HOME:-}" ]; then
+  _self="$0"
+  # Follow up to 20 symlinks; the bound stops a symlink loop from hanging.
+  _n=0
+  while [ -L "$_self" ] && [ "$_n" -lt 20 ]; do
+    _link=$(ls -ld "$_self" 2>/dev/null | sed 's/^.* -> //')
+    case "$_link" in
+      /*) _self="$_link" ;;
+      *) _self="$(dirname "$_self")/$_link" ;;
+    esac
+    _n=$((_n + 1))
+  done
+  CX_HOME=$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd -P) || {
+    printf 'cx: cannot locate installation directory\n' >&2
+    exit 1
+  }
+  unset _self _link _n
+fi
+export CX_HOME
+
+if [ ! -d "$CX_HOME/lib" ]; then
+  printf 'cx: broken installation — %s/lib not found\n' "$CX_HOME" >&2
+  printf '    re-run install.sh to repair\n' >&2
+  exit 1
+fi
+
+# shellcheck source=../lib/compat.sh
+. "$CX_HOME/lib/compat.sh"
+# shellcheck source=../lib/config.sh
+. "$CX_HOME/lib/config.sh"
+# shellcheck source=../lib/ui.sh
+. "$CX_HOME/lib/ui.sh"
+# shellcheck source=../lib/cache.sh
+. "$CX_HOME/lib/cache.sh"
+
+cx_config_load
+
+# ---------------------------------------------------------------------------
+# Global flags
+# ---------------------------------------------------------------------------
+#
+# Parsed before the subcommand so `cx -r ls` and `cx ls -r` both work.
+
+# Defaulted with := rather than assigned, so an inherited environment value
+# survives. `CX_ASSUME_YES=1 cx host rm web1` must not prompt — scripts and CI
+# depend on it, and an unconditional reset here silently broke that.
+: "${CX_REFRESH:=0}"     # -r/--refresh: force a fetch
+: "${CX_NO_CACHE:=0}"    # --no-cache:   bypass without writing
+: "${CX_FORCE_STALE:=0}" # --stale:      accept any cached data
+: "${CX_ASSUME_YES:=0}"  # -y/--yes:     no prompts
+: "${CX_JSON:=0}"        # --json:       machine-readable output
+export CX_ASSUME_YES CX_REFRESH CX_NO_CACHE CX_FORCE_STALE CX_JSON CX_NO_COLOR
+
+_cx_args=""
+
+parse_global_flags() {
+  _CX_REST=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -r | --refresh) CX_REFRESH=1 ;;
+      --no-cache) CX_NO_CACHE=1 ;;
+      --stale) CX_FORCE_STALE=1 ;;
+      -y | --yes) CX_ASSUME_YES=1 ;;
+      --json) CX_JSON=1 ;;
+      --no-color) CX_NO_COLOR=1 ;;
+      *) _CX_REST="$_CX_REST $(_cx_quote "$1")" ;;
+    esac
+    shift
+  done
+}
+
+# _cx_quote — single-quote a string for safe re-evaluation, handling embedded
+# single quotes. Needed because bash 3.2 has no clean way to pass an array
+# back out of a function.
+_cx_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand loading
+# ---------------------------------------------------------------------------
+#
+# Each subcommand lives in lib/cmd/<name>.sh and defines cmd_<name>. They are
+# sourced on demand: startup cost stays flat as commands are added, which
+# matters for a tool invoked as often as `cx ls`.
+
+load_cmd() {
+  local name="$1" file="$CX_HOME/lib/cmd/$1.sh"
+  # Already defined by a library sourced at startup.
+  command -v "cmd_$name" >/dev/null 2>&1 && return 0
+  [ -r "$file" ] || return 1
+  # shellcheck disable=SC1090
+  . "$file"
+  command -v "cmd_$name" >/dev/null 2>&1
+}
+
+usage() {
+  cat <<EOF
+${C_BOLD}cx${C_RESET} — multi-server Claude Code workspace manager
+
+${C_BOLD}USAGE${C_RESET}
+  cx <command> [options]
+
+${C_BOLD}SERVERS${C_RESET}
+  host add [--alias A --hostname H ...]   add a server (interactive by default)
+  host import <ssh-alias>                 adopt a host from your ~/.ssh/config
+  host ls | rm | edit | test <alias>      manage servers
+  provision <host> | --all                install or update the agent
+  login <host>                            one-time Claude Code sign-in
+  doctor [host]                           check requirements and connectivity
+
+${C_BOLD}PROJECTS${C_RESET}
+  new <host>:<name> [--repo URL]          create and register a project
+  ls [host] [--git]                       list projects across servers
+  rm <target> [--purge]                   unregister (--purge deletes files)
+
+${C_BOLD}WORKING${C_RESET}
+  open <target>                           attach a Claude session (resumes)
+  resume <target>                         attach and pick a past session
+  shell <target>                          plain shell, no Claude
+  code <target>                           open in VS Code over Remote-SSH
+  ask <target> "prompt"                   one-shot question, prints to stdout
+  status                                  live sessions across servers
+  stop <target>                           end a session
+
+${C_BOLD}CACHE${C_RESET}
+  cache status | clear [host]             inspect or drop cached data
+
+${C_BOLD}OPTIONS${C_RESET}
+  -r, --refresh    force a fetch, ignoring the cache
+      --no-cache   bypass the cache without updating it
+      --stale      accept cached data of any age (offline mode)
+      --json       machine-readable output
+  -y, --yes        assume yes to prompts
+      --no-color   disable color
+  -h, --help       this message
+  -V, --version    print version
+
+${C_BOLD}TARGETS${C_RESET}
+  A target is ${C_BOLD}host:project${C_RESET}. A bare ${C_BOLD}project${C_RESET} resolves against
+  CX_DEFAULT_HOST, or across all servers when the name is unique.
+
+Docs: $CX_HOME/docs/
+EOF
+}
+
+main() {
+  if [ $# -eq 0 ]; then
+    usage
+    exit 0
+  fi
+
+  # Global flags are stripped from anywhere in the argv before the subcommand
+  # is chosen, so `cx --json host ls` and `cx host ls --json` are equivalent.
+  # -h/--help is deliberately NOT a global flag: it must reach subcommands so
+  # `cx host --help` documents host rather than printing the top-level usage.
+  parse_global_flags "$@"
+  eval "set -- $_CX_REST"
+
+  # Colors were computed when ui.sh was sourced, before --no-color could be
+  # seen. Recompute now or the flag silently does nothing.
+  cx_ui_init
+
+  if [ $# -eq 0 ]; then
+    usage
+    exit 0
+  fi
+
+  case "$1" in
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
+    -V | --version | version)
+      printf 'cx %s\n' "$CX_VERSION"
+      exit 0
+      ;;
+  esac
+
+  local cmd="$1"
+  shift
+
+  if ! load_cmd "$cmd"; then
+    err "unknown command: $cmd"
+    hint "run 'cx help' for the command list"
+    exit 3
+  fi
+
+  "cmd_$cmd" "$@"
+}
+
+main "$@"
