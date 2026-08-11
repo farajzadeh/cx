@@ -1,0 +1,65 @@
+# cx configuration
+#
+# Copied to ~/.config/cx/config on first install and never overwritten
+# afterwards. Every value here can also be set as an environment variable,
+# which takes precedence.
+#
+# This file is sourced by bash — keep it to simple KEY=value assignments.
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+
+# Host used when a bare project name is given, e.g. `cx open api`.
+# Leave empty to search every configured host instead; an ambiguous name
+# then exits 2 and lists the candidates.
+CX_DEFAULT_HOST=""
+
+# Default directory for new projects on a server. Overridable per host when
+# adding it (`cx host add --root /srv/work`).
+CX_PROJECT_ROOT="projects"
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+#
+# The cache is a disposable read-through layer. Deleting ~/.cache/cx at any
+# moment changes speed only — never correctness.
+
+# Seconds before cached project data is considered stale. Stale data is still
+# shown immediately, with a refresh kicked off in the background.
+# Set to 0 to disable caching entirely.
+CX_CACHE_TTL=30
+
+# Seconds to remember that a host was unreachable. This is what stops one
+# powered-off server from costing a connection timeout on every command.
+CX_UNREACHABLE_TTL=60
+
+# Set to 1 for an offline mode: always accept cached data regardless of age,
+# and only fetch when -r/--refresh is passed explicitly.
+CX_STALE_OK=0
+
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
+#
+# Passed to ssh as -o flags rather than written into ~/.ssh/config, so cx
+# never alters how your other SSH sessions behave.
+
+# Seconds to wait for a TCP connection before declaring a host unreachable.
+# Keep this low: it bounds how long a dead host can stall a fan-out.
+CX_CONNECT_TIMEOUT=5
+
+# How long an idle multiplexed connection is kept open. This is what makes
+# repeated commands fast — the first pays the handshake, the rest reuse it.
+CX_CONTROL_PERSIST=10m
+
+# ---------------------------------------------------------------------------
+# Behavior
+# ---------------------------------------------------------------------------
+
+# Editor for `cx host edit`. Falls back to $EDITOR, then vi.
+CX_EDITOR=""
+
+# Set to 1 to disable colored output (or set NO_COLOR in the environment).
+CX_NO_COLOR=0
