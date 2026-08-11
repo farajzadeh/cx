@@ -25,9 +25,15 @@ RUN (getent group cxuser || groupadd cxuser) && \
     printf 'cxuser ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/cxuser && \
     chmod 440 /etc/sudoers.d/cxuser
 
-# A stub Claude Code. CI must never need real credentials or network access to
-# Anthropic, so the binary is faked: it echoes what it was asked to do, which
-# is exactly what the tests assert on.
+# A stub Claude Code, installed at ~/.local/bin — the same place the real
+# installer puts it, and DELIBERATELY not somewhere on the default PATH.
+#
+# An earlier version of this image put the stub in /usr/local/bin, which is on
+# the default PATH. That masked a real bug: cx invokes the agent over a
+# non-interactive ssh command, which reads neither ~/.bashrc nor ~/.profile,
+# so ~/.local/bin is absent and `command -v claude` fails on a server where
+# Claude Code is installed and signed in. Keeping the stub here means every
+# test exercises the realistic layout.
 RUN printf '%s\n' \
     '#!/bin/sh' \
     '# Stub claude for cx integration tests.' \
@@ -38,7 +44,7 @@ RUN printf '%s\n' \
     '  --resume)   echo "STUB: resume picker in $(pwd)" ;;' \
     '  *)          echo "STUB: interactive claude in $(pwd)" ;;' \
     'esac' \
-    > /usr/local/bin/claude && chmod 755 /usr/local/bin/claude
+    > /tmp/claude-stub && chmod 755 /tmp/claude-stub
 
 # Entrypoint installs the test public key with the ownership and permissions
 # sshd insists on — a bind-mounted authorized_keys would carry host uid/gid
@@ -46,7 +52,10 @@ RUN printf '%s\n' \
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \
-    'mkdir -p /home/cxuser/.ssh' \
+    'mkdir -p /home/cxuser/.ssh /home/cxuser/.local/bin' \
+    'cp /tmp/claude-stub /home/cxuser/.local/bin/claude' \
+    'chmod 755 /home/cxuser/.local/bin/claude' \
+    'chown -R cxuser:cxuser /home/cxuser/.local' \
     'if [ -f /pubkey/authorized_keys ]; then' \
     '  cp /pubkey/authorized_keys /home/cxuser/.ssh/authorized_keys' \
     'fi' \

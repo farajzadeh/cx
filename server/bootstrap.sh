@@ -48,6 +48,13 @@ die() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# This script runs as `ssh host sh -s`, a non-interactive shell that reads
+# neither ~/.bashrc nor ~/.profile — so ~/.local/bin is not on PATH. Without
+# this, a re-provision cannot see an already-installed Claude Code and
+# reinstalls it every single time.
+PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
+export PATH
+
 # ---------------------------------------------------------------------------
 # Privilege
 # ---------------------------------------------------------------------------

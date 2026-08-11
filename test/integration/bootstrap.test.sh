@@ -76,6 +76,30 @@ assert_contains "$_out" 'PATHLINES=1'
 
 # ---------------------------------------------------------------------------
 
+describe "bootstrap sees an already-installed Claude Code"
+
+# Second manifestation of the same PATH bug: bootstrap also runs under a
+# non-interactive `ssh host sh`, so without the PATH fix it cannot see
+# ~/.local/bin/claude and reinstalls Claude Code on every provision.
+_out=$(run_in ubuntu:24.04 "
+  mkdir -p \$HOME/.local/bin
+  printf '#!/bin/sh\necho stub\n' > \$HOME/.local/bin/claude
+  chmod 755 \$HOME/.local/bin/claude
+  cp /w/server/cx-agent /tmp/cx-agent.incoming
+  sh /w/server/bootstrap.sh 2>&1 | grep -i claude
+")
+
+it "detects the existing install rather than downloading again"
+assert_contains "$_out" 'already installed'
+
+it "reports its absolute path"
+assert_contains "$_out" '.local/bin/claude'
+
+it "does not run the installer"
+assert_not_contains "$_out" 'installing Claude Code'
+
+# ---------------------------------------------------------------------------
+
 describe "Alpine 3.20 — apk, busybox ash, bash absent"
 
 # The hardest case: /bin/sh is busybox ash, and bash — which cx-agent needs —

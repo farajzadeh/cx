@@ -133,6 +133,39 @@ assert_contains "$_out" 'registry: ok'
 
 # ---------------------------------------------------------------------------
 
+describe "Claude Code is found even though it is not on the non-interactive PATH"
+
+# Regression guard. cx invokes the agent as `ssh host '...cx-agent doctor'`,
+# a non-interactive non-login shell that reads neither ~/.bashrc nor
+# ~/.profile — so ~/.local/bin, where Claude Code installs itself, is absent
+# from PATH. `command -v claude` therefore fails on a server where Claude is
+# installed and signed in, and cx used to report "not installed".
+
+_path_out=$(ssh -F "$HOME_DIR/.ssh/config" -o BatchMode=yes cx-test-web1 \
+  'command -v claude || echo NOTFOUND' 2>&1)
+
+it "confirms the test really is exercising the hard case"
+assert_contains "$_path_out" 'NOTFOUND'
+
+_out=$(cx_run "$HOME_DIR" host test cx-test-web1)
+
+it "reports Claude Code as installed anyway"
+assert_not_contains "$_out" 'claude:  not installed'
+
+it "reads its version"
+assert_contains "$_out" 'Claude Code stub'
+
+_doctor=$(ssh -F "$HOME_DIR/.ssh/config" -o BatchMode=yes cx-test-web1 \
+  '$HOME/.local/bin/cx-agent doctor' 2>/dev/null)
+
+it "resolves an absolute path to the binary"
+assert_contains "$_doctor" '/home/cxuser/.local/bin/claude'
+
+it "and marks it installed in the JSON"
+assert_eq "$(printf '%s' "$_doctor" | jq -r '.claude.installed')" 'true'
+
+# ---------------------------------------------------------------------------
+
 describe "cx doctor"
 
 _out=$(cx_run "$HOME_DIR" doctor)

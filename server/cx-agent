@@ -30,12 +30,26 @@ CX_CLAUDE_DIR="${CX_CLAUDE_DIR:-$HOME/.claude}"
 CX_LOCK_DIR="$CX_DATA_DIR/.lock"
 CX_TMUX_PREFIX="cx-"
 
+# The agent is invoked as `ssh host '$HOME/.local/bin/cx-agent ...'`, which is
+# a NON-INTERACTIVE, NON-LOGIN shell: it reads neither ~/.bashrc nor
+# ~/.profile. So the PATH additions those files make are absent, and
+# ~/.local/bin — where Claude Code installs itself — is not searched.
+#
+# Without this, `command -v claude` fails here even though it works perfectly
+# when the same user SSHes in by hand, and cx reports "Claude Code not
+# installed" on a server where it is installed and signed in.
+PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
+export PATH
+
 log() { printf '%s\n' "$*" >&2; }
 die() {
   printf 'cx-agent: %s\n' "$1" >&2
   exit "${2:-1}"
 }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# cx_q — single-quote a value for a shell command we hand to tmux send-keys.
+cx_q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
 
 # ---------------------------------------------------------------------------
 # Portability (self-contained; mirrors lib/compat.sh)
@@ -130,6 +144,36 @@ _validate_name() {
     .. | . | -*) die "invalid project name: $n" 3 ;;
     *[!A-Za-z0-9._-]*) die "project name may only contain letters, digits, dot, underscore and hyphen: $n" 3 ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# Locating Claude Code
+# ---------------------------------------------------------------------------
+
+# _find_claude — absolute path to the claude binary, or empty.
+#
+# PATH is searched first (now that it includes ~/.local/bin), then the known
+# install locations explicitly. The explicit list matters because tmux may
+# reuse an already-running server whose environment predates our PATH fix, so
+# anything we hand to `tmux send-keys` must not depend on PATH at all.
+_find_claude() {
+  local c
+  if c=$(command -v claude 2>/dev/null) && [ -n "$c" ]; then
+    printf '%s' "$c"
+    return 0
+  fi
+  for c in \
+    "$HOME/.local/bin/claude" \
+    "$HOME/.claude/local/claude" \
+    "$HOME/bin/claude" \
+    /usr/local/bin/claude \
+    /opt/homebrew/bin/claude; do
+    [ -x "$c" ] && {
+      printf '%s' "$c"
+      return 0
+    }
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -496,9 +540,18 @@ cmd_open() {
 
   if ! tmux has-session -t "$s" 2>/dev/null; then
     tmux new-session -d -s "$s" -c "$path" || die "could not create tmux session" 1
+    # The absolute path, not a bare `claude`: tmux may attach to an existing
+    # server whose environment was captured before our PATH fix, in which case
+    # a bare name would not resolve inside the pane.
+    local claude_bin
+    claude_bin=$(_find_claude) || claude_bin=claude
+
     case "$mode" in
-      continue) tmux send-keys -t "$s" 'claude --continue 2>/dev/null || claude' C-m ;;
-      resume) tmux send-keys -t "$s" 'claude --resume' C-m ;;
+      continue)
+        tmux send-keys -t "$s" \
+          "$(cx_q "$claude_bin") --continue 2>/dev/null || $(cx_q "$claude_bin")" C-m
+        ;;
+      resume) tmux send-keys -t "$s" "$(cx_q "$claude_bin") --resume" C-m ;;
       shell) : ;;
       *) die "unknown mode: $mode" 3 ;;
     esac
@@ -567,14 +620,15 @@ cmd_ask() {
   path=$(_project_path "$name")
   [ -n "$path" ] || die "no such project: $name" 2
 
-  have claude || die "Claude Code is not installed on this server" 1
+  local claude_bin
+  claude_bin=$(_find_claude) || die "Claude Code is not installed on this server" 1
 
   local prompt
   prompt=$(cat)
   [ -n "$prompt" ] || die "empty prompt" 3
 
   cd "$path" || die "cannot enter $path" 1
-  claude -p "$prompt"
+  "$claude_bin" -p "$prompt"
 }
 
 # ---------------------------------------------------------------------------
@@ -586,7 +640,10 @@ tool_version() {
     tmux) tmux -V 2>/dev/null | sed -n 's/^tmux \([0-9][^ ]*\).*/\1/p' ;;
     git) git --version 2>/dev/null | sed -n 's/^git version \([0-9.]*\).*/\1/p' ;;
     jq) jq --version 2>/dev/null | sed 's/^jq-//' ;;
-    claude) claude --version 2>/dev/null | head -1 ;;
+    claude)
+      local c
+      c=$(_find_claude) && "$c" --version 2>/dev/null | head -1
+      ;;
     bash) printf '%s' "${BASH_VERSION%%(*}" ;;
     *) printf '' ;;
   esac
@@ -595,8 +652,13 @@ tool_version() {
 cmd_doctor() {
   local claude_logged_in=false registry_ok=false root tmux_running=false
 
-  if [ -d "$CX_CLAUDE_DIR" ] &&
-    { [ -s "$CX_CLAUDE_DIR/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; }; then
+  # Best effort. Claude Code has used more than one location for credentials,
+  # and on macOS it may use the Keychain, which is not visible from here — so
+  # a false negative is possible. Treated as advisory: cx never blocks on it.
+  if [ -s "$CX_CLAUDE_DIR/.credentials.json" ] ||
+    [ -s "$HOME/.claude.json" ] ||
+    [ -s "$CX_CLAUDE_DIR/credentials.json" ] ||
+    [ -s "$HOME/.config/claude/.credentials.json" ]; then
     claude_logged_in=true
   fi
 
@@ -622,7 +684,8 @@ cmd_doctor() {
     --argjson has_tmux "$(have tmux && printf true || printf false)" \
     --argjson has_git "$(have git && printf true || printf false)" \
     --argjson has_jq "$(have jq && printf true || printf false)" \
-    --argjson has_claude "$(have claude && printf true || printf false)" \
+    --arg claude_path "$(_find_claude || printf '')" \
+    --argjson has_claude "$(_find_claude >/dev/null && printf true || printf false)" \
     --argjson claude_logged_in "$claude_logged_in" \
     --argjson registry_ok "$registry_ok" \
     --argjson tmux_running "$tmux_running" \
@@ -634,6 +697,7 @@ cmd_doctor() {
       registry: { path: $registry, valid: $registry_ok },
       claude: {
         installed: $has_claude,
+        path: (if $claude_path == "" then null else $claude_path end),
         version: (if $claude_v == "" then null else $claude_v end),
         logged_in: $claude_logged_in,
         session_store: $session_store
