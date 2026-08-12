@@ -7,6 +7,18 @@
 # This harness is plain POSIX-ish bash, so `docker run bash:3.2 test/run.sh`
 # works with nothing installed — which is exactly the environment we care about.
 
+# CX_AGENT_VERSION_EXPECTED — the version the agent under test reports.
+#
+# Read from the source rather than written out here: these assertions are
+# about "the version we just installed is the version being reported", not
+# about any particular number, and hardcoding one makes every version bump
+# look like four test failures.
+# shellcheck disable=SC2034  # read by the test files that source this harness
+CX_AGENT_VERSION_EXPECTED=$(
+  sed -n 's/^CX_AGENT_VERSION="\([^"]*\)".*/\1/p' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/server/cx-agent" | head -1
+)
+
 _T_PASS=0
 _T_FAIL=0
 _T_NAME=""

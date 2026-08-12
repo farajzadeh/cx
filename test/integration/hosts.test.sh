@@ -90,7 +90,7 @@ it "installs the missing packages"
 assert_contains "$_out" 'installing via apt-get'
 
 it "reports the installed agent version"
-assert_contains "$_out" 'agent:   0.1.0'
+assert_contains "$_out" "agent:   $CX_AGENT_VERSION_EXPECTED"
 
 it "reports the project root it configured"
 assert_contains "$_out" 'root:    projects'
@@ -114,7 +114,7 @@ it "does not invoke sudo when nothing is missing"
 assert_contains "$_out" 'sudo not needed'
 
 it "still reports a healthy agent"
-assert_contains "$_out" 'agent:   0.1.0'
+assert_contains "$_out" "agent:   $CX_AGENT_VERSION_EXPECTED"
 
 # ---------------------------------------------------------------------------
 
@@ -123,7 +123,7 @@ describe "cx host test after provisioning"
 _out=$(cx_run "$HOME_DIR" host test cx-test-web1)
 
 it "finds the agent"
-assert_contains "$_out" 'agent... ✓ 0.1.0'
+assert_contains "$_out" "agent... ✓ $CX_AGENT_VERSION_EXPECTED"
 
 it "reports the Claude Code version from the server"
 assert_contains "$_out" 'Claude Code stub'
@@ -177,7 +177,7 @@ it "confirms the ssh Include is wired up"
 assert_contains "$_out" 'ssh Include configured'
 
 it "reports each server's agent state"
-assert_contains "$_out" 'agent 0.1.0'
+assert_contains "$_out" "agent $CX_AGENT_VERSION_EXPECTED"
 
 # ---------------------------------------------------------------------------
 

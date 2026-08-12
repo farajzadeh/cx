@@ -42,7 +42,7 @@ it "emits a machine-readable summary on stdout with ok:true"
 assert_contains "$_out" '"ok":true'
 
 it "reports the agent version it installed"
-assert_contains "$_out" '"agent_version":"0.1.0"'
+assert_contains "$_out" "\"agent_version\":\"$CX_AGENT_VERSION_EXPECTED\""
 
 it "logs no errors"
 assert_not_contains "$_out" 'ERROR:'
@@ -122,7 +122,7 @@ it "installs bash so the agent can run"
 assert_contains "$_out" 'BASHAFTER=/bin/bash'
 
 it "leaves a working agent behind"
-assert_contains "$_out" '0.1.0'
+assert_contains "$_out" "$CX_AGENT_VERSION_EXPECTED"
 
 # ---------------------------------------------------------------------------
 
