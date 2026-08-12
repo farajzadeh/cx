@@ -1,0 +1,3 @@
+{"type":"user","isSidechain":false,"timestamp":"2026-08-12T10:00:00Z","message":{"role":"user","content":"add a retry"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-08-12T10:00:09Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Done — retries added."}]}}
+{"type":"assistant","isSidechain":false,"message":{"role":"assist

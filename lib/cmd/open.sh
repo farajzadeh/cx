@@ -9,7 +9,20 @@
 . "$CX_HOME/lib/target.sh"
 
 _open_common() {
-  local mode="$1" target="${2:-}"
+  local mode="$1" target="" detach=0
+
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -d | --detach) detach=1 ;;
+      -*)
+        err "unknown option: $1"
+        return 3
+        ;;
+      *) [ -z "$target" ] && target="$1" ;;
+    esac
+    shift
+  done
 
   [ -n "$target" ] || {
     err "no target given"
@@ -32,6 +45,9 @@ _open_common() {
   if cx_target_needs_units; then
     cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
   fi
+  if [ "$detach" = 1 ]; then
+    cx_agent_observe_ok "$CX_T_HOST" "$ver" || return 1
+  fi
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -46,9 +62,38 @@ _open_common() {
   # Opening changes tmux liveness, which cx ls and cx status report.
   cx_cache_invalidate "$CX_T_HOST"
 
+  cx_target_args
+
+  # Detached: no TTY, no exec, no attach. The session is created and Claude is
+  # started exactly as below; the difference is that we come back. This is what
+  # a driver uses to start work it intends to steer rather than watch.
+  if [ "$detach" = 1 ]; then
+    local out=""
+    out=$(cx_agent "$CX_T_HOST" open "$CX_T_PROJECT" \
+      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" --detach) || return $?
+    if [ "${CX_JSON:-0}" = 1 ]; then
+      printf '%s\n' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host: $h}' ||
+        printf '%s\n' "$out"
+      return 0
+    fi
+    local created="" tname=""
+    created=$(printf '%s' "$out" | jq -r '.created' 2>/dev/null) || true
+    tname=$(printf '%s' "$out" | jq -r '.tmux // empty' 2>/dev/null) || true
+    if [ "$created" = true ]; then
+      say "started $(cx_target_str)  ($tname)"
+      # Claude takes a few seconds to come up, and on the very first run in a
+      # directory it asks whether to trust the folder and then writes nothing
+      # until answered — so "started" is not "ready".
+      hint "check it is up with: cx peek $(cx_target_str)"
+    else
+      say "already running: $(cx_target_str)  ($tname)"
+    fi
+    hint "attach with: cx open $(cx_target_str)"
+    return 0
+  fi
+
   # Hand over the terminal. exec so cx does not linger as a parent process for
   # the whole session, and so Ctrl-C reaches tmux rather than us.
-  cx_target_args
   local opts
   opts=$(CX_SSH_BATCH=no cx_ssh_opts)
   # shellcheck disable=SC2086
@@ -67,10 +112,22 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open <host>:<project>@<label>          a second, independent session
   cx open <host>:<project>/<worktree>       a worktree of the project
   cx open <host>:<project>/<worktree>@<label>
+  cx open -d <target>                       start it, do not attach
 
 Creates a persistent tmux session on the server and starts Claude Code in it,
 resuming that session's own conversation. If it is already running, this
 reattaches instead of starting a second one.
+
+${C_BOLD}-d${C_RESET}, ${C_BOLD}--detach${C_RESET} does everything except hand over your terminal: the session is
+created and Claude started, and cx returns. Use it to line several sessions up
+before working through them, or to start work a driver will steer:
+
+  cx open -d web1:api/authfix@impl
+  cx open -d web1:api/authfix@tests
+  cx peek                                   see what each one is doing
+
+It returns as soon as Claude has been launched, which is not the same as ready
+— the first run in any directory stops to ask whether you trust the folder.
 
 Each ${C_BOLD}@label${C_RESET} is a separate conversation, so you can run several in parallel
 on one project and come back to any of them:

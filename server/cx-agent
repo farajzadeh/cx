@@ -1677,6 +1677,123 @@ cmd_worktree() {
 }
 
 # ---------------------------------------------------------------------------
+# nudge
+# ---------------------------------------------------------------------------
+#
+# Type a prompt into a session that is already running.
+#
+# ONE CONVERSATION, ONE WRITER. The obvious alternative — `claude -p --resume
+# <uuid>` — is wrong, and quietly so. A cx session's tmux pane is already
+# holding that conversation id, and a second claude process resuming the same
+# id gives two writers appending to one transcript with no merge between them.
+# Whichever finishes second wins the file and the other's turns are lost. So
+# steering a LIVE session goes through its pane; `ask` is for units that have
+# no live session.
+#
+# The text reaches tmux through a paste buffer rather than as a send-keys
+# argument, which buys two things. A multi-line prompt is impossible with
+# send-keys — the first newline submits, and the rest is typed into whatever
+# comes next. And the prompt never becomes part of a command line on either
+# side of the wire, so no quoting can mangle it. It arrives on stdin here for
+# the same reason `ask` does.
+
+# _tmux_paste PANE BUFFER TEXT — put TEXT in the pane's input and submit it.
+_tmux_paste() {
+  local pane="$1" buf="$2" text="$3" tmp="" rc=0
+
+  # load-buffer takes a path, and "-" for stdin is a tmux 3.0 affordance. Try
+  # it and fall back to a temp file rather than parsing a version number: the
+  # fallback is what actually tells us whether this tmux supports it.
+  if ! printf '%s' "$text" | tmux load-buffer -b "$buf" - 2>/dev/null; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cx-nudge.XXXXXX") || return 1
+    chmod 600 "$tmp" 2>/dev/null || true
+    printf '%s' "$text" >"$tmp"
+    tmux load-buffer -b "$buf" "$tmp" 2>/dev/null || rc=1
+    rm -f "$tmp"
+    [ "$rc" = 0 ] || return 1
+  fi
+
+  # -d drops the buffer once it is pasted, so a prompt does not sit in tmux's
+  # paste history afterwards. The pane target needs its trailing colon.
+  tmux paste-buffer -d -b "$buf" -t "$pane" 2>/dev/null || return 1
+  tmux send-keys -t "$pane" C-m 2>/dev/null || return 1
+}
+
+# _nudge_declined TARGET REASON — a refusal is a result, not a failure.
+#
+# Exit 0 with sent:false, the same shape `stop` uses when there was nothing to
+# stop. A driver consumes this JSON either way, and a non-zero exit would make
+# "the session is busy, try again shortly" indistinguishable from "the server
+# is broken".
+_nudge_declined() {
+  jq -nc --arg target "$1" --arg reason "$2" \
+    '{target: $target, sent: false, reason: $reason}'
+}
+
+cmd_nudge() {
+  local name="" wt="" label="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$name" ] || die "usage: cx-agent nudge <name> [--worktree W] [--session L] [--force]  (prompt on stdin)" 3
+  have tmux || die "tmux is not installed on this server" 1
+  if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
+  if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
+
+  _registry_ensure
+  local dir slug tname pane
+  dir=$(_unit_dir "$name" "$wt") || exit $?
+  slug=$(_slug "$name" "$wt" "$label")
+  tname=$(_tmux_name "$slug")
+  pane="=$tname:"
+
+  local prompt
+  prompt=$(cat)
+  [ -n "$prompt" ] || die "empty prompt" 3
+
+  if ! _tmux_has "$tname"; then
+    _nudge_declined "$slug" dead
+    return 0
+  fi
+
+  # Never type into a pane somebody is looking at. The client decides the
+  # busy/blocked cases from the transcript, because those depend on a
+  # threshold the user sets; this one is a fact the agent can check itself,
+  # and it is the one with a person on the other end of it.
+  local attached=0
+  attached=$(_tmux_rows | awk -F'\t' -v n="$tname" '$1 == n { print $2; exit }') || attached=0
+  if [ "${attached:-0}" != 0 ] && [ "$force" != 1 ]; then
+    _nudge_declined "$slug" attached
+    return 0
+  fi
+
+  _tmux_paste "$pane" "cx-nudge-$$" "$prompt" ||
+    die "could not send the prompt to $slug" 1
+
+  jq -nc --arg target "$slug" --arg tmux "$tname" \
+    --argjson chars "$(printf '%s' "$prompt" | wc -c | tr -d ' ')" '{
+      target: $target,
+      tmux:   $tmux,
+      sent:   true,
+      chars:  $chars
+    }'
+}
+
+# ---------------------------------------------------------------------------
 # ask
 # ---------------------------------------------------------------------------
 
@@ -1726,6 +1843,16 @@ cmd_ask() {
   if [ -n "$label" ]; then
     local slug uuid="" flag=--session-id
     slug=$(_slug "$name" "$wt" "$label")
+
+    # ...but only when nothing else is holding that conversation. A live tmux
+    # session already has a claude process resuming this id; starting a second
+    # one gives two writers appending to a single transcript with no merge,
+    # and the turns of whichever loses are silently orphaned. That is a real
+    # bug this used to have, and the failure is invisible — the answer comes
+    # back looking fine while history quietly goes missing.
+    if have tmux && _tmux_has "$(_tmux_name "$slug")"; then
+      die "$slug is running; a second claude on its conversation would lose turns — use nudge" 4
+    fi
 
     uuid=$(_session_uuid_ensure "$slug" "$dir" 2>/dev/null || printf '')
     if [ -n "$uuid" ]; then
@@ -1805,7 +1932,7 @@ cmd_doctor() {
       # feature gates deliberately use `version` instead: that is one cheap
       # line, where reaching this verb costs _find_claude, five tool_version
       # calls and four credential stats, and a gate runs before every call.
-      capabilities: ["units", "detach", "observe"],
+      capabilities: ["units", "detach", "observe", "nudge"],
       hostname: $hostname,
       project_root: $root,
       registry: { path: $registry, valid: $registry_ok },
@@ -1845,6 +1972,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
   sessions                      live cx tmux sessions
   observe [--all | <name> [--worktree W] [--session L]] [--tail N]
                                 per-session facts: tmux, transcript, last turn
+  nudge <name> [--worktree W] [--session L] [--force]
+                                type a prompt into a live session (stdin)
   ask <name> [--worktree W] [--session L]   claude -p (prompt on stdin)
   worktree add <project> <name> [--branch B] [--from REF]
   worktree list <project>
@@ -1887,6 +2016,7 @@ main() {
     stop) cmd_stop "$@" ;;
     sessions) cmd_sessions "$@" ;;
     observe) cmd_observe "$@" ;;
+    nudge) cmd_nudge "$@" ;;
     ask) cmd_ask "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;
     *) die "unknown command: $cmd" 3 ;;
