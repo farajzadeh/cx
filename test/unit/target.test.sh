@@ -189,4 +189,42 @@ it "is true for a session label"
 cx_target_split web1:api@review >/dev/null
 assert_ok cx_target_needs_units
 
+describe "cx_agent_version_ok — which agents are new enough"
+#
+# Every case passes the version explicitly. That is not only what keeps this
+# test pure: it is the intended calling convention, because each caller has
+# already run `version` or `doctor` for its own reasons and a second round
+# trip per command is what turns a driver polling six sessions into six
+# sequential SSH connections.
+
+it "accepts an agent newer than the minimum"
+assert_ok cx_agent_version_ok web1 0.2.0 "worktrees" 0.3.0
+
+it "accepts an agent at exactly the minimum"
+assert_ok cx_agent_version_ok web1 0.3.0 "goals" 0.3.0
+
+it "rejects an agent below the minimum"
+assert_fail cx_agent_version_ok web1 0.3.0 "goals" 0.2.0
+
+it "accepts when the agent is absent, so the caller reports that instead"
+assert_ok cx_agent_version_ok web1 0.3.0 "goals" ""
+
+it "still gates worktrees at 0.2.0"
+assert_ok cx_agent_units_ok web1 0.2.0
+
+it "still refuses worktrees on a 0.1.0 agent"
+assert_fail cx_agent_units_ok web1 0.1.0
+
+it "gates observing and steering at 0.3.0"
+assert_ok cx_agent_observe_ok web1 0.3.0
+
+it "refuses observing on the agent that shipped worktrees"
+assert_fail cx_agent_observe_ok web1 0.2.0
+
+it "gates goals at 0.3.0"
+assert_ok cx_agent_goals_ok web1 0.3.0
+
+it "refuses goals on the agent that shipped worktrees"
+assert_fail cx_agent_goals_ok web1 0.2.0
+
 summary
