@@ -77,7 +77,13 @@ check '\bseq[[:space:]]' 'no seq(1) — use a while loop or brace range'
 
 # `set -u` plus an empty array is an unbound-variable error on bash 3.2.
 # The safe idiom is "${arr[@]+"${arr[@]}"}".
-check '"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"[^+]' 'expand arrays as "${arr[@]+"${arr[@]}"}" (bash 3.2 + set -u)'
+#
+# The leading (^|[^+]) is load-bearing: the safe idiom CONTAINS a bare
+# "${arr[@]}" as its inner half, and without the guard this rule fires on
+# every correct use of the thing it is telling you to write. What
+# distinguishes the two is the `+` immediately before the inner quote.
+# The trailing ([^+]|$) catches a bad expansion at end of line.
+check '(^|[^+])"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"([^+]|$)' 'expand arrays as "${arr[@]+"${arr[@]}"}" (bash 3.2 + set -u)'
 
 echo
 if [ "$fail" -eq 0 ]; then
