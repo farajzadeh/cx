@@ -38,6 +38,12 @@ CX_TMUX_PREFIX="cx-"
 # identity" section below for why this file has to exist.
 CX_SESSIONS="${CX_SESSIONS:-$CX_DATA_DIR/sessions.json}"
 
+# What each session is FOR. Unlike everything else the server keeps, a goal
+# cannot be derived from anything — not from git, not from tmux, not from the
+# conversation. It is the one thing here that only a human can supply, which
+# is exactly why invariant 5 says the server should hold it.
+CX_GOALS="${CX_GOALS:-$CX_DATA_DIR/goals.json}"
+
 # Worktrees live in a hidden directory beside the project, one subdirectory per
 # project, so `ls ~/projects` stays readable and `rm --purge` is one removal.
 CX_WORKTREE_DIR=".worktrees"
@@ -867,6 +873,7 @@ EOF
   # weight, and would be silently inherited by a future project of the same
   # name — pointing it at a conversation about different code.
   _session_forget "$name"
+  _goal_forget "$name" || true
 
   jq -nc --arg name "$name" --arg path "$path" --argjson purged "$purged" \
     '{name:$name, path:$path, removed:true, purged:$purged}'
@@ -1659,6 +1666,7 @@ _wt_rm() {
   rmdir "$(_worktree_base "$path")" 2>/dev/null || true
 
   _session_forget "$name/$wt" || true
+  _goal_forget "$name/$wt" || true
 
   jq -nc --arg project "$name" --arg name "$wt" --arg path "$wpath" \
     --argjson killed "$killed" \
@@ -1674,6 +1682,290 @@ cmd_worktree() {
     rm | remove) _wt_rm "$@" ;;
     *) die "usage: cx-agent worktree add|list|rm ..." 3 ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# goals
+# ---------------------------------------------------------------------------
+#
+# A goal is a definition of done, plus the sessions working towards it.
+#
+# It lives on the server for the reason invariant 5 gives: servers own what
+# cannot be derived, and a goal is the only thing in cx that nothing else
+# knows. Keeping it on the client would mean losing it with the cache, and
+# make it invisible from a second machine while the sessions it describes keep
+# running here.
+#
+# A goal's MEMBERS are stored as written. A bare "api/authfix" means this
+# host; a qualified "web2:api@tests" means another one. The agent validates
+# only the bare ones — it cannot see other servers, and invariant 1 says it
+# must not try. Resolving a qualified member is the client's job, which is the
+# half that knows more than one server exists. That is what lets one goal span
+# hosts without any client-side state or any replication between servers.
+#
+# What cx does NOT do is decide whether the definition of done is met. That is
+# meaning, not structure, and it belongs to the driver — invariant 11.
+
+# Bound the two growing lists. A goal that is revised or logged against for
+# weeks should not turn its record into an unreadable wall of history.
+CX_GOAL_HISTORY=50
+
+_goals_ensure() {
+  [ -e "$CX_GOALS" ] && return 0
+  mkdir -p "$(dirname "$CX_GOALS")"
+  printf '{"version":1,"goals":{}}\n' | _write_atomic "$CX_GOALS"
+}
+
+_goal_get() {
+  [ -e "$CX_GOALS" ] || return 1
+  local g
+  g=$(jq -c --arg n "$1" '.goals[$n] // empty' "$CX_GOALS" 2>/dev/null) || return 1
+  [ -n "$g" ] || return 1
+  printf '%s' "$g"
+}
+
+# _goal_apply NAME FILTER [--arg ...] — read/modify/write one goal under lock.
+#
+# The same lock, temp file and atomic rename as _session_uuid_set. FILTER runs
+# with the goal as `.` and must return the new goal; `updated_at` and the
+# history caps are applied here so no caller can forget them.
+_goal_apply() {
+  local name="$1" filter="$2"
+  shift 2
+  _goals_ensure
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg _n "$name" --arg _t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson _cap "$CX_GOAL_HISTORY" "$@" \
+    ".goals[\$_n] |= ((. // null) | ($filter)
+       | .updated_at = \$_t
+       | .revisions = ((.revisions // []) | .[-\$_cap:])
+       | .log       = ((.log       // []) | .[-\$_cap:]))" \
+    "$CX_GOALS" >"$CX_GOALS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_GOALS.new" "$CX_GOALS"
+  _unlock
+  trap - EXIT INT TERM
+}
+
+# _goal_member_check MEMBER — a bare member must name something that exists.
+#
+# A qualified "host:unit" is stored unchecked: this server cannot see that
+# host, and reaching for it would be the client's job even if it could.
+_goal_member_check() {
+  local m="$1" dir=""
+  case "$m" in
+    *:*) return 0 ;;
+  esac
+  _slug_parse "$m"
+  # Inside a command substitution on purpose. _unit_dir reports "no such
+  # project" by calling die, which in a subshell only ends the subshell — so
+  # its exit code is caught here and the message that reaches the user names
+  # the member the user actually typed.
+  dir=$(_unit_dir "$_SP_PROJECT" "$_SP_WT" 2>/dev/null) || dir=""
+  [ -n "$dir" ] || die "no such unit on this server: $m" 2
+}
+
+_goal_print() {
+  jq -c --arg n "$1" '.goals[$n] // {}' "$CX_GOALS"
+}
+
+cmd_goal() {
+  local sub="${1:-}"
+  [ -n "$sub" ] || die "usage: cx-agent goal new|ls|show|dod|member|state|log|rm ..." 3
+  shift
+
+  case "$sub" in
+    ls | list)
+      _goals_ensure
+      local want=""
+      [ "${1:-}" = --state ] && want="${2:-}"
+      jq -c --arg want "$want" \
+        '{goals: [.goals[] | select($want == "" or .state == $want)]}' "$CX_GOALS"
+      ;;
+
+    show)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal show <name>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      _goal_print "$name"
+      ;;
+
+    new)
+      local name="" members=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --member)
+            shift
+            members="$members${1:-}
+"
+            ;;
+          -*) die "unknown option: $1" 3 ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || die "usage: cx-agent goal new <name> [--member T]...  (dod on stdin)" 3
+      _validate_label "goal name" "$name"
+      _goals_ensure
+      ! _goal_get "$name" >/dev/null 2>&1 || die "goal already exists: $name" 4
+
+      local dod
+      dod=$(cat)
+      [ -n "$dod" ] || die "empty definition of done" 3
+
+      local m
+      while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        _goal_member_check "$m"
+      done <<EOF
+$members
+EOF
+
+      _goal_apply "$name" '{
+        name:       $_n,
+        dod:        $dod,
+        members:    ($members | split("\n") | map(select(length > 0)) | unique),
+        state:      "active",
+        created_at: $_t,
+        revisions:  [],
+        log:        []
+      }' --arg dod "$dod" --arg members "$members" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    dod)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal dod <name>  (new dod on stdin)" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      local dod
+      dod=$(cat)
+      [ -n "$dod" ] || die "empty definition of done" 3
+      # Recorded, not overwritten. "Change the definition of done" is a normal
+      # thing to do halfway through, and afterwards the only way to tell what
+      # a session was actually asked for is to have kept the old text.
+      _goal_apply "$name" '
+        .revisions = ((.revisions // []) + [{at: $_t, field: "dod", from: .dod, to: $dod}])
+        | .dod = $dod' --arg dod "$dod" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    member)
+      local op="${1:-}" name="${2:-}" target="${3:-}"
+      [ -n "$op" ] && [ -n "$name" ] && [ -n "$target" ] ||
+        die "usage: cx-agent goal member add|rm <name> <target>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      case "$op" in
+        add)
+          _goal_member_check "$target"
+          _goal_apply "$name" '.members = ((.members // []) + [$m] | unique)' --arg m "$target"
+          ;;
+        rm) _goal_apply "$name" '.members = ((.members // []) - [$m])' --arg m "$target" ;;
+        *) die "usage: cx-agent goal member add|rm <name> <target>" 3 ;;
+      esac || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    state)
+      local name="${1:-}" want="${2:-}"
+      [ -n "$name" ] && [ -n "$want" ] || die "usage: cx-agent goal state <name> active|paused|done" 3
+      case "$want" in
+        active | paused | done) ;;
+        *) die "state must be active, paused or done" 3 ;;
+      esac
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      # Pausing touches nothing but this field. There is no process to signal:
+      # the driver re-reads the goal every iteration and stops when it is not
+      # active, so the tmux sessions carry on exactly as they were.
+      _goal_apply "$name" '
+        .revisions = ((.revisions // []) + [{at: $_t, field: "state", from: .state, to: $s}])
+        | .state = $s' --arg s "$want" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    log)
+      local name="" event="note" target=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --event)
+            shift
+            event="${1:-note}"
+            ;;
+          --target)
+            shift
+            target="${1:-}"
+            ;;
+          -*) die "unknown option: $1" 3 ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || die "usage: cx-agent goal log <name> [--event E] [--target T]  (text on stdin)" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      local text
+      text=$(cat)
+      _goal_apply "$name" '
+        .log = ((.log // []) + [{at: $_t, event: $e, target: (if $tg == "" then null else $tg end), text: $x}])' \
+        --arg e "$event" --arg tg "$target" --arg x "$text" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    rm)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal rm <name>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      _lock
+      # shellcheck disable=SC2064
+      trap "_unlock" EXIT INT TERM
+      jq --arg n "$name" 'del(.goals[$n])' "$CX_GOALS" >"$CX_GOALS.new" || {
+        _unlock
+        die "could not write the goals file" 1
+      }
+      mv -f "$CX_GOALS.new" "$CX_GOALS"
+      _unlock
+      trap - EXIT INT TERM
+      jq -nc --arg n "$name" '{name: $n, removed: true}'
+      ;;
+
+    *) die "unknown goal subcommand: $sub" 3 ;;
+  esac
+}
+
+# _goal_forget UNIT — drop UNIT and its children from every goal's members.
+#
+# Called wherever _session_forget is, and for the same reason: a member that
+# names a directory nobody can open again is a goal quietly pointing at
+# nothing. The goal itself is left alone — losing one of two sessions does not
+# mean the work is over, and deleting the user's stated intent because a
+# worktree went away would be the wrong call to make on their behalf.
+_goal_forget() {
+  [ -e "$CX_GOALS" ] || return 0
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg u "$1" '
+    .goals |= with_entries(
+      .value.members |= (map(select(
+        . != $u
+        and (startswith($u + "@") | not)
+        and (startswith($u + "/") | not)
+      )))
+    )' "$CX_GOALS" >"$CX_GOALS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_GOALS.new" "$CX_GOALS"
+  _unlock
+  trap - EXIT INT TERM
 }
 
 # ---------------------------------------------------------------------------
@@ -1932,7 +2224,7 @@ cmd_doctor() {
       # feature gates deliberately use `version` instead: that is one cheap
       # line, where reaching this verb costs _find_claude, five tool_version
       # calls and four credential stats, and a gate runs before every call.
-      capabilities: ["units", "detach", "observe", "nudge"],
+      capabilities: ["units", "detach", "observe", "nudge", "goals"],
       hostname: $hostname,
       project_root: $root,
       registry: { path: $registry, valid: $registry_ok },
@@ -1975,6 +2267,12 @@ cx-agent — server-side helper for cx (not intended for direct use)
   nudge <name> [--worktree W] [--session L] [--force]
                                 type a prompt into a live session (stdin)
   ask <name> [--worktree W] [--session L]   claude -p (prompt on stdin)
+  goal new <name> [--member T]...           definition of done on stdin
+  goal ls [--state S] | show <name> | rm <name>
+  goal dod <name>                           replace it (stdin), keeping history
+  goal member add|rm <name> <target>
+  goal state <name> active|paused|done
+  goal log <name> [--event E] [--target T]  record what a driver did (stdin)
   worktree add <project> <name> [--branch B] [--from REF]
   worktree list <project>
   worktree rm <project> <name> [--force]
@@ -2017,6 +2315,7 @@ main() {
     sessions) cmd_sessions "$@" ;;
     observe) cmd_observe "$@" ;;
     nudge) cmd_nudge "$@" ;;
+    goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;
     *) die "unknown command: $cmd" 3 ;;
