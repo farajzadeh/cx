@@ -127,20 +127,26 @@ cx_target_needs_units() {
   [ -n "$CX_T_WORKTREE" ] || [ -n "$CX_T_SESSION" ]
 }
 
-# cx_agent_units_ok HOST — check the agent is new enough, or explain.
+# cx_agent_supports HOST FEATURE MINVER [VERSION] — version gate, or explain.
 #
-# Only called when the target actually needs the new flags, so the common path
-# pays nothing. Without it the failure is "cx-agent: unknown option:
-# --worktree", which does not tell anyone to re-provision.
-cx_agent_units_ok() {
-  local host="$1" ver="${2:-}"
+# Only called when a command actually needs the newer flag, so the common path
+# pays nothing. Without it the failure is "cx-agent: unknown option: --foo",
+# which does not tell anyone to re-provision. VERSION may be passed in when
+# the caller has already asked, to save a round trip.
+cx_agent_supports() {
+  local host="$1" feature="$2" min="$3" ver="${4:-}"
   [ -n "$ver" ] || ver=$(cx_agent "$host" version 2>/dev/null) || true
   [ -n "$ver" ] || return 0 # not installed: the caller reports that already
-  cx_version_ge "$ver" 0.2.0 && return 0
-  err "the cx agent on $host is too old for worktrees and named sessions"
-  hint "it reports $ver; this needs 0.2.0 or newer"
+  cx_version_ge "$ver" "$min" && return 0
+  err "the cx agent on $host is too old for $feature"
+  hint "it reports $ver; this needs $min or newer"
   hint "update it with: cx provision $host"
   return 1
+}
+
+# cx_agent_units_ok HOST [VERSION] — the gate for worktrees and named sessions.
+cx_agent_units_ok() {
+  cx_agent_supports "$1" "worktrees and named sessions" 0.2.0 "${2:-}"
 }
 
 # cx_target_resolve TARGET — resolve fully, consulting servers if needed.

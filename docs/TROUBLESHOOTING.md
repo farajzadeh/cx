@@ -199,6 +199,31 @@ picker:
 cx resume web1:api
 ```
 
+### `--dangerously-skip-permissions` seems to have been ignored
+
+It only applies when the session is **created**. If the session was already
+running, cx says so and attaches to it unchanged. Stop it first:
+
+```sh
+cx stop web1:api
+cx open web1:api --dangerously-skip-permissions
+```
+
+### Which of my sessions are running without permission checks?
+
+```sh
+cx status
+```
+
+Sessions started that way are marked `no-perms` in the MODE column. There is
+no way to tell from inside an attached session, which is why cx records it.
+
+### `--dangerously-skip-permissions` is refused on the server
+
+Claude Code declines to bypass permission checks when it is running as root.
+cx runs Claude as whatever user you SSH in as, so use a normal account rather
+than root for that host.
+
 ### `cx open` and `cx open ...@label` seem to share one conversation
 
 They should not: each pins its own. Check what is actually recorded:

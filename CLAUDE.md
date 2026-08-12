@@ -107,6 +107,19 @@ tmux 3.x. Two shapes, and they are not interchangeable — session commands
 takes a pane target and needs the trailing colon: `=name:`**. `send-keys -t
 "=name"` fails outright with "can't find pane".
 
+**9a. Permission mode is fixed at session creation, so it must be recorded.**
+`--dangerously-skip-permissions` is passed to the `claude` process the pane
+launches; reattaching cannot change it, and from inside an attached session
+there is no way to tell which mode you are in. So `cmd_open` records
+`dangerous: true` on the session entry and `cx status` shows a `no-perms`
+MODE. The negative is **deleted rather than stored** — absent already means
+guarded, and writing `false` would turn `sessions.json` from a list of pins
+into a list of every session ever opened. Clearing still happens explicitly on
+each creation, because a previous session under the same slug may have set it
+and a stale `true` makes `cx status` lie in the dangerous direction. Note
+`.sessions[$s] |= ...` on a missing key *creates* it holding null, so the
+clearing path is guarded with `has($s)`.
+
 **9. A cx session pins a Claude conversation id.** `claude --continue` means
 "the newest conversation in this directory", so two sessions on one project
 both resume the same conversation and the second silently hijacks the first —

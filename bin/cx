@@ -143,6 +143,7 @@ ${C_BOLD}PARALLEL WORK${C_RESET}
 
 ${C_BOLD}WORKING${C_RESET}
   open <target>                           attach a Claude session (resumes)
+    --dangerously-skip-permissions        ...with no permission checks at all
   resume <target>                         attach and pick a past session
   shell <target>                          plain shell, no Claude
   code <target>                           open in VS Code over Remote-SSH

@@ -39,15 +39,36 @@ history, so the question lands in the same thread cx open would attach to:
 
   cx ask web1:api@review "summarise what we decided"
 
+${C_BOLD}OPTIONS${C_RESET}
+  --dangerously-skip-permissions
+      Answer with all permission checks bypassed, so Claude may edit files and
+      run commands without asking. Applies to this one invocation only.
+      The warning goes to stderr, so piped output is unaffected.
+
 For an interactive conversation, use cx open instead.
 EOF
       return 0
       ;;
   esac
 
-  target="${1:-}"
-  shift 2>/dev/null || true
-  prompt="$*"
+  # The flag is recognised anywhere in the argv; the first remaining word is
+  # the target and the rest is the question. Assembled in place rather than
+  # re-set with eval, so a prompt containing quotes or $(...) is never
+  # re-parsed — the same reason it travels to the server on stdin.
+  local dangerous=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dangerously-skip-permissions) dangerous=1 ;;
+      *)
+        if [ -z "$target" ]; then
+          target="$1"
+        else
+          prompt="${prompt:+$prompt }$1"
+        fi
+        ;;
+    esac
+    shift
+  done
 
   [ -n "$target" ] || {
     err "no target given"
@@ -84,6 +105,16 @@ EOF
     cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
   fi
 
+  local danger_args=()
+  if [ "$dangerous" = 1 ]; then
+    cx_agent_supports "$CX_T_HOST" \
+      "--dangerously-skip-permissions" 0.2.1 "$ver" || return 1
+    danger_args=(--dangerous)
+    # stderr, not stdout: cx ask is built to be piped, and a warning in the
+    # answer would corrupt whatever consumes it.
+    warn "answering with ALL permission checks bypassed"
+  fi
+
   # Prompt travels on stdin; only the target is passed as arguments.
   cx_target_args
   local opts
@@ -92,5 +123,6 @@ EOF
   printf '%s' "$prompt" |
     ssh $opts "$CX_T_HOST" \
       "$CX_AGENT_PATH$(cx_remote_quote ask "$CX_T_PROJECT" \
-        "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}")"
+        "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" \
+        "${danger_args[@]+"${danger_args[@]}"}")"
 }
