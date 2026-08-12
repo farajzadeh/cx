@@ -63,3 +63,16 @@ CX_EDITOR=""
 
 # Set to 1 to disable colored output (or set NO_COLOR in the environment).
 CX_NO_COLOR=0
+
+# How long a session may go quiet mid-turn before cx peek calls it blocked
+# rather than working. Claude routinely spends a minute inside a single tool
+# call, so this is deliberately generous: a false "blocked" costs a pointless
+# nudge, a false "working" costs a driver that waits forever.
+# CX_IDLE_GRACE=120
+
+# How many of a session's last messages cx peek --json includes.
+# CX_PEEK_TAIL=6
+
+# Which server holds goals when a command does not name one. Falls back to
+# CX_DEFAULT_HOST, and then to the only configured server if there is just one.
+# CX_GOAL_HOST=web1

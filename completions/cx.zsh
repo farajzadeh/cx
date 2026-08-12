@@ -35,6 +35,10 @@ _cx() {
     'shell:plain shell, no Claude'
     'code:open in VS Code over Remote-SSH'
     'ask:one-shot question'
+    'peek:what each session is doing now'
+    'nudge:send a prompt to a running session'
+    'goal:definitions of done for your sessions'
+    'driver:print the cx-driver subagent definition'
     'status:live sessions'
     'stop:end a session'
     'cache:inspect or drop cached data'
@@ -69,7 +73,7 @@ _cx() {
         compadd -- ${(f)"$(_cx_targets)"} --branch --from --force
       fi
       ;;
-    open|resume|shell|code|ask|stop|rm)
+    open|resume|shell|code|ask|peek|nudge|stop|rm)
       compadd -- ${(f)"$(_cx_targets)"}
       ;;
   esac

@@ -301,6 +301,109 @@ Renders entirely from cache, at any age, fetching nothing.
 
 ---
 
+## Driving sessions
+
+### `cx peek` says `unknown`
+
+cx could not read that session's conversation. Two harmless causes:
+
+- **No conversation is pinned.** Sessions started before cx 0.2.0 have no
+  pinned id. `cx stop <target>` and open it again to pin one.
+- **Claude Code's storage layout changed.** cx reads
+  `~/.claude/projects/<encoded-path>/*.jsonl`, which is an observed layout
+  rather than a documented API. It degrades to `unknown` on purpose — nothing
+  else breaks, and `cx open` keeps working.
+
+### `cx peek` says `dead` but the session looks fine
+
+cx calls a session dead when the pane's foreground process is a shell, which
+normally means Claude exited. It will also say that if your `claude` is a
+wrapper script that does not `exec` the real binary, since the pane then shows
+the wrapper's interpreter. Check with:
+
+```sh
+cx shell <host>            # then, on the server:
+tmux list-panes -a -F '#{session_name} #{pane_current_command}'
+```
+
+The error is in the safe direction: cx will refuse to nudge such a session
+rather than typing your prompt into a shell.
+
+### A session is stuck on `fresh`
+
+`fresh` means Claude is up but this conversation has never been written to.
+Claude writes nothing until its first exchange, so this is normal right after
+`cx open -d` — and it stays true if nobody has sent it anything.
+
+If it persists after you nudged it, attach and look:
+
+```sh
+cx open <target>
+```
+
+The usual cause is Claude's **"do you trust this folder?"** prompt, which it
+shows the first time it runs in any directory and which blocks everything
+until answered. Answer it once and the session behaves normally afterwards.
+
+### `cx nudge` says "is mid-turn — not sent"
+
+Working as intended. Nudging a session that is mid-turn interleaves your text
+with what Claude is already doing. Wait for `cx peek` to show `idle`, or
+override deliberately:
+
+```sh
+cx nudge <target> --force "stop what you are doing and ..."
+```
+
+A declined nudge exits 0, not an error — a driver in a loop needs to tell
+"busy, come back" apart from "this is broken".
+
+### `cx nudge` says "has gone quiet mid-turn"
+
+The session stopped part-way through a turn and has not written anything for
+`CX_IDLE_GRACE` seconds (120 by default). Nearly always a permission prompt
+that only you can answer:
+
+```sh
+cx open <target>
+```
+
+If your work legitimately involves long tool calls, raise the threshold in
+`~/.config/cx/config`:
+
+```sh
+CX_IDLE_GRACE=600
+```
+
+### `cx ask` says "a second claude on its conversation would lose turns"
+
+`cx ask <target>@<label>` joins that named session's conversation. If the
+session is running, a second `claude` resuming the same conversation gives two
+processes appending to one transcript with no merge, and one of them loses its
+turns silently. cx refuses instead. Use `cx nudge` to talk to a live session,
+or `cx ask` without the label for a one-shot with no shared history.
+
+### The driver will not stop
+
+`cx goal pause <name>`. Nothing in cx loops, so there is no process to kill —
+the driver re-reads the goal each pass and stops when it is not `active`. If
+it is a Claude Code subagent, you can also just stop talking to it.
+
+Pausing touches no session: everything stays exactly where it was.
+
+### `the cx agent on <host> is too old for observing and steering`
+
+`cx peek`, `cx nudge` and `cx goal` need agent 0.3.0 or newer.
+
+```sh
+cx provision <host>
+```
+
+Existing sessions are unaffected — the agent is only run per command, never
+kept alive.
+
+---
+
 ## Targets
 
 ### `'api' exists on more than one server`

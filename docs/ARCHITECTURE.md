@@ -97,6 +97,46 @@ afterwards, choosing by whether that conversation's `.jsonl` exists yet.
 The file is a cache of ids, not state cx owns: delete it and every session
 starts a fresh conversation — annoying, not broken.
 
+### 7. cx contains no judgment, and therefore no loop
+
+The client and agent classify *structure* — does this transcript's last
+main-thread message end in `stop_reason: end_turn` — and never *meaning* — is
+this definition of done met. Meaning belongs to the driver subagent
+(`docs/cx-driver.agent.md`), which reaches cx only through the CLI.
+
+The corollary is the load-bearing half: every verb is one-shot and returns.
+No `--follow`, no `--wait`, no daemon, nothing that polls.
+
+That is forced rather than chosen. A client daemon contradicts "a thin,
+stateless thing that could be reinstalled or replaced at any moment". A server
+daemon would need a driver Claude with its own conversation and session pin,
+which is a recursion into the problem being solved. And mechanically there is
+no `timeout(1)`, no `wait -n` and no `setsid`, so any loop written here is a
+hand-rolled `sleep` holding an SSH connection open for its duration.
+
+Two user-visible consequences follow directly. `cx goal pause` works without
+touching anything, because there is no process to signal — only a driver that
+re-reads the goal each pass and stops. And `cx nudge` declines a busy session
+rather than queueing, because cx has nowhere to keep a queue that is not state
+it owns, and draining one would need the daemon it does not have.
+
+### 8. One conversation, one writer
+
+A Claude conversation id is owned by exactly one live process. Running
+`claude -p --resume <uuid>` against a uuid that a tmux session is already
+holding gives two writers appending to a single transcript with no merge, and
+the turns of whichever loses are silently orphaned.
+
+`cx ask <target>@<label>` did exactly this until 0.3.0. It now refuses with
+exit 4 when that session is live and points at `cx nudge` instead.
+
+Steering a running session is `tmux send-keys` into its pane — never a second
+`claude`. The text goes through a paste buffer (`load-buffer` from stdin,
+`paste-buffer -d`, then `C-m`) rather than as a `send-keys` argument, because a
+multi-line prompt is impossible with `send-keys` — the first newline submits —
+and because this way the prompt never becomes part of a command line on either
+side of the wire.
+
 ## Portability
 
 The client targets **bash 3.2** (macOS's default) and BSD userland. See
@@ -120,23 +160,90 @@ tested under busybox `ash`.
 to servers as a single artifact. It duplicates a little of `compat.sh` for
 that reason. Do not factor it into `lib/`.
 
+## Driving sessions
+
+Three commands, and the split between them is invariant 7 made concrete.
+
+**`cx peek`** — the agent's `observe` verb reports raw facts per session: tmux
+liveness, whether the pane's foreground process is a shell, the transcript's
+mtime, and its last main-thread message. `lib/activity.sh` turns those into a
+state. The classifier is on the client because the threshold is the user's
+(`CX_IDLE_GRACE`) and because a pure function is the only part of this that a
+unit test can pin — inside the monolithic agent it would be untestable.
+
+| state | meaning |
+|---|---|
+| `dead` | no tmux session, or the pane is back at a shell |
+| `fresh` | up, but this conversation has not been written to yet |
+| `idle` | the last turn finished; it is waiting for a human |
+| `working` | the transcript is still moving |
+| `blocked` | mid-turn and quiet past the grace period |
+| `unknown` | nothing readable |
+
+`idle` is tested before `working`, deliberately: a turn that ended two seconds
+ago is idle, not busy — the file is fresh precisely *because* Claude stopped.
+And `fresh` never expires, because Claude writes no transcript until its first
+exchange, so "just started" and "nobody has given it anything to do" are the
+same fact; whether that has gone on too long depends on what the caller has
+already sent, which only the caller knows.
+
+**`cx nudge`** — types into a live session. It declines with **exit 0** and
+`sent: false` when the session is not ready, following the precedent that
+stopping an already-stopped project is not an error: a driver in a loop has to
+tell "busy, come back" apart from "this is broken". The agent refuses an
+*attached* session by itself — a fact it can check — while the client refuses
+`working` and `blocked`, which are policy and need the grace period.
+
+**`cx goal`** — a definition of done, and the sessions working towards it.
+Server-side per invariant 4, because a goal is the one thing in cx that cannot
+be derived from anything else. Members are stored **as written**: a bare
+`api/authfix` means this host, a qualified `web2:api@tests` means another one.
+The agent validates only the bare ones — it cannot see other servers, and
+invariant 1 says it must not try — which is what lets a single goal span hosts
+with no client-side state and no replication between servers.
+
+`cx goal dod` records the previous text in `revisions` rather than overwriting
+it. Changing the definition of done halfway through is normal, and afterwards
+the only way to know what a session was actually asked for is to have kept it.
+
 ## The Claude session store — a known assumption
 
 `cx ls` reports how many conversations a project has and when it was last
-active. That comes from reading Claude Code's own storage:
+active; `cx peek` reports what each session is doing. Both come from reading
+Claude Code's own storage:
 
 ```
-~/.claude/projects/<absolute-path-with-slashes-replaced-by-dashes>/*.jsonl
+~/.claude/projects/<encoded-absolute-path>/*.jsonl
 ```
 
-So `/home/u/projects/api` maps to `~/.claude/projects/-home-u-projects-api/`.
-This was verified empirically against a real installation.
+The encoding replaces **every character outside `[A-Za-z0-9-]`** with a dash,
+not just the slashes:
 
-A second property is also relied on: **each `*.jsonl` is named for the session
-id it holds** — the file's own `.sessionId` field equals its basename. That is
-what lets the agent pick the conversation `--continue` would have picked when
-a project is opened for the first time (so upgrading cx does not look like
-losing your history), and decide whether a pinned id can be `--resume`d yet.
+```
+/home/u/projects/api             ->  -home-u-projects-api
+/home/u/projects/.worktrees/api  ->  -home-u-projects--worktrees-api
+```
+
+The dot is the one that matters. cx puts every worktree under `.worktrees`, so
+a slashes-only encoding pointed at a directory that never exists — `cx ls`
+reported no history for any worktree cx had ever made. `_session_dir_name` is
+now the single place this is written down, because it used to be written twice
+and the copies disagreed.
+
+Three more properties are relied on, all verified against a real transcript:
+
+- **each `*.jsonl` is named for the session id it holds** — the file's own
+  `.sessionId` equals its basename. That is what lets the agent adopt the
+  conversation `--continue` would have picked when a project is opened for the
+  first time, and decide whether a pinned id can be `--resume`d yet.
+- **`.type` separates messages from bookkeeping, `.isSidechain` separates the
+  main thread from subagent turns.** Twelve `.type` values appeared in one real
+  transcript and only two of them (`assistant`, `user`) are messages, so *the
+  last line of a transcript is usually not a message at all*. Sidechain entries
+  outnumbered main-thread ones two to one.
+- **`.message.stop_reason`** on an assistant entry: `end_turn` means the turn
+  finished, `tool_use` means it is mid-work. That is the whole idle/busy
+  signal.
 
 **This is an observed layout, not a documented API.** It could change.
 Everything that reads it degrades rather than failing:
@@ -146,10 +253,19 @@ Everything that reads it degrades rather than failing:
 | the directory naming | `sessions` is `null`, rendered `?` |
 | adopting the newest conversation | a first open starts a fresh one |
 | the `.jsonl`-is-the-id property | `--session-id` where `--resume` was meant |
+| `.type` / `.isSidechain` / `.stop_reason` | `cx peek` says `unknown`, exit 0 |
 
 A future Claude Code change should cost one display column or one extra
-conversation — never a broken `cx ls` or a session that will not open. If you
-touch this code, keep that property.
+conversation — never a broken `cx ls`, a session that will not open, or a
+driver that cannot tell what is happening. If you touch this code, keep that
+property; `test/fixtures/transcript/` has a fixture for each failure mode.
+
+Two practical notes for anyone editing the reader. The scan window has to be
+far larger than the number of messages wanted (500, escalating once to 5000)
+because sidechains bury the main thread. And every line is parsed with
+`jq -R 'fromjson? // empty'` — **the `?` is load-bearing**: the file is
+append-only and is being written while it is read, so its final line is
+routinely a half-written object.
 
 ## Naming and tmux
 
