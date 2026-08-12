@@ -87,9 +87,30 @@ run_rc cx_run "$HOME_DIR" new cx-test-web1:api
 it "exits 4 on conflict, distinctly from other errors"
 assert_eq "$_T_RC" 4
 
+# '/' is target syntax (it selects a worktree), so cx new rejects it in the
+# client rather than letting the component be parsed off and dropped.
 _out=$(cx_run "$HOME_DIR" new "cx-test-web1:../escape" 2>&1)
 it "rejects a name containing a path separator"
-assert_contains "$_out" 'cannot contain'
+assert_contains "$_out" "cannot contain '/' or '@'"
+
+run_rc cx_run "$HOME_DIR" new "cx-test-web1:../escape"
+it "and exits 3 (usage), not by creating something"
+assert_eq "$_T_RC" 3
+
+it "created nothing on the server"
+assert_not_contains "$(cx_run "$HOME_DIR" -r ls cx-test-web1)" 'escape'
+
+# The agent is the backstop: it rejects a traversal attempt even when the
+# client's parsing is bypassed entirely.
+_out=$(docker exec "${CX_NODE_PREFIX}web1" su - cxuser \
+  -c '$HOME/.local/bin/cx-agent new ../escape' 2>&1)
+it "the agent rejects a path separator independently of the client"
+assert_contains "$_out" 'cannot contain spaces, tabs or slashes'
+
+_out=$(docker exec "${CX_NODE_PREFIX}web1" su - cxuser \
+  -c '$HOME/.local/bin/cx-agent new ..' 2>&1)
+it "and rejects a bare .. that has no separator to catch it"
+assert_contains "$_out" 'invalid project name'
 
 _out=$(cx_run "$HOME_DIR" new nosuchhost:thing 2>&1)
 it "rejects an unknown host"

@@ -45,12 +45,35 @@ EOF
 
   cx_target_resolve "$target" || return $?
 
+  # cx rm operates on whole projects. Silently widening a worktree target to
+  # its project would delete far more than was asked for, so refuse and name
+  # the command that does what they meant.
+  if [ -n "$CX_T_WORKTREE" ]; then
+    err "cx rm removes a whole project, not a worktree"
+    hint "remove just the worktree with: cx wt rm $(cx_target_str)"
+    hint "or remove the whole project with: cx rm $CX_T_HOST:$CX_T_PROJECT"
+    return 3
+  fi
+  if [ -n "$CX_T_SESSION" ]; then
+    err "cx rm removes a project, not a session"
+    hint "end the session with: cx stop $(cx_target_str)"
+    return 3
+  fi
+
   local path=""
   path=$(cx_agent "$CX_T_HOST" path "$CX_T_PROJECT" 2>/dev/null) || true
+
+  # Worktrees are removed along with the project, and they hold branches whose
+  # work may live nowhere else. Counting them costs one call and is worth it
+  # before an irreversible prompt.
+  local wt_names=""
+  wt_names=$(cx_agent "$CX_T_HOST" worktree list "$CX_T_PROJECT" 2>/dev/null |
+    jq -r '.worktrees[]?.name' 2>/dev/null | tr '\n' ' ') || true
 
   if [ "$purge" = 1 ]; then
     warn "This deletes $(cx_target_str) and everything in it."
     [ -n "$path" ] && note "  $CX_T_HOST:$path"
+    [ -n "$wt_names" ] && warn "  and its worktrees: $wt_names"
     note "  This cannot be undone."
   else
     note "This removes $(cx_target_str) from cx."

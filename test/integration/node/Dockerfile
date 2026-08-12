@@ -34,17 +34,11 @@ RUN (getent group cxuser || groupadd cxuser) && \
 # so ~/.local/bin is absent and `command -v claude` fails on a server where
 # Claude Code is installed and signed in. Keeping the stub here means every
 # test exercises the realistic layout.
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    '# Stub claude for cx integration tests.' \
-    'case "${1:-}" in' \
-    '  --version) echo "9.9.9 (Claude Code stub)" ;;' \
-    '  -p|--print) shift; echo "STUB_ANSWER: $*" ;;' \
-    '  --continue) echo "STUB: continuing session in $(pwd)" ;;' \
-    '  --resume)   echo "STUB: resume picker in $(pwd)" ;;' \
-    '  *)          echo "STUB: interactive claude in $(pwd)" ;;' \
-    'esac' \
-    > /tmp/claude-stub && chmod 755 /tmp/claude-stub
+#
+# The stub is a real file rather than a printf'd heredoc because it now parses
+# arguments, and argument parsing is the thing the tests assert on.
+COPY claude-stub.sh /tmp/claude-stub
+RUN chmod 755 /tmp/claude-stub
 
 # Entrypoint installs the test public key with the ownership and permissions
 # sshd insists on — a bind-mounted authorized_keys would carry host uid/gid

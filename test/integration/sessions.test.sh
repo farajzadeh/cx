@@ -73,8 +73,18 @@ assert_contains "$(on_node 'tmux has-session -t cx-api && echo yes || echo no')"
 it "names it with the cx- prefix so cx status can find it"
 assert_contains "$(on_node 'tmux list-sessions -F "#{session_name}"')" 'cx-api'
 
-it "runs claude --continue in the project directory"
-assert_contains "$(on_node 'tmux capture-pane -p -t cx-api')" 'continuing session in /home/cxuser/projects/api'
+# Not --continue: cx pins a conversation id per session, so the first open of
+# a project with no history starts a new one with a known id. --continue would
+# mean "whatever is newest in this directory", which is exactly what makes two
+# parallel sessions collide.
+it "starts Claude on a pinned session id, in the project directory"
+assert_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api:')" 'new session'
+
+it "and does so in the project directory"
+assert_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api:')" 'in /home/cxuser/projects/api'
+
+it "records the pin so the next open resumes the same conversation"
+assert_contains "$(on_node 'cat ~/.local/share/cx/sessions.json')" '"api"'
 
 # ---------------------------------------------------------------------------
 
@@ -87,7 +97,7 @@ agent 'open api --mode continue' >/dev/null 2>&1
 sleep 1
 
 it "still has exactly one Claude invocation in the pane"
-assert_eq "$(on_node 'tmux capture-pane -p -t cx-api | grep -c "continuing session"')" '1'
+assert_eq "$(on_node 'tmux capture-pane -pJ -t =cx-api: | grep -c "STUB: new session"')" '1'
 
 it "still has exactly one tmux session"
 assert_eq "$(on_node 'tmux list-sessions | wc -l' | tr -d ' ')" '1'
@@ -99,18 +109,107 @@ describe "modes choose different Claude invocations"
 agent 'open web --mode resume' >/dev/null 2>&1
 sleep 1
 
-it "resume mode starts the session picker"
-assert_contains "$(on_node 'tmux capture-pane -p -t cx-web')" 'resume picker'
+it "resume mode starts the session picker, with no id pinned"
+assert_contains "$(on_node 'tmux capture-pane -pJ -t =cx-web:')" 'resume picker'
 
-on_node 'tmux kill-session -t cx-web' >/dev/null 2>&1
+on_node 'tmux kill-session -t =cx-web' >/dev/null 2>&1
 agent 'open web --mode shell' >/dev/null 2>&1
 sleep 1
 
 it "shell mode starts no Claude at all"
-assert_not_contains "$(on_node 'tmux capture-pane -p -t cx-web')" 'STUB'
+assert_not_contains "$(on_node 'tmux capture-pane -pJ -t =cx-web:')" 'STUB'
 
 it "but still creates the session"
-assert_contains "$(on_node 'tmux has-session -t cx-web && echo yes || echo no')" 'yes'
+assert_contains "$(on_node 'tmux has-session -t =cx-web && echo yes || echo no')" 'yes'
+
+# ---------------------------------------------------------------------------
+
+describe "named sessions run in parallel on one project"
+
+# The feature in one block: several conversations on the same files, each
+# reachable by name and each with its own history.
+on_node 'tmux kill-server' >/dev/null 2>&1
+agent 'open api --mode continue' >/dev/null 2>&1
+agent 'open api --session review --mode continue' >/dev/null 2>&1
+agent 'open api --session tests --mode continue' >/dev/null 2>&1
+sleep 1
+
+it "creates one tmux session per label"
+assert_eq "$(on_node 'tmux list-sessions -F "#{session_name}" | sort | tr "\n" " "')" \
+  'cx-api cx-api@review cx-api@tests '
+
+it "pins a separate conversation id for each"
+assert_eq "$(on_node 'jq -r ".sessions | keys | sort | join(\",\")" ~/.local/share/cx/sessions.json')" \
+  'api,api@review,api@tests'
+
+# Distinct ids are the entire point: equal ids would mean the three sessions
+# share one conversation, which is the bug this feature exists to fix.
+it "gives every session a DIFFERENT conversation id"
+assert_eq "$(on_node 'jq -r "[.sessions[].uuid] | unique | length" ~/.local/share/cx/sessions.json')" '3'
+
+it "runs all three in the same project directory"
+assert_eq "$(on_node 'tmux capture-pane -pJ -t =cx-api@review: | grep -c "in /home/cxuser/projects/api"')" '1'
+
+# tmux resolves a bare target as a prefix, so `-t cx-api` can land in
+# cx-api@review. Everything cx does uses the exact-match "=" form.
+it "reopening the default session does not attach to a labelled one"
+_before=$(on_node 'tmux capture-pane -pJ -t =cx-api@review: | grep -c STUB')
+agent 'open api --mode continue' >/dev/null 2>&1
+sleep 1
+assert_eq "$(on_node 'tmux capture-pane -pJ -t =cx-api@review: | grep -c STUB')" "$_before"
+
+describe "a second open of a named session resumes its own conversation"
+
+_uuid=$(on_node 'jq -r ".sessions[\"api@review\"].uuid" ~/.local/share/cx/sessions.json')
+# Pretend Claude wrote history for that conversation: the store names each
+# file after the session id it holds.
+on_node "mkdir -p ~/.claude/projects/-home-cxuser-projects-api && \
+         echo '{}' > ~/.claude/projects/-home-cxuser-projects-api/$_uuid.jsonl"
+on_node 'tmux kill-session -t =cx-api@review' >/dev/null 2>&1
+agent 'open api --session review --mode continue' >/dev/null 2>&1
+sleep 1
+
+it "resumes by id rather than starting a new conversation"
+assert_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api@review:')" "resuming session $_uuid"
+
+it "keeps the same id it pinned the first time"
+assert_eq "$(on_node 'jq -r ".sessions[\"api@review\"].uuid" ~/.local/share/cx/sessions.json')" "$_uuid"
+
+describe "cx status names each session"
+
+_out=$(cx_run "$HOME_DIR" status)
+
+it "has a SESSION column"
+assert_contains "$_out" 'SESSION'
+
+it "shows the label of a named session"
+assert_contains "$_out" 'review'
+
+it "shows a dash for a project's default session"
+assert_contains "$_out" '—'
+
+describe "cx stop targets one session, not the project"
+
+_out=$(cx_run "$HOME_DIR" stop cx-test-web1:api@review)
+
+it "reports the labelled session stopped"
+assert_contains "$_out" 'stopped cx-test-web1:api@review'
+
+it "kills exactly that session"
+assert_contains "$(on_node 'tmux has-session -t =cx-api@review 2>/dev/null && echo yes || echo no')" 'no'
+
+it "and leaves the project's other sessions running"
+assert_contains "$(on_node 'tmux has-session -t =cx-api 2>/dev/null && echo yes || echo no')" 'yes'
+
+_out=$(cx_run "$HOME_DIR" stop cx-test-web1:api --all)
+
+it "--all stops the rest"
+assert_eq "$(on_node 'tmux list-sessions -F "#{session_name}" 2>/dev/null | grep -c "^cx-api" || true' | tr -d ' \r')" '0'
+
+# Leave a plain session running: the blocks below are about the single-session
+# behavior and expect the state this file started in.
+agent 'open api --mode continue' >/dev/null 2>&1
+sleep 1
 
 # ---------------------------------------------------------------------------
 

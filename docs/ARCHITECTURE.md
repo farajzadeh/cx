@@ -70,9 +70,32 @@ works identically from a second machine, and cannot drift from reality.
 
 ### 5. Only derivable data is derived, never stored
 
-`branch`, `dirty`, `tmux_live`, `sessions` and `last_active` are computed
-fresh on every `list`. Only `name`, `path`, `repo` and `created_at` are
-recorded — the things that genuinely cannot be recomputed.
+`branch`, `dirty`, `tmux_live`, `tmux_count`, `sessions`, `last_active` and
+`worktrees` are computed fresh on every `list`. Only `name`, `path`, `repo`
+and `created_at` are recorded — the things that genuinely cannot be
+recomputed.
+
+Worktrees are the clearest case. `git worktree list --porcelain` already
+knows about them, so cx writes nothing down. The payoff is that drift is
+impossible by construction: a worktree created by hand over SSH appears in
+`cx ls` without cx being told, and one removed with plain `git` disappears
+from it. A stored copy would have needed reconciliation logic that could only
+ever be wrong.
+
+### 6. A session is a pinned conversation, not a directory
+
+`claude --continue` means "the newest conversation in this directory". Two
+sessions on one project are two panes in the same directory, so both resolve
+to the same conversation and the second hijacks the first — which is why
+parallel sessions were not possible before.
+
+So each cx session pins a Claude session id, recorded on the server in
+`~/.local/share/cx/sessions.json` keyed by `project[/worktree][@label]`. The
+agent launches `--session-id <uuid>` the first time and `--resume <uuid>`
+afterwards, choosing by whether that conversation's `.jsonl` exists yet.
+
+The file is a cache of ids, not state cx owns: delete it and every session
+starts a fresh conversation — annoying, not broken.
 
 ## Portability
 
@@ -109,10 +132,47 @@ active. That comes from reading Claude Code's own storage:
 So `/home/u/projects/api` maps to `~/.claude/projects/-home-u-projects-api/`.
 This was verified empirically against a real installation.
 
+A second property is also relied on: **each `*.jsonl` is named for the session
+id it holds** — the file's own `.sessionId` field equals its basename. That is
+what lets the agent pick the conversation `--continue` would have picked when
+a project is opened for the first time (so upgrading cx does not look like
+losing your history), and decide whether a pinned id can be `--resume`d yet.
+
 **This is an observed layout, not a documented API.** It could change.
-Everything that reads it degrades to `null` — rendered as `?` — when the
-directory is absent, so a future Claude Code change costs one display column
-rather than breaking `cx ls`. If you touch this code, keep that property.
+Everything that reads it degrades rather than failing:
+
+| if this breaks | the cost |
+|---|---|
+| the directory naming | `sessions` is `null`, rendered `?` |
+| adopting the newest conversation | a first open starts a fresh one |
+| the `.jsonl`-is-the-id property | `--session-id` where `--resume` was meant |
+
+A future Claude Code change should cost one display column or one extra
+conversation — never a broken `cx ls` or a session that will not open. If you
+touch this code, keep that property.
+
+## Naming and tmux
+
+A **unit** is a working directory: a project, or one of its worktrees. A
+**slug** adds an optional session label:
+
+```
+unit := project[/worktree]
+slug := unit[@label]
+tmux := cx-<slug>
+```
+
+Two tmux behaviors shape this, both verified against tmux 3.x:
+
+- **Targets match by prefix.** Once `cx-api@review` exists, `has-session -t
+  cx-api` succeeds and `attach -t cx-api` lands in the review session. Every
+  lookup therefore uses the exact-match `=name` form — and `send-keys`, which
+  takes a *pane* target, needs the trailing colon (`=name:`) or it fails with
+  "can't find pane".
+- **Dots are rewritten to underscores.** `new-session -s cx-my.app` creates
+  `cx-my_app`, so the tmux name cannot always be reversed. Project names have
+  always allowed dots, so the project is recovered by registry lookup;
+  worktree names and session labels forbid dots outright.
 
 ## Performance
 
@@ -120,7 +180,8 @@ rather than breaking `cx ls`. If you touch this code, keep that property.
 
 - **Server side, O(1) per host, not per project.** One `tmux list-sessions`,
   one pass over the session store, and `git status --porcelain` (expensive on
-  large repos) only when `--git` is passed.
+  large repos) only when `--git` is passed. `git worktree list` is the one
+  per-project call, and it reads `.git/worktrees` rather than the working tree.
 - **Client side, one `jq` for the whole table.** The natural shape — a shell
   loop extracting each field — costs about seven processes per project and
   dominated the runtime.

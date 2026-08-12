@@ -13,10 +13,14 @@ cmd_code() {
 ${C_BOLD}cx code${C_RESET} — open a project in VS Code over Remote-SSH
 
   cx code <host>:<project>
+  cx code <host>:<project>/<worktree>
 
 Opens the project folder in VS Code with the Remote-SSH extension, so editing
 happens on the server. Claude Code still runs there too — run it from VS
 Code's integrated terminal, or keep using cx open in a separate window.
+
+A worktree target opens that worktree's directory, so each parallel task can
+have its own editor window.
 
 Requires VS Code and the Remote-SSH extension:
   https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh
@@ -50,9 +54,18 @@ EOF
 
   cx_target_resolve "$target" || return $?
 
+  # A session label means nothing to an editor — only the directory does — so
+  # only the worktree half of the target is passed through.
+  local wt_args=()
+  if [ -n "$CX_T_WORKTREE" ]; then
+    cx_agent_units_ok "$CX_T_HOST" || return 1
+    wt_args=(--worktree "$CX_T_WORKTREE")
+  fi
+
   local path
-  path=$(cx_agent "$CX_T_HOST" path "$CX_T_PROJECT" 2>/dev/null) || {
-    err "could not resolve the project path on $CX_T_HOST"
+  path=$(cx_agent "$CX_T_HOST" path "$CX_T_PROJECT" \
+    "${wt_args[@]+"${wt_args[@]}"}" 2>/dev/null) || {
+    err "could not resolve the path for $(cx_target_str) on $CX_T_HOST"
     hint "check the server with: cx host test $CX_T_HOST"
     return 1
   }

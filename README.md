@@ -12,10 +12,11 @@ which box has which project in your head.
 
 ```console
 $ cx ls
-HOST   PROJECT   BRANCH   SESSIONS  ACTIVE  LIVE  REPO
-web1   api       main     12        4m      ●     gh:acme/api
-web1   dashboard main     3         2d            gh:acme/dashboard
-db1    etl       main     7         1h            gh:acme/etl
+HOST   PROJECT       BRANCH    SESSIONS  ACTIVE  LIVE  REPO
+web1   api           main      12        4m      ●2    gh:acme/api
+         api/authfix authfix   3         1m      ●
+web1   dashboard     main      3         2d            gh:acme/dashboard
+db1    etl           main      7         1h            gh:acme/etl
 
 $ cx open web1:api
 # ... attaches a persistent Claude session on web1, resuming where you left off
@@ -23,6 +24,13 @@ $ cx open web1:api
 
 Close your laptop mid-task. Claude keeps working. Run `cx open web1:api` again
 from anywhere and you're back in the same conversation.
+
+Need to work on two things at once? Give each task a worktree — its own branch
+and directory, so parallel Claude sessions can't overwrite each other:
+
+```console
+$ cx wt add web1:api/authfix    # then: cx open web1:api/authfix
+```
 
 ---
 
@@ -102,30 +110,78 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 |---|---|
 | `cx new web1:api --repo <url>` | clone a repo into a new project |
 | `cx new web1:api` | create an empty git repository |
-| `cx ls [host] [--git]` | list projects across servers |
+| `cx ls [host] [--git]` | list projects and worktrees across servers |
 | `cx rm web1:api [--purge]` | unregister (`--purge` also deletes files) |
 
 ### Working
 
 | | |
 |---|---|
-| `cx open web1:api` | attach a Claude session, resuming the last conversation |
+| `cx open web1:api` | attach a Claude session, resuming its conversation |
 | `cx resume web1:api` | attach and pick an older conversation |
 | `cx shell web1:api` | plain shell in the project, no Claude |
 | `cx code web1:api` | open in VS Code over Remote-SSH |
 | `cx ask web1:api "..."` | one-shot question; prints to stdout, no session |
 | `cx status` | what's running right now, everywhere |
-| `cx stop web1:api` | end a session |
+| `cx stop web1:api [--all]` | end a session (`--all`: every one of the project's) |
 
-Targets are `host:project`. A bare `project` resolves against
-`CX_DEFAULT_HOST`, or across every server when the name is unique — and if
-it's ambiguous, `cx` tells you rather than guessing.
+### Working in parallel
+
+| | |
+|---|---|
+| `cx open web1:api@review` | a second conversation on the **same files** |
+| `cx wt add web1:api/authfix` | a worktree: its own **branch and directory** |
+| `cx wt ls [host[:project]]` | list worktrees |
+| `cx wt rm web1:api/authfix [--force]` | remove one (the branch is kept) |
+
+Targets are `host:project[/worktree][@session]`. A bare `project` resolves
+against `CX_DEFAULT_HOST`, or across every server when the name is unique —
+and if it's ambiguous, `cx` tells you rather than guessing.
+
+---
+
+## Two ways to work on several things at once
+
+They compose, and picking the right one matters:
+
+**`@label` — parallel conversations.** Same directory, same branch, separate
+Claude sessions each with their own history. Good for a review thread running
+alongside the work, or asking a question without derailing what you were
+doing.
+
+```sh
+cx open web1:api            # the main thread
+cx open web1:api@review     # a second one, same files
+cx stop web1:api@review     # end just that one
+```
+
+**`/worktree` — parallel branches.** A `git worktree` is a second checkout of
+the same repository on its own branch, in its own directory. Two Claude
+sessions in two worktrees edit different files and cannot overwrite each
+other's work, which two sessions in one directory absolutely can.
+
+```sh
+cx wt add web1:api/authfix           # new branch 'authfix', new directory
+cx wt add web1:api/bug-123           # a second task, at the same time
+cx open   web1:api/authfix           # work on one
+cx open   web1:api/bug-123           # and the other, in parallel
+cx ls                                # both, with their branches
+cx wt rm  web1:api/authfix           # done; the branch stays
+```
+
+Worktrees live in `.worktrees/<project>/<name>` beside the project on the
+server, so `ls ~/projects` stays readable. cx records nothing about them —
+`git worktree list` is the only source of truth, so one you create by hand
+over SSH shows up in `cx ls`, and one you delete by hand disappears.
+
+And they nest: `cx open web1:api/authfix@tests` is a second conversation
+inside a worktree.
 
 ---
 
 ## Why sessions survive
 
-`cx open` starts Claude inside a `tmux` session named after the project. The
+`cx open` starts Claude inside a `tmux` session named after the target. The
 process belongs to the server, not to your SSH connection, so:
 
 - **Your connection drops** → Claude keeps working. Reattach with `cx open`.
@@ -137,6 +193,10 @@ Detach without stopping anything: `Ctrl-b d`.
 
 Re-running `cx open` on a live session **reattaches** — it doesn't start a
 second Claude on top of the first.
+
+Each session is pinned to its own Claude conversation, so `cx open web1:api`
+and `cx open web1:api@review` always come back to the thread you left in that
+one — they never collide, however many you run at once.
 
 ---
 

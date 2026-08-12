@@ -132,8 +132,14 @@ ${C_BOLD}SERVERS${C_RESET}
 
 ${C_BOLD}PROJECTS${C_RESET}
   new <host>:<name> [--repo URL]          create and register a project
-  ls [host] [--git]                       list projects across servers
+  ls [host] [--git]                       list projects and worktrees
   rm <target> [--purge]                   unregister (--purge deletes files)
+
+${C_BOLD}PARALLEL WORK${C_RESET}
+  wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
+  wt ls [host[:project]]                  list worktrees
+  wt rm <target>/<name> [--force]         remove one (its branch is kept)
+  open <target>@<label>                   a second session on the same files
 
 ${C_BOLD}WORKING${C_RESET}
   open <target>                           attach a Claude session (resumes)
@@ -142,7 +148,7 @@ ${C_BOLD}WORKING${C_RESET}
   code <target>                           open in VS Code over Remote-SSH
   ask <target> "prompt"                   one-shot question, prints to stdout
   status                                  live sessions across servers
-  stop <target>                           end a session
+  stop <target> [--all]                   end a session (--all: the project's)
 
 ${C_BOLD}CACHE${C_RESET}
   cache status | clear [host]             inspect or drop cached data
@@ -158,8 +164,15 @@ ${C_BOLD}OPTIONS${C_RESET}
   -V, --version    print version
 
 ${C_BOLD}TARGETS${C_RESET}
-  A target is ${C_BOLD}host:project${C_RESET}. A bare ${C_BOLD}project${C_RESET} resolves against
-  CX_DEFAULT_HOST, or across all servers when the name is unique.
+  A target is ${C_BOLD}host:project[/worktree][@session]${C_RESET}. A bare ${C_BOLD}project${C_RESET} resolves
+  against CX_DEFAULT_HOST, or across all servers when the name is unique.
+
+    web1:api                 the project
+    web1:api@review          a second conversation on the same files
+    web1:api/authfix         a worktree — its own branch and directory
+    web1:api/authfix@tests   a named session inside that worktree
+
+  Use ${C_BOLD}@label${C_RESET} for parallel conversations, ${C_BOLD}/worktree${C_RESET} for parallel branches.
 
 Docs: $CX_HOME/docs/
 EOF

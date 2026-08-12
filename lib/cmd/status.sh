@@ -18,6 +18,14 @@ ${C_BOLD}cx status${C_RESET} — Claude sessions running right now
 Shows live tmux sessions on every server, whether anyone is attached, and how
 long each has been running. This always queries the servers: a cached answer
 to "is it running" would defeat the point.
+
+PROJECT is the target to reattach with, including a worktree if the session is
+in one. SESSION is the label, or — for a project's default session. Together
+they are what you type after the host:
+
+  HOST   PROJECT       SESSION    ->  cx open web1:api@review
+  web1   api           review
+  web1   api/authfix   —          ->  cx open web1:api/authfix
 EOF
       return 0
       ;;
@@ -47,10 +55,14 @@ EOF
       local n
       n=$(jq -r '.sessions | length' "$tmp/$safe.json" 2>/dev/null || printf 0)
       [ "${n:-0}" -gt 0 ] && any=1
+      # `.target` is what the agent reports from 0.2.0 on: the full
+      # project[/worktree] with the project name recovered from the registry.
+      # Falling back to .project keeps this working against an older agent.
       rows="$rows$(jq -r --arg h "$h" --argjson now "$(cx_now)" '
         .sessions[]?
         | [ $h,
-            .project,
+            ((.target // .project) | sub("@.*$"; "")),
+            (.label // "—"),
             (if .attached then "attached" else "detached" end),
             (if .created == null then "—"
              else ($now - .created) as $a
@@ -70,11 +82,11 @@ EOF
 
   if [ "$any" = 1 ]; then
     {
-      printf 'HOST\tPROJECT\tSTATE\tUPTIME\n'
+      printf 'HOST\tPROJECT\tSESSION\tSTATE\tUPTIME\n'
       printf '%s' "$rows" | grep -v '^$'
     } | cx_table
     say ""
-    hint "attach with: cx open <host>:<project>"
+    hint "attach with: cx open <host>:<project>[@<session>]"
   else
     note "No live sessions."
     hint "start one with: cx open <host>:<project>"

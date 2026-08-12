@@ -161,7 +161,11 @@ cx_cache_refresh_bg() {
 # Completion targets
 # ---------------------------------------------------------------------------
 
-# cx_cache_write_targets — flatten cached listings into host:project lines.
+# cx_cache_write_targets — flatten cached listings into completable targets.
+#
+# Emits host:project and, for every worktree, host:project/worktree — the two
+# forms a command actually takes. Session labels are deliberately absent: they
+# live only in tmux, and reading them would mean touching the network.
 #
 # Shell completion reads this and performs NO network work, not even in the
 # background. Tab must never hang; it is the one place where stale data
@@ -177,7 +181,13 @@ cx_cache_write_targets() {
     if [ -z "$host" ]; then
       host=$(basename "$f" .json)
     fi
-    out="$out$(jq -r --arg h "$host" '.projects[]?.name | "\($h):\(.)"' "$f" 2>/dev/null)
+    # `.worktrees[]?` rather than `.worktrees[]`: a listing cached by an older
+    # agent has no such field, and this must not start emitting nothing.
+    out="$out$(jq -r --arg h "$host" '
+      .projects[]?
+      | . as $p
+      | "\($h):\($p.name)", ($p.worktrees[]? | "\($h):\($p.name)/\(.name)")' \
+      "$f" 2>/dev/null)
 "
   done
 

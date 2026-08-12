@@ -178,6 +178,85 @@ does, check for a genuine second attachment:
 ssh web1 'tmux list-clients'
 ```
 
+### `the cx agent on web1 is too old for worktrees and named sessions`
+
+Worktrees and `@label` sessions need agent 0.2.0 or newer. Plain targets keep
+working against an older one, which is why this only appears when you use the
+new syntax.
+
+```sh
+cx provision web1
+```
+
+### A named session started a new conversation instead of resuming
+
+Each session's conversation id is pinned in `~/.local/share/cx/sessions.json`
+on the server. If that file was deleted, the pin is gone and the next open
+starts fresh — the old conversation is still on disk, so recover it with the
+picker:
+
+```sh
+cx resume web1:api
+```
+
+### `cx open` and `cx open ...@label` seem to share one conversation
+
+They should not: each pins its own. Check what is actually recorded:
+
+```sh
+ssh web1 'jq . ~/.local/share/cx/sessions.json'
+```
+
+Two entries with the same `uuid` means the file was edited or restored by
+hand. Delete the offending entry and reopen that session.
+
+---
+
+## Worktrees
+
+### `cx wt add` says `no commits yet`
+
+`git worktree add` needs a commit to branch from, and `cx new` leaves a fresh
+project with an empty repository. Make one first:
+
+```sh
+cx shell web1:api      # then: git commit --allow-empty -m init
+```
+
+### `cx wt rm` says the worktree has uncommitted changes
+
+Deliberate — it refuses before stopping anything, so nothing is lost and your
+session keeps running. Commit the work, or discard it explicitly:
+
+```sh
+cx wt rm web1:api/authfix --force
+```
+
+### A worktree I made by hand does not appear
+
+It should: cx reads `git worktree list` rather than a stored copy. Force a
+fetch, since `cx ls` answers from cache by default:
+
+```sh
+cx ls -r
+```
+
+If it still does not show, confirm git itself knows about it:
+
+```sh
+ssh web1 'git -C ~/projects/api worktree list'
+```
+
+### I removed a worktree with plain `git` and its branch is still there
+
+That is also what `cx wt rm` does. Removing a worktree never deletes its
+branch, so committed work survives. Delete the branch yourself if you want it
+gone:
+
+```sh
+ssh web1 'git -C ~/projects/api branch -d authfix'
+```
+
 ---
 
 ## Listing and the cache
@@ -244,6 +323,23 @@ cx new web1:x       # create it
 
 If you expected it to exist, the server holding it may be unreachable — check
 for an `unreachable` warning under the listing.
+
+### `invalid worktree name` or `invalid session label`
+
+Both may use only letters, digits, underscore and hyphen — no dots. tmux
+silently rewrites a dot in a session name to an underscore, which would make
+the session unmappable back to what it names, so cx rejects it up front.
+Project names are the exception and still allow dots.
+
+### `a project name cannot contain '/' or '@'`
+
+Those are target syntax: `/` selects a worktree and `@` selects a session, so
+neither can be part of a name. To create a project and then a worktree in it:
+
+```sh
+cx new    web1:api
+cx wt add web1:api/authfix
+```
 
 ---
 

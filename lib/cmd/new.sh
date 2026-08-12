@@ -52,9 +52,21 @@ EOF
   # Split rather than resolve: the project must NOT exist yet, so a lookup
   # across hosts would be meaningless here.
   cx_target_split "$target" || {
-    err "invalid target: $target"
+    [ -n "$CX_T_PROJECT" ] || err "invalid target: $target"
     return 3
   }
+
+  # `/` and `@` are target syntax, not name characters. Without this the
+  # components are parsed off and then silently dropped — `cx new web1:a/b`
+  # would create a project called "a" and say nothing about the "b".
+  if [ -n "$CX_T_WORKTREE" ] || [ -n "$CX_T_SESSION" ]; then
+    err "a project name cannot contain '/' or '@': $target"
+    if [ -n "$CX_T_WORKTREE" ]; then
+      hint "to add a worktree to an existing project: cx wt add $target"
+    fi
+    hint "to create a project: cx new $CX_T_HOST:$CX_T_PROJECT"
+    return 3
+  fi
 
   if [ -z "$CX_T_HOST" ]; then
     err "no host given and CX_DEFAULT_HOST is not set"

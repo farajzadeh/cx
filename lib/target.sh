@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
-# lib/target.sh — resolving `host:project` targets.
+# lib/target.sh — resolving targets.
 #
-# Resolution order:
+# GRAMMAR
+#   [host:]project[/worktree][@session]
+#
+#   web1:api                  the project's default session
+#   web1:api@review           a second, independent session on the same files
+#   web1:api/authfix          a git worktree of the project
+#   web1:api/authfix@tests    a named session inside that worktree
+#
+# The two separators are free to use because neither is legal in a project
+# name (the agent's _validate_name has always rejected `/`, and `@` falls
+# outside its allowed character class), so parsing is unambiguous and no
+# existing target changes meaning.
+#
+# Resolution order for the host:
 #   1. explicit          web1:api
 #   2. CX_DEFAULT_HOST   api          (when configured)
 #   3. unique match      api          (searched across every host)
@@ -11,7 +24,7 @@
 # refuse and list the candidates rather than guessing — silently opening the
 # wrong server's project is a far worse outcome than one extra keystroke.
 #
-# Sets CX_T_HOST and CX_T_PROJECT. Returns:
+# Sets CX_T_HOST, CX_T_PROJECT, CX_T_WORKTREE, CX_T_SESSION. Returns:
 #   0 resolved
 #   2 no such project / no such host
 #   3 usage error
@@ -27,27 +40,107 @@ _CX_TARGET_LOADED=1
 
 CX_T_HOST=""
 CX_T_PROJECT=""
+CX_T_WORKTREE=""
+CX_T_SESSION=""
 
-# cx_target_split TARGET — populate CX_T_HOST / CX_T_PROJECT syntactically.
+# Worktree names and session labels are checked here as well as on the server.
+# Not redundant: the client turns them into an error the user can read before
+# paying for a round trip, and the server cannot trust the client anyway.
+_cx_target_label_ok() {
+  case "$1" in
+    "" | -*) return 1 ;;
+    *[!A-Za-z0-9_-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# cx_target_split TARGET — populate the CX_T_* variables syntactically.
 # No network access; used where the project need not exist yet (cx new).
 cx_target_split() {
-  local t="$1"
+  local t="$1" rest
   CX_T_HOST=""
   CX_T_PROJECT=""
+  CX_T_WORKTREE=""
+  CX_T_SESSION=""
 
   case "$t" in
     *:*)
       CX_T_HOST="${t%%:*}"
-      CX_T_PROJECT="${t#*:}"
+      rest="${t#*:}"
       ;;
     *)
-      CX_T_PROJECT="$t"
+      rest="$t"
       CX_T_HOST="${CX_DEFAULT_HOST:-}"
       ;;
   esac
 
+  # Session first, then worktree: the label is the outermost component, so
+  # peeling it off leaves a plain unit behind.
+  case "$rest" in
+    *@*)
+      CX_T_SESSION="${rest#*@}"
+      rest="${rest%%@*}"
+      _cx_target_label_ok "$CX_T_SESSION" || {
+        err "invalid session label: ${CX_T_SESSION:-(empty)}"
+        hint "labels may use letters, digits, underscore and hyphen"
+        return 3
+      }
+      ;;
+  esac
+
+  case "$rest" in
+    */*)
+      CX_T_WORKTREE="${rest#*/}"
+      rest="${rest%%/*}"
+      _cx_target_label_ok "$CX_T_WORKTREE" || {
+        err "invalid worktree name: ${CX_T_WORKTREE:-(empty)}"
+        hint "worktree names may use letters, digits, underscore and hyphen"
+        return 3
+      }
+      ;;
+  esac
+
+  CX_T_PROJECT="$rest"
   [ -n "$CX_T_PROJECT" ] || return 3
   return 0
+}
+
+# cx_target_args — the worktree/session flags for an agent call, as an array.
+#
+# Emitted only when non-empty, so a plain `cx open web1:api` sends exactly the
+# argv it always did and keeps working against an agent that predates them.
+# An array rather than a string because the alternative is building a command
+# line, which is the thing lib/remote.sh exists to prevent.
+cx_target_args() {
+  CX_T_ARGS=()
+  if [ -n "$CX_T_WORKTREE" ]; then
+    CX_T_ARGS=("${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --worktree "$CX_T_WORKTREE")
+  fi
+  if [ -n "$CX_T_SESSION" ]; then
+    CX_T_ARGS=("${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --session "$CX_T_SESSION")
+  fi
+  return 0
+}
+
+# cx_target_needs_units — does this target use anything an old agent lacks?
+cx_target_needs_units() {
+  [ -n "$CX_T_WORKTREE" ] || [ -n "$CX_T_SESSION" ]
+}
+
+# cx_agent_units_ok HOST — check the agent is new enough, or explain.
+#
+# Only called when the target actually needs the new flags, so the common path
+# pays nothing. Without it the failure is "cx-agent: unknown option:
+# --worktree", which does not tell anyone to re-provision.
+cx_agent_units_ok() {
+  local host="$1" ver="${2:-}"
+  [ -n "$ver" ] || ver=$(cx_agent "$host" version 2>/dev/null) || true
+  [ -n "$ver" ] || return 0 # not installed: the caller reports that already
+  cx_version_ge "$ver" 0.2.0 && return 0
+  err "the cx agent on $host is too old for worktrees and named sessions"
+  hint "it reports $ver; this needs 0.2.0 or newer"
+  hint "update it with: cx provision $host"
+  return 1
 }
 
 # cx_target_resolve TARGET — resolve fully, consulting servers if needed.
@@ -59,8 +152,10 @@ cx_target_resolve() {
     return 3
   }
 
+  # cx_target_split reports its own syntax errors (they are specific enough to
+  # be worth saying), so only add the generic one when it stayed silent.
   cx_target_split "$t" || {
-    err "invalid target: $t"
+    [ -n "$CX_T_PROJECT" ] || err "invalid target: $t"
     return 3
   }
 
@@ -108,7 +203,15 @@ cx_target_resolve() {
   esac
 }
 
-# cx_target_str — "host:project" for messages.
+# cx_target_str — the full target, as the user would type it, for messages.
 cx_target_str() {
-  printf '%s:%s' "$CX_T_HOST" "$CX_T_PROJECT"
+  printf '%s:%s' "$CX_T_HOST" "$(cx_target_unit_str)"
+}
+
+# cx_target_unit_str — the target without its host: project[/wt][@session].
+cx_target_unit_str() {
+  printf '%s' "$CX_T_PROJECT"
+  [ -n "$CX_T_WORKTREE" ] && printf '/%s' "$CX_T_WORKTREE"
+  [ -n "$CX_T_SESSION" ] && printf '@%s' "$CX_T_SESSION"
+  return 0
 }

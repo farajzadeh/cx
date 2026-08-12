@@ -24,7 +24,9 @@ Two halves:
 ./test/run.sh --all        # ALSO integration tests against SSH containers (needs Docker)
 
 bash test/unit/compat.test.sh              # a single test file
+bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/integration/hosts.test.sh        # a single integration suite
+bash test/integration/worktrees.test.sh    # worktrees end to end
 docker run --rm -v "$PWD":/w -w /w bash:3.2 bash test/unit/compat.test.sh
 
 ./test/lint-portability.sh                 # the bash-3.2/BSD construct ban, alone
@@ -79,11 +81,15 @@ speed and nothing else. Anything that changes server state must call
 `cx_cache_invalidate "$host"` **before returning** — a cache that is wrong
 immediately after the user's own change is worse than no cache.
 
-**5. Servers own their registries.** Each server's
-`~/.local/share/cx/projects.json` is authoritative. The client merges, never
-stores. Only non-derivable fields are recorded (`name`, `path`, `repo`,
-`created_at`); `branch`, `dirty`, `tmux_live`, `sessions` and `last_active`
-are computed fresh on every `list`.
+**5. Servers own their registries, and record only what cannot be derived.**
+Each server's `~/.local/share/cx/projects.json` is authoritative. The client
+merges, never stores. Only non-derivable fields are recorded (`name`, `path`,
+`repo`, `created_at`); `branch`, `dirty`, `tmux_live`, `tmux_count`,
+`sessions`, `last_active` and **`worktrees`** are computed fresh on every
+`list`. Worktrees in particular come from `git worktree list --porcelain` and
+are never written down — a second copy of a fact git maintains is a copy that
+drifts, and deriving means a worktree made by hand over SSH shows up in cx and
+one deleted by hand disappears.
 
 **6. `server/cx-agent` is deliberately monolithic.** It is `scp`'d to servers
 as a single file and cannot source anything. It duplicates a little of
@@ -92,6 +98,32 @@ as a single file and cannot source anything. It duplicates a little of
 **7. `server/bootstrap.sh` is POSIX sh, not bash.** A minimal server (Alpine,
 some container images) has no bash, and bootstrap is what installs it. Tested
 under busybox `ash`.
+
+**8. Every tmux target uses the exact-match `=name` form.** A bare `-t cx-api`
+is a *prefix* match: once `cx-api@review` exists, `has-session -t cx-api`
+succeeds and `attach -t cx-api` lands in the review session. Verified against
+tmux 3.x. Two shapes, and they are not interchangeable — session commands
+(`has-session`, `kill-session`, `attach`) take `=name`, while **`send-keys`
+takes a pane target and needs the trailing colon: `=name:`**. `send-keys -t
+"=name"` fails outright with "can't find pane".
+
+**9. A cx session pins a Claude conversation id.** `claude --continue` means
+"the newest conversation in this directory", so two sessions on one project
+both resume the same conversation and the second silently hijacks the first —
+which is the whole reason parallel sessions did not work before. The agent
+records slug → uuid in `~/.local/share/cx/sessions.json` and launches
+`--session-id <uuid>` the first time, `--resume <uuid>` afterwards, choosing
+between them by whether that conversation's `.jsonl` exists. Claude reuses the
+id on resume unless `--fork-session` is passed. The file is a cache, not state
+cx owns: delete it and sessions start fresh conversations.
+
+**10. Names that tmux mangles.** tmux silently rewrites `.` to `_` in a
+session name (`cx-my.app` becomes `cx-my_app`), so the tmux name cannot always
+be reversed into the thing it names. Project names have always allowed dots,
+so `cmd_sessions` recovers the project by looking it up in the registry rather
+than parsing it out. Worktree names and session labels are cx's own namespaces
+and simply **forbid** dots (`_validate_label`), which keeps the ambiguity to
+that one component.
 
 ## Portability
 
@@ -113,12 +145,35 @@ Two shims worth knowing:
   what makes the test suite hermetic, and is a real feature for anyone with a
   non-standard config.
 
+## Targets
+
+The grammar is `[host:]project[/worktree][@session]`, parsed by
+`cx_target_split` into `CX_T_HOST` / `CX_T_PROJECT` / `CX_T_WORKTREE` /
+`CX_T_SESSION`. `/` and `@` are available as separators precisely because
+`_validate_name` has always rejected both in a project name, so no existing
+target changed meaning.
+
+Two orthogonal axes, and the distinction is the whole user-facing story:
+
+- **`@label`** — another conversation on the *same files*. Same directory,
+  same branch, its own pinned Claude session.
+- **`/worktree`** — another *branch and directory*, via `git worktree`. This
+  is what makes genuinely parallel tasks safe.
+
+`cx_target_args` turns the parsed target into the `--worktree` / `--session`
+argv for the agent, emitting each flag only when non-empty — so a plain
+`cx open web1:api` sends exactly the argv it always did and still works
+against a pre-0.2.0 agent. When a target does need the new flags,
+`cx_target_needs_units` gates on `cx_agent_units_ok`, which tells the user to
+re-provision instead of surfacing "unknown option: --worktree".
+
 ## Adding a subcommand
 
 Create `lib/cmd/<name>.sh` defining `cmd_<name>`, source what it needs from
 `$CX_HOME/lib/`, and add a line to the usage text in `bin/cx`. Dispatch is
 automatic — `load_cmd` sources the file on demand. `resume.sh` and `shell.sh`
-are symlinks to `open.sh`; the same command in three modes.
+are symlinks to `open.sh`; the same command in three modes. `worktree.sh` is a
+symlink to `wt.sh` the same way.
 
 Global flags (`-r`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`) are
 stripped from anywhere in the argv before the subcommand is chosen, so
@@ -137,10 +192,24 @@ unsupported platform, `64` bad usage.
 `cx ls` reports conversation counts and last-active times by reading Claude
 Code's own storage at
 `~/.claude/projects/<absolute-path-with-slashes-as-dashes>/*.jsonl`. Verified
-empirically, but it is an **observed layout, not a documented API**. Every
-reader degrades to `null` (rendered `?`) when the directory is absent, so a
-future Claude Code change costs one display column rather than breaking
-`cx ls`. Preserve that property.
+empirically, but it is an **observed layout, not a documented API**.
+
+Two properties are relied on, both verified:
+
+1. the directory name is the absolute path with `/` replaced by `-`
+2. **each `*.jsonl` is named for the session id it contains** — the file's own
+   `.sessionId` field equals its basename
+
+Property 2 is newer and carries more weight: `_newest_session_id` uses it so
+the first open of a project adopts the conversation `--continue` would have
+picked (otherwise upgrading cx would look like losing your history), and
+`cmd_open` uses it to choose between `--resume` and `--session-id`.
+
+Every reader degrades rather than failing: absent store → `sessions` is `null`
+(rendered `?`), no adoptable id → a fresh uuid is generated, no `.jsonl` for a
+pinned id → `--session-id` instead of `--resume`. A future Claude Code change
+should cost one display column or one new conversation, never a broken
+`cx ls` or a session that will not open. Preserve that property.
 
 ## Keeping this file current
 

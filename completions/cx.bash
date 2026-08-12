@@ -24,7 +24,7 @@ _cx() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
-  cmds="host provision login doctor new ls rm open resume shell code ask status stop cache help version"
+  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask status stop cache help version"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     # shellcheck disable=SC2207
@@ -65,6 +65,27 @@ _cx() {
     ls)
       # shellcheck disable=SC2207
       COMPREPLY=($(compgen -W "$(_cx_hosts) --git --json" -- "$cur"))
+      ;;
+    wt | worktree)
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        # shellcheck disable=SC2207
+        COMPREPLY=($(compgen -W "add ls rm" -- "$cur"))
+        return
+      fi
+      case "$prev" in
+        --branch | --from) return ;;
+      esac
+      local wf
+      wf=$(_cx_targets_file)
+      # `wt add` names a worktree that does not exist yet, so completing the
+      # project it hangs off is the most that can be offered.
+      if [ -r "$wf" ]; then
+        # shellcheck disable=SC2207
+        COMPREPLY=($(compgen -W "$(cat "$wf") --branch --from --force" -- "$cur"))
+      else
+        # shellcheck disable=SC2207
+        COMPREPLY=($(compgen -W "$(_cx_hosts | sed 's/$/:/')" -- "$cur"))
+      fi
       ;;
     open | resume | shell | code | ask | stop | rm)
       local f

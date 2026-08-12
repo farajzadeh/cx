@@ -26,8 +26,10 @@ _cx() {
     'login:one-time Claude Code sign-in'
     'doctor:check requirements and connectivity'
     'new:create a project'
-    'ls:list projects'
+    'ls:list projects and worktrees'
     'rm:remove a project'
+    'wt:git worktrees for parallel tasks'
+    'worktree:git worktrees for parallel tasks'
     'open:attach a Claude session'
     'resume:attach and pick a past conversation'
     'shell:plain shell, no Claude'
@@ -59,6 +61,13 @@ _cx() {
       ;;
     ls)
       compadd -- ${(f)"$(_cx_hosts)"} --git --json
+      ;;
+    wt|worktree)
+      if (( CURRENT == 3 )); then
+        _values 'subcommand' add ls rm
+      else
+        compadd -- ${(f)"$(_cx_targets)"} --branch --from --force
+      fi
       ;;
     open|resume|shell|code|ask|stop|rm)
       compadd -- ${(f)"$(_cx_targets)"}

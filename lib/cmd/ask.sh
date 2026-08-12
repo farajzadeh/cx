@@ -30,6 +30,15 @@ pipes, cron jobs, and git hooks.
   cx ask web1:api "summarise the README" > summary.md
   git diff | cx ask web1:api "review this diff"
 
+A worktree target asks in that worktree's directory:
+
+  cx ask web1:api/authfix "what is left to do on this branch?"
+
+A ${C_BOLD}@label${C_RESET} joins that named session's conversation instead of asking with no
+history, so the question lands in the same thread cx open would attach to:
+
+  cx ask web1:api@review "summarise what we decided"
+
 For an interactive conversation, use cx open instead.
 EOF
       return 0
@@ -64,16 +73,24 @@ EOF
     return 3
   }
 
-  if ! cx_agent "$CX_T_HOST" version >/dev/null 2>&1; then
+  local ver=""
+  ver=$(cx_agent "$CX_T_HOST" version 2>/dev/null) || true
+  if [ -z "$ver" ]; then
     err "the cx agent is not installed on $CX_T_HOST"
     hint "install it with: cx provision $CX_T_HOST"
     return 1
   fi
+  if cx_target_needs_units; then
+    cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
+  fi
 
-  # Prompt travels on stdin; only the project name is an argument.
+  # Prompt travels on stdin; only the target is passed as arguments.
+  cx_target_args
   local opts
   opts=$(cx_ssh_opts)
   # shellcheck disable=SC2086
   printf '%s' "$prompt" |
-    ssh $opts "$CX_T_HOST" "$CX_AGENT_PATH$(cx_remote_quote ask "$CX_T_PROJECT")"
+    ssh $opts "$CX_T_HOST" \
+      "$CX_AGENT_PATH$(cx_remote_quote ask "$CX_T_PROJECT" \
+        "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}")"
 }

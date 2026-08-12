@@ -32,10 +32,13 @@ ${C_BOLD}cx ls${C_RESET} — list projects across servers
   cx ls --git           include working-tree dirty state (slower on big repos)
   cx ls --json          machine-readable
 
+Worktrees are listed indented under the project they belong to, as
+<project>/<worktree> — the same form you pass to cx open.
+
 Columns:
-  SESSIONS   Claude conversations recorded for that project
+  SESSIONS   Claude conversations recorded for that directory
   ACTIVE     when the most recent one was last touched
-  LIVE       a tmux session is running right now
+  LIVE       ● a session is running now; ●N several are
 EOF
         return 0
         ;;
@@ -122,17 +125,37 @@ EOF
              | sub("^https://gitlab\\.com/"; "gl:")
              | sub("\\.git$"; "")
           end;
-        [ .host,
-          .name,
-          (.branch // "—")
-        ]
-        + (if $git then [ (if .dirty == true then "*" else "" end) ] else [] end)
-        + [ (if .sessions == null then "?" else (.sessions | tostring) end),
-            (.last_active | ago),
-            (if .tmux_live then "●" else "" end),
-            (.repo | short)
-          ]
-        | @tsv'
+        # A count only when there is more than one, so the common case stays a
+        # single quiet dot. tmux_count is absent on pre-0.2.0 agents.
+        def live:
+          if   (.tmux_count // 0) > 1 then "●" + ((.tmux_count) | tostring)
+          elif .tmux_live             then "●"
+          else                             ""
+          end;
+        def dirt: if . == true then "*" else "" end;
+
+        . as $p
+
+        # The project itself.
+        | ( [ $p.host, $p.name, ($p.branch // "—") ]
+            + (if $git then [ ($p.dirty | dirt) ] else [] end)
+            + [ (if $p.sessions == null then "?" else ($p.sessions | tostring) end),
+                ($p.last_active | ago),
+                ($p | live),
+                ($p.repo | short) ]
+            | @tsv ),
+
+        # Then its worktrees, indented under it. The name stays fully
+        # qualified rather than being abbreviated to the leaf, so a row can be
+        # copied straight back onto the command line as a target.
+          ( $p.worktrees[]?
+            | [ "", ("  " + $p.name + "/" + .name), (.branch // "—") ]
+              + (if $git then [ (.dirty | dirt) ] else [] end)
+              + [ (if .sessions == null then "?" else (.sessions | tostring) end),
+                  (.last_active | ago),
+                  (. | live),
+                  "" ]
+            | @tsv )'
     } | cx_table
   fi
 
