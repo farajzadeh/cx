@@ -309,16 +309,36 @@ _find_claude() {
 # ---------------------------------------------------------------------------
 #
 # Claude Code stores per-project history under
-#   ~/.claude/projects/<absolute-path-with-slashes-replaced-by-dashes>/*.jsonl
+#   ~/.claude/projects/<encoded-absolute-path>/*.jsonl
 #
-# Verified empirically: /home/u/projects/api -> -home-u-projects-api
+# where the encoding replaces EVERY character outside [A-Za-z0-9-] with a dash
+# — not just the slashes. Verified against a real store: no encoded directory
+# name on disk contains any other character, and
+#
+#   /home/u/projects/api            -> -home-u-projects-api
+#   /home/u/projects/.worktrees/api -> -home-u-projects--worktrees-api
+#
+# The dot is the one that matters, and getting it wrong was a real bug: cx puts
+# every worktree under ".worktrees", so a slashes-only encoding pointed at a
+# directory that never exists and silently reported no sessions for every
+# worktree cx has ever made.
 #
 # This is an OBSERVED layout, not a documented API. Everything here degrades
 # to "unknown" rather than failing if the directory is absent, so a future
 # Claude Code change costs one display column instead of breaking `cx ls`.
 
+# _session_dir_name PATH — just the encoded directory name.
+#
+# The single place this transformation is written down. It used to be spelled
+# out twice — here and in _derive_dir — and the copies disagreed about the dot,
+# so `cx ls` reported no history for exactly the directories `cx open` could
+# still find it in. One function, two callers.
+_session_dir_name() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9-' '-'
+}
+
 _session_dir() {
-  printf '%s/projects/%s' "$CX_CLAUDE_DIR" "$(printf '%s' "$1" | tr '/' '-')"
+  printf '%s/projects/%s' "$CX_CLAUDE_DIR" "$(_session_dir_name "$1")"
 }
 
 # _scan_sessions — one pass over the whole session store.
@@ -527,7 +547,7 @@ _derive_dir() {
   fi
 
   if [ "$_STORE_PRESENT" = true ] && [ -n "$path" ]; then
-    enc=$(printf '%s' "$path" | tr '/' '-')
+    enc=$(_session_dir_name "$path")
     row=$(printf '%s\n' "$_SESSION_SCAN" | awk -F'\t' -v k="$enc" '$1 == k {print $2 "\t" $3; exit}')
     if [ -n "$row" ]; then
       scount="${row%%	*}"
@@ -1514,4 +1534,10 @@ main() {
   esac
 }
 
-main "$@"
+# Sourcing this file with CX_AGENT_NO_MAIN=1 defines its functions without
+# running anything, which is how the unit tests reach _session_dir_name and
+# _slug. It is not a test-only hack bolted on: the file already takes
+# CX_DATA_DIR, CX_REGISTRY, CX_SESSIONS and CX_CLAUDE_DIR from the environment
+# for the same reason. Invariant 6 is untouched — nothing is factored out into
+# lib/, the file is still one scp'able artifact.
+[ "${CX_AGENT_NO_MAIN:-}" = 1 ] || main "$@"
