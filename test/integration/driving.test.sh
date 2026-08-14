@@ -84,6 +84,96 @@ assert_ok on_node 'tmux has-session -t "=cx-api@impl"'
 it "is idempotent — a second detach does not stack a second Claude"
 assert_contains "$(agent 'open api --session impl --detach --mode continue')" '"created":false'
 
+describe "cx open -d — the client half"
+#
+# Everything above drives the AGENT directly. This drives the client, which is
+# the half that assembles the argument vector: the permission flags, the `--`
+# passthrough and the detach branch all meet here, and a mistake in that
+# assembly is invisible from the agent side. It was untested until a docs
+# audit went looking.
+
+_c=$(cx_run "$HOME_DIR" open -d cx-test-web1:api@viaclient 2>&1)
+
+it "starts a session without attaching"
+assert_contains "$_c" "started"
+
+it "really created it"
+assert_ok on_node 'tmux has-session -t "=cx-api@viaclient"'
+
+it "is idempotent through the client too"
+assert_contains "$(cx_run "$HOME_DIR" open -d cx-test-web1:api@viaclient 2>&1)" "already running"
+
+# cx_run merges stderr, and open legitimately warns there — the stub server has
+# no Claude credentials, so every open says so. Take the JSON line only, which
+# is also the contract: machine-readable on stdout, human-readable on stderr.
+_j=$(cx_run "$HOME_DIR" --json open -d cx-test-web1:api@viaclient | grep -E '^\{')
+
+it "reports the session in --json"
+assert_eq "$(printf '%s' "$_j" | jq -r '.target')" "api@viaclient"
+
+it "and names the host it went to"
+assert_eq "$(printf '%s' "$_j" | jq -r '.host')" "cx-test-web1"
+
+it "keeps the warning off stdout, so the JSON stays parseable"
+assert_ok sh -c "printf '%s' '$_j' | jq -e . >/dev/null"
+
+describe "cx open -d carries the permission flags through"
+# The line the merge of two branches turned on. Without it a detached session
+# launches WITH permission checks, blocks on its first write, and looks like a
+# Claude problem rather than a lost argument.
+
+_p=$(cx_run "$HOME_DIR" open -d --dangerously-skip-permissions cx-test-web1:api@perm 2>&1)
+
+it "warns before it starts"
+assert_contains "$_p" "ALL permission checks bypassed"
+
+it "says the detached case out loud, since nobody is watching"
+assert_contains "$_p" "no one will see it ask"
+
+it "the flag reached Claude"
+assert_contains "$(on_node 'tmux capture-pane -pJ -S -200 -t "=cx-api@perm:"')" 'STUB_NO_PERMISSIONS'
+
+it "and the mode was recorded for cx status to show"
+assert_eq \
+  "$(on_node 'jq -r ".sessions[\"api@perm\"].perm_mode" ~/.local/share/cx/sessions.json')" \
+  bypassPermissions
+
+it "--permission-mode arrives the same way"
+cx_run "$HOME_DIR" open -d --permission-mode acceptEdits cx-test-web1:api@accept >/dev/null 2>&1
+assert_eq \
+  "$(on_node 'jq -r ".sessions[\"api@accept\"].perm_mode" ~/.local/share/cx/sessions.json')" \
+  acceptEdits
+
+it "rejects a permission mode that does not exist, before touching the server"
+run_rc cx_run "$HOME_DIR" open -d --permission-mode nonsense cx-test-web1:api@bogus
+assert_eq "$_T_RC" 3
+
+it "and creates no session when it rejects one"
+assert_fail on_node 'tmux has-session -t "=cx-api@bogus"'
+
+describe "cx shell refuses Claude options rather than ignoring them"
+
+it "refuses --dangerously-skip-permissions"
+assert_contains \
+  "$(cx_run "$HOME_DIR" shell cx-test-web1:api --dangerously-skip-permissions 2>&1)" \
+  "starts no Claude"
+
+it "refuses --permission-mode too"
+assert_contains \
+  "$(cx_run "$HOME_DIR" shell cx-test-web1:api --permission-mode plan 2>&1)" \
+  "starts no Claude"
+
+it "exits 3, since it is a usage error"
+run_rc cx_run "$HOME_DIR" shell cx-test-web1:api --permission-mode plan
+assert_eq "$_T_RC" 3
+
+# Leave the fixture as this block found it. Later tests count sessions, and a
+# stray one from here would fail them somewhere else entirely — which is a
+# worse bug to debug than the one it would be reporting.
+for _s in viaclient perm accept; do
+  cx_run "$HOME_DIR" stop "cx-test-web1:api@$_s" >/dev/null 2>&1
+done
+
 describe "observe reports facts about it"
 
 _obs=$(agent "observe api --session impl")

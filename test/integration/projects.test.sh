@@ -237,4 +237,53 @@ assert_contains "$_out" 'cx-test-dead'
 
 rm -f "$HOME_DIR/.config/cx/ssh.d/cx-test-dead.conf"
 
+describe "cx driver — the subagent definition ships and is printable"
+#
+# It is how a user installs the driver, so "the file is missing from this
+# install" must be a sentence rather than an empty file silently written over
+# whatever they had.
+
+_d=$(cx_run "$HOME_DIR" driver)
+
+it "prints the definition"
+assert_contains "$_d" "name: cx-driver"
+
+it "with the frontmatter a Claude Code subagent needs"
+assert_contains "$_d" "tools:"
+
+it "and the loop it is supposed to follow"
+assert_contains "$_d" "cx peek"
+
+it "exits 0 so it can be redirected to a file"
+run_rc cx_run "$HOME_DIR" driver
+assert_eq "$_T_RC" 0
+
+it "its --help explains where to put it"
+assert_contains "$(cx_run "$HOME_DIR" driver --help)" ".claude/agents"
+
+describe "worktree is a real alias for wt"
+# A symlink in lib/cmd, so it can rot without anyone noticing.
+
+it "answers to the long name"
+assert_eq \
+  "$(cx_run "$HOME_DIR" worktree ls cx-test-web1 2>&1)" \
+  "$(cx_run "$HOME_DIR" wt ls cx-test-web1 2>&1)"
+
+it "and its help is the same help"
+assert_contains "$(cx_run "$HOME_DIR" worktree --help)" "worktree"
+
+describe "commands that need a target say so rather than guessing"
+# peek is deliberately absent: with no target it means every session on every
+# server, which is its most useful form.
+
+for _c in open resume shell code ask nudge; do
+  it "cx $_c with no target is a usage error"
+  run_rc cx_run "$HOME_DIR" "$_c"
+  assert_eq "$_T_RC" 3
+done
+
+it "but cx peek with no target is valid — it means everything"
+run_rc cx_run "$HOME_DIR" peek
+assert_eq "$_T_RC" 0
+
 summary

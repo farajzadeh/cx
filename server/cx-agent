@@ -1664,8 +1664,19 @@ _observe_one() {
 # The second half matters. A session whose Claude exited has no tmux entry at
 # all, and a driver that only saw live sessions would conclude the work had
 # never existed rather than that it needs reviving.
+#
+# The transcript is what makes a dead session worth reporting: it is the last
+# thing that session said, and it is why a driver can decide whether to revive
+# it. A pin with no transcript is a session that was opened, never used, and
+# stopped — there is nothing to say about it, and `cx peek` listing it forever
+# is noise that grows with every session ever opened.
+#
+# That filter was documented here before it was implemented: the comment
+# claimed it and the code did not, so stopped-and-never-used sessions
+# accumulated in every listing. Found by a test whose session counts kept
+# drifting.
 _observe_slugs() {
-  local rows="$1" map="$2"
+  local rows="$1" map="$2" slug dir uuid
   {
     printf '%s\n' "$rows" |
       jq -Rr --arg prefix "$CX_TMUX_PREFIX" --arg map "$map" '
@@ -1692,7 +1703,17 @@ _observe_slugs() {
            | if $sl == null then {p: $o.unit, rest: ""}
              else {p: $o.unit[0:$sl], rest: $o.unit[$sl:]} end)
         | (($m[.p] // .p) + .rest + $o.suffix)' 2>/dev/null || printf ''
-    [ -e "$CX_SESSIONS" ] && jq -r '.sessions | keys[]' "$CX_SESSIONS" 2>/dev/null
+    if [ -e "$CX_SESSIONS" ]; then
+      while IFS= read -r slug; do
+        [ -n "$slug" ] || continue
+        _slug_parse "$slug"
+        dir=$(_unit_dir "$_SP_PROJECT" "$_SP_WT" 2>/dev/null) || continue
+        uuid=$(_session_uuid_get "$slug" 2>/dev/null) || continue
+        [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && printf '%s\n' "$slug"
+      done <<EOF
+$(jq -r '.sessions | keys[]' "$CX_SESSIONS" 2>/dev/null)
+EOF
+    fi
   } | sort -u | grep -v '^$' || true
 }
 
