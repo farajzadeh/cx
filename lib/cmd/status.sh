@@ -26,6 +26,10 @@ they are what you type after the host:
   HOST   PROJECT       SESSION    ->  cx open web1:api@review
   web1   api           review
   web1   api/authfix   —          ->  cx open web1:api/authfix
+
+MODE flags a session started with --dangerously-skip-permissions as
+${C_BOLD}no-perms${C_RESET}. A live session's permission mode cannot be changed and is
+invisible from inside it, so this is the only place it shows.
 EOF
       return 0
       ;;
@@ -63,6 +67,7 @@ EOF
         | [ $h,
             ((.target // .project) | sub("@.*$"; "")),
             (.label // "—"),
+            (if .dangerous then "no-perms" else "" end),
             (if .attached then "attached" else "detached" end),
             (if .created == null then "—"
              else ($now - .created) as $a
@@ -82,7 +87,7 @@ EOF
 
   if [ "$any" = 1 ]; then
     {
-      printf 'HOST\tPROJECT\tSESSION\tSTATE\tUPTIME\n'
+      printf 'HOST\tPROJECT\tSESSION\tMODE\tSTATE\tUPTIME\n'
       printf '%s' "$rows" | grep -v '^$'
     } | cx_table
     say ""

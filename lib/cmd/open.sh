@@ -9,12 +9,13 @@
 . "$CX_HOME/lib/target.sh"
 
 _open_common() {
-  local mode="$1" target="" detach=0
-
+  local mode="$1" target="" detach=0 dangerous=0
   shift
+
   while [ $# -gt 0 ]; do
     case "$1" in
       -d | --detach) detach=1 ;;
+      --dangerously-skip-permissions) dangerous=1 ;;
       -*)
         err "unknown option: $1"
         return 3
@@ -30,6 +31,12 @@ _open_common() {
     hint "see what exists with: cx ls"
     return 3
   }
+
+  if [ "$dangerous" = 1 ] && [ "$mode" = shell ]; then
+    err "--dangerously-skip-permissions does nothing for cx shell"
+    hint "cx shell starts no Claude; use cx open for a Claude session"
+    return 3
+  fi
 
   cx_target_resolve "$target" || return $?
 
@@ -48,6 +55,10 @@ _open_common() {
   if [ "$detach" = 1 ]; then
     cx_agent_observe_ok "$CX_T_HOST" "$ver" || return 1
   fi
+  if [ "$dangerous" = 1 ]; then
+    cx_agent_supports "$CX_T_HOST" \
+      "--dangerously-skip-permissions" 0.2.1 "$ver" || return 1
+  fi
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -62,15 +73,33 @@ _open_common() {
   # Opening changes tmux liveness, which cx ls and cx status report.
   cx_cache_invalidate "$CX_T_HOST"
 
+  # Said before handing over the terminal, because once tmux has it the
+  # scrollback belongs to Claude and this would scroll away unread.
   cx_target_args
+  local danger_args=()
+  if [ "$dangerous" = 1 ]; then
+    danger_args=(--dangerous)
+    warn "Starting $(cx_target_str) with ALL permission checks bypassed."
+    note "  Claude will edit files and run commands without asking."
+    note "  Only sensible on a server you can afford to have broken."
+    if [ "$detach" = 1 ]; then
+      # Detached as well: nobody is watching the pane, so nothing will stop it
+      # either. Worth saying out loud, because this combination is the one that
+      # runs unsupervised.
+      note "  Detached, so no one will see it ask — because it will not ask."
+    fi
+    say ""
+  fi
 
   # Detached: no TTY, no exec, no attach. The session is created and Claude is
-  # started exactly as below; the difference is that we come back. This is what
-  # a driver uses to start work it intends to steer rather than watch.
+  # started exactly as below, with the same flags; the difference is that we
+  # come back. This is what a driver uses to start work it means to steer
+  # rather than watch.
   if [ "$detach" = 1 ]; then
     local out=""
     out=$(cx_agent "$CX_T_HOST" open "$CX_T_PROJECT" \
-      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" --detach) || return $?
+      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" \
+      "${danger_args[@]+"${danger_args[@]}"}" --mode "$mode" --detach) || return $?
     if [ "${CX_JSON:-0}" = 1 ]; then
       printf '%s\n' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host: $h}' ||
         printf '%s\n' "$out"
@@ -99,7 +128,8 @@ _open_common() {
   # shellcheck disable=SC2086
   exec ssh -t $opts "$CX_T_HOST" \
     "$CX_AGENT_PATH$(cx_remote_quote open "$CX_T_PROJECT" \
-      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode")"
+      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" \
+      "${danger_args[@]+"${danger_args[@]}"}" --mode "$mode")"
 }
 
 cmd_open() {
@@ -142,6 +172,18 @@ see cx wt. Labels share a directory; worktrees do not.
 The session survives disconnection: close your laptop, and Claude keeps
 working. Reattach with the same command. Detach without stopping: Ctrl-b d
 
+${C_BOLD}OPTIONS${C_RESET}
+  --dangerously-skip-permissions
+      Start Claude with all permission checks bypassed: it edits files and
+      runs commands without asking. Claude Code recommends this only for
+      sandboxes with no internet access.
+
+      It applies when the session is ${C_BOLD}created${C_RESET}, not when you reattach — a
+      live session's permission mode cannot be changed, so to turn it off,
+      cx stop the session and open it again. cx records which sessions were
+      started this way and marks them in cx status, because otherwise there
+      is no way to tell from inside.
+
 Related: cx wt (worktrees), cx resume (pick an older conversation),
          cx shell (no Claude), cx status (what is running)
 EOF
@@ -165,6 +207,8 @@ earlier conversation in that directory instead of the one cx would pick.
 Note that what you choose in the picker is not remembered: the next cx open
 goes back to that session's own conversation. To keep a second thread you can
 return to by name, use a label — cx open <target>@<label>.
+
+Takes --dangerously-skip-permissions as cx open does; see cx open --help.
 EOF
       return 0
       ;;

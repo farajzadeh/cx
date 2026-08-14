@@ -127,17 +127,17 @@ cx_target_needs_units() {
   [ -n "$CX_T_WORKTREE" ] || [ -n "$CX_T_SESSION" ]
 }
 
-# cx_agent_version_ok HOST MIN FEATURE [VER] — the agent is new enough, or say so.
+# cx_agent_supports HOST FEATURE MINVER [VERSION] — version gate, or explain.
 #
-# Only called when the caller actually needs something new, so the common path
-# pays nothing. Without it the failure is "cx-agent: unknown option:
-# --worktree", which does not tell anyone to re-provision.
+# Only called when a command actually needs the newer flag, so the common path
+# pays nothing. Without it the failure is "cx-agent: unknown option: --foo",
+# which does not tell anyone to re-provision.
 #
-# Pass VER when you already have it: every caller here has just run `version`
-# or `doctor` for its own reasons, and a second round trip per command is the
-# difference between a driver polling six sessions in one second and six.
-cx_agent_version_ok() {
-  local host="$1" min="$2" feature="$3" ver="${4:-}"
+# Pass VERSION when you already have it: most callers have just run `version`
+# or `doctor` for their own reasons, and a second round trip per command is
+# the difference between a driver polling six sessions in one second and six.
+cx_agent_supports() {
+  local host="$1" feature="$2" min="$3" ver="${4:-}"
   [ -n "$ver" ] || ver=$(cx_agent "$host" version 2>/dev/null) || true
   [ -n "$ver" ] || return 0 # not installed: the caller reports that already
   cx_version_ge "$ver" "$min" && return 0
@@ -150,15 +150,15 @@ cx_agent_version_ok() {
 # The gated features. One implementation above; the minimum version lives at
 # the call site, next to the name of the thing it gates.
 cx_agent_units_ok() {
-  cx_agent_version_ok "$1" 0.2.0 "worktrees and named sessions" "${2:-}"
+  cx_agent_supports "$1" "worktrees and named sessions" 0.2.0 "${2:-}"
 }
 
 cx_agent_observe_ok() {
-  cx_agent_version_ok "$1" 0.3.0 "observing and steering sessions" "${2:-}"
+  cx_agent_supports "$1" "observing and steering sessions" 0.3.0 "${2:-}"
 }
 
 cx_agent_goals_ok() {
-  cx_agent_version_ok "$1" 0.3.0 "goals" "${2:-}"
+  cx_agent_supports "$1" "goals" 0.3.0 "${2:-}"
 }
 
 # cx_target_resolve TARGET — resolve fully, consulting servers if needed.

@@ -13,6 +13,8 @@
 #   --resume UUID          resume that specific conversation
 #   --resume               (no id) the interactive picker
 #   --continue             the most recent conversation here
+#   --dangerously-skip-permissions   recorded, so tests can assert it was
+#                          passed to exactly the sessions that asked for it
 #
 # The distinction between `--resume UUID` and a bare `--resume` is the whole
 # point: cx pins an id per named session, and getting that wrong is what makes
@@ -49,6 +51,7 @@ session=""
 mode=interactive
 tag=plain
 prompt=""
+danger=no
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -75,6 +78,7 @@ while [ $# -gt 0 ]; do
       fi
       ;;
     --continue) tag='continue' ;;
+    --dangerously-skip-permissions) danger=yes ;;
     -*) ;; # any other flag: ignored
     *) prompt="${prompt:+$prompt }$1" ;;
   esac
@@ -112,8 +116,12 @@ _append() {
 }
 
 # Record every invocation so a test can inspect the full argv history.
-printf '%s\t%s\t%s\t%s\n' "$(pwd)" "$mode" "$tag" "$session" \
+printf '%s\t%s\t%s\t%s\t%s\n' "$(pwd)" "$mode" "$tag" "$session" "$danger" \
   >>"${CX_STUB_LOG:-$HOME/.cx-claude-stub.log}" 2>/dev/null || true
+
+# The marker is printed rather than only logged, because a tmux pane is all a
+# test can see for an interactive session.
+[ "$danger" = yes ] && echo "STUB_NO_PERMISSIONS"
 
 if [ "$mode" = print ]; then
   [ -n "$session" ] && echo "STUB_SESSION: $session"

@@ -118,6 +118,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | | |
 |---|---|
 | `cx open web1:api` | attach a Claude session, resuming its conversation |
+| `cx open web1:api --dangerously-skip-permissions` | ...with no permission checks |
 | `cx resume web1:api` | attach and pick an older conversation |
 | `cx shell web1:api` | plain shell in the project, no Claude |
 | `cx code web1:api` | open in VS Code over Remote-SSH |
@@ -274,6 +275,41 @@ second Claude on top of the first.
 Each session is pinned to its own Claude conversation, so `cx open web1:api`
 and `cx open web1:api@review` always come back to the thread you left in that
 one — they never collide, however many you run at once.
+
+---
+
+## Skipping permission checks
+
+`--dangerously-skip-permissions` starts Claude with every permission check
+bypassed: it edits files and runs commands without asking. Claude Code
+recommends this only for sandboxes with no internet access, which is exactly
+what a throwaway dev server can be.
+
+```sh
+cx open web1:api --dangerously-skip-permissions
+cx open web1:api@yolo --dangerously-skip-permissions   # scope it to one session
+cx ask  web1:api --dangerously-skip-permissions "fix the failing test"
+```
+
+Two things worth knowing:
+
+- **It applies when the session is created, not when you reattach.** A live
+  session's permission mode cannot be changed, so to turn it off, `cx stop`
+  the session and open it again. Passing the flag to a session that is already
+  running says so rather than pretending it took effect.
+- **cx remembers which sessions were started that way** and marks them in
+  `cx status`, because from inside an attached session there is no way to
+  tell:
+
+```console
+$ cx status
+HOST   PROJECT   SESSION   MODE      STATE      UPTIME
+web1   api       —                   attached   12m
+web1   api       yolo      no-perms  detached   3m
+```
+
+Scoping it to a `@label` — or better, to a worktree — keeps the unguarded
+session away from the work you care about.
 
 ---
 

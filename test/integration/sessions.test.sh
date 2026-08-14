@@ -175,6 +175,105 @@ assert_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api@review:')" "resumin
 it "keeps the same id it pinned the first time"
 assert_eq "$(on_node 'jq -r ".sessions[\"api@review\"].uuid" ~/.local/share/cx/sessions.json')" "$_uuid"
 
+describe "--dangerously-skip-permissions"
+
+# The flag must reach exactly the session that asked for it and no other. A
+# leak here hands someone an unguarded Claude they did not ask for.
+agent 'open api --session yolo --dangerous --mode continue' >/dev/null 2>&1
+sleep 1
+
+it "passes the flag to the session that asked for it"
+assert_contains "$(on_node 'tmux capture-pane -pJ -t "=cx-api@yolo:"')" 'STUB_NO_PERMISSIONS'
+
+it "does not leak it into the project's other sessions"
+assert_not_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api:')" 'STUB_NO_PERMISSIONS'
+
+it "records which session was started that way"
+assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"].dangerous" ~/.local/share/cx/sessions.json')" 'true'
+
+# Absent, not `false`: the negative is never written, so this file stays a list
+# of pins rather than growing an entry for every session ever opened.
+it "and records nothing for the others"
+assert_eq "$(on_node 'jq -r ".sessions[\"api\"].dangerous // false" ~/.local/share/cx/sessions.json')" 'false'
+
+it "without creating a marker key for them"
+assert_eq "$(on_node 'jq -r ".sessions[\"api\"] | has(\"dangerous\")" ~/.local/share/cx/sessions.json')" 'false'
+
+it "still pins that session its own conversation"
+assert_ne "$(on_node 'jq -r ".sessions[\"api@yolo\"].uuid" ~/.local/share/cx/sessions.json')" \
+  "$(on_node 'jq -r ".sessions[\"api\"].uuid" ~/.local/share/cx/sessions.json')"
+
+_out=$(cx_run "$HOME_DIR" status)
+
+it "cx status flags it, since it is invisible from inside the session"
+assert_contains "$_out" 'no-perms'
+
+it "with a MODE column to put it in"
+assert_contains "$_out" 'MODE'
+
+# Permission mode is fixed when the pane's claude launches, so reattaching
+# cannot change it. Both directions have to say so rather than implying the
+# flag took effect.
+_out=$(agent 'open api --session yolo --mode continue' 2>&1)
+it "warns when reattaching to an unguarded session without asking for it"
+assert_contains "$_out" 'already running with ALL permission checks bypassed'
+
+_out=$(agent 'open api --dangerous --mode continue' 2>&1)
+it "says the flag cannot be applied to an already-running guarded session"
+assert_contains "$_out" 'cannot be applied to a live session'
+
+# A stale `true` would make cx status lie in the direction that matters.
+on_node 'tmux kill-session -t "=cx-api@yolo"' >/dev/null 2>&1
+agent 'open api --session yolo --mode continue' >/dev/null 2>&1
+sleep 1
+
+it "restarting without the flag clears the record"
+assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"] | has(\"dangerous\")" ~/.local/share/cx/sessions.json')" 'false'
+
+it "but keeps that session's pinned conversation"
+assert_ne "$(on_node 'jq -r ".sessions[\"api@yolo\"].uuid // \"\"" ~/.local/share/cx/sessions.json')" ''
+
+it "and the session really is guarded again"
+assert_not_contains "$(on_node 'tmux capture-pane -pJ -t "=cx-api@yolo:"')" 'STUB_NO_PERMISSIONS'
+
+_out=$(agent 'open api --session sh1 --dangerous --mode shell' 2>&1)
+it "refuses the flag for a shell session, where no Claude is started"
+assert_contains "$_out" 'meaningless with --mode shell'
+
+describe "cx ask --dangerously-skip-permissions"
+
+_out=$(cx_run "$HOME_DIR" ask cx-test-web1:api --dangerously-skip-permissions "what is 2+2?")
+
+it "still answers"
+assert_contains "$_out" 'STUB_ANSWER: what is 2+2?'
+
+it "passes the flag through"
+assert_contains "$_out" 'STUB_NO_PERMISSIONS'
+
+it "warns that permissions were skipped"
+assert_contains "$_out" 'ALL permission checks bypassed'
+
+# cx ask is built to be piped, so the warning must not land in the answer.
+_stdout=$(env HOME="$HOME_DIR" CX_HOME="$ROOT" \
+  CX_CONFIG_DIR="$HOME_DIR/.config/cx" CX_CONFIG_FILE="$HOME_DIR/.config/cx/config" \
+  CX_SSHD_DIR="$HOME_DIR/.config/cx/ssh.d" CX_CACHE_DIR="$HOME_DIR/.cache/cx" \
+  CX_SSH_CONFIG="$HOME_DIR/.ssh/config" CX_ASSUME_YES=1 NO_COLOR=1 \
+  bash "$ROOT/bin/cx" ask cx-test-web1:api --dangerously-skip-permissions "hi" 2>/dev/null)
+
+it "keeps the warning off stdout so piped output stays clean"
+assert_not_contains "$_stdout" 'ALL permission checks bypassed'
+
+it "while the answer is still on stdout"
+assert_contains "$_stdout" 'STUB_ANSWER: hi'
+
+_out=$(cx_run "$HOME_DIR" shell cx-test-web1:api --dangerously-skip-permissions 2>&1)
+it "cx shell rejects the flag rather than ignoring it"
+assert_contains "$_out" 'does nothing for cx shell'
+
+on_node 'tmux kill-session -t "=cx-api@yolo"' >/dev/null 2>&1
+
+# ---------------------------------------------------------------------------
+
 describe "cx status names each session"
 
 _out=$(cx_run "$HOME_DIR" status)

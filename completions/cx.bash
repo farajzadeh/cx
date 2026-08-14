@@ -94,11 +94,15 @@ _cx() {
       fi
       ;;
     open | resume | shell | code | ask | stop | rm)
-      local f
+      local f extra=""
+      case "${COMP_WORDS[1]}" in
+        open | resume | ask) extra=" --dangerously-skip-permissions" ;;
+        stop) extra=" --all" ;;
+      esac
       f=$(_cx_targets_file)
       if [ -r "$f" ]; then
         # shellcheck disable=SC2207
-        COMPREPLY=($(compgen -W "$(cat "$f")" -- "$cur"))
+        COMPREPLY=($(compgen -W "$(cat "$f")$extra" -- "$cur"))
       else
         # shellcheck disable=SC2207
         COMPREPLY=($(compgen -W "$(_cx_hosts | sed 's/$/:/')" -- "$cur"))

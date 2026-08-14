@@ -56,3 +56,5 @@ complete -c cx -l stale -d 'accept cached data of any age'
 complete -c cx -l json -d 'machine-readable output'
 complete -c cx -s y -l yes -d 'assume yes'
 complete -c cx -n '__fish_seen_subcommand_from stop' -l all -d 'every session of the project'
+complete -c cx -n '__fish_seen_subcommand_from open resume ask' \
+    -l dangerously-skip-permissions -d 'bypass ALL permission checks'

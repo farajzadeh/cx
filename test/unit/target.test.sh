@@ -189,7 +189,7 @@ it "is true for a session label"
 cx_target_split web1:api@review >/dev/null
 assert_ok cx_target_needs_units
 
-describe "cx_agent_version_ok — which agents are new enough"
+describe "cx_agent_supports — which agents are new enough"
 #
 # Every case passes the version explicitly. That is not only what keeps this
 # test pure: it is the intended calling convention, because each caller has
@@ -198,16 +198,16 @@ describe "cx_agent_version_ok — which agents are new enough"
 # sequential SSH connections.
 
 it "accepts an agent newer than the minimum"
-assert_ok cx_agent_version_ok web1 0.2.0 "worktrees" 0.3.0
+assert_ok cx_agent_supports web1 "worktrees" 0.2.0 0.3.0
 
 it "accepts an agent at exactly the minimum"
-assert_ok cx_agent_version_ok web1 0.3.0 "goals" 0.3.0
+assert_ok cx_agent_supports web1 "goals" 0.3.0 0.3.0
 
 it "rejects an agent below the minimum"
-assert_fail cx_agent_version_ok web1 0.3.0 "goals" 0.2.0
+assert_fail cx_agent_supports web1 "goals" 0.3.0 0.2.0
 
 it "accepts when the agent is absent, so the caller reports that instead"
-assert_ok cx_agent_version_ok web1 0.3.0 "goals" ""
+assert_ok cx_agent_supports web1 "goals" 0.3.0 ""
 
 it "still gates worktrees at 0.2.0"
 assert_ok cx_agent_units_ok web1 0.2.0

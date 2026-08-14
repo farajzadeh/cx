@@ -73,7 +73,16 @@ _cx() {
         compadd -- ${(f)"$(_cx_targets)"} --branch --from --force
       fi
       ;;
-    open|resume|shell|code|ask|peek|nudge|stop|rm)
+    open|resume|ask)
+      compadd -- ${(f)"$(_cx_targets)"} --dangerously-skip-permissions
+      ;;
+    nudge)
+      compadd -- ${(f)"$(_cx_targets)"} --force
+      ;;
+    stop)
+      compadd -- ${(f)"$(_cx_targets)"} --all
+      ;;
+    shell|code|peek|rm)
       compadd -- ${(f)"$(_cx_targets)"}
       ;;
   esac
