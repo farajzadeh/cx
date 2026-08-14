@@ -25,9 +25,10 @@ set -eu
 # 0.2.0 added --worktree/--session to open, stop, ask and path, plus the
 # worktree subcommand. 0.2.1 added --dangerous to open and ask. 0.3.0 added
 # --permission-mode/--model/--effort, `--` passthrough, ask's print-mode
-# options, and recorded perm_mode in place of the `dangerous` boolean. The
-# client feature-gates on this: an older agent would reject the new flags as
-# unknown options, which says nothing about needing to re-provision.
+# options, and recorded perm_mode in place of the `dangerous` boolean; plus
+# observe, nudge, goal and open --detach. The client feature-gates on this: an
+# older agent would reject the new flags and verbs as unknown options, which
+# says nothing about needing to re-provision.
 CX_AGENT_VERSION="0.3.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
@@ -39,6 +40,12 @@ CX_TMUX_PREFIX="cx-"
 # Named sessions map to pinned Claude conversation ids here. See the "Session
 # identity" section below for why this file has to exist.
 CX_SESSIONS="${CX_SESSIONS:-$CX_DATA_DIR/sessions.json}"
+
+# What each session is FOR. Unlike everything else the server keeps, a goal
+# cannot be derived from anything — not from git, not from tmux, not from the
+# conversation. It is the one thing here that only a human can supply, which
+# is exactly why invariant 5 says the server should hold it.
+CX_GOALS="${CX_GOALS:-$CX_DATA_DIR/goals.json}"
 
 # Worktrees live in a hidden directory beside the project, one subdirectory per
 # project, so `ls ~/projects` stays readable and `rm --purge` is one removal.
@@ -353,16 +360,37 @@ _find_claude() {
 # ---------------------------------------------------------------------------
 #
 # Claude Code stores per-project history under
-#   ~/.claude/projects/<absolute-path-with-slashes-replaced-by-dashes>/*.jsonl
+#   ~/.claude/projects/<encoded-absolute-path>/*.jsonl
 #
-# Verified empirically: /home/u/projects/api -> -home-u-projects-api
+# where the encoding replaces EVERY character outside [A-Za-z0-9-] with a dash
+# — not just the slashes. Verified against a real store: no encoded directory
+# name on disk contains any other character, and
+#
+#   /home/u/projects/api            -> -home-u-projects-api
+#   /home/u/projects/.worktrees/api -> -home-u-projects--worktrees-api
+#
+# The dot is the one that matters, and getting it wrong was a real bug: cx puts
+# every worktree under ".worktrees", so a slashes-only encoding pointed at a
+# directory that never exists and silently reported no sessions for every
+# worktree cx has ever made. `cx ls` showed "?" and the first open of a
+# worktree could not adopt an existing conversation.
 #
 # This is an OBSERVED layout, not a documented API. Everything here degrades
 # to "unknown" rather than failing if the directory is absent, so a future
 # Claude Code change costs one display column instead of breaking `cx ls`.
 
+# _session_dir_name PATH — just the encoded directory name.
+#
+# The single place this transformation is written down. It used to be spelled
+# out twice — here and in _derive_dir — and the copies disagreed about the dot,
+# so `cx ls` reported no history for exactly the directories `cx open` could
+# still find it in. One function, two callers.
+_session_dir_name() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9-' '-'
+}
+
 _session_dir() {
-  printf '%s/projects/%s' "$CX_CLAUDE_DIR" "$(printf '%s' "$1" | tr '/' '-')"
+  printf '%s/projects/%s' "$CX_CLAUDE_DIR" "$(_session_dir_name "$1")"
 }
 
 # _scan_sessions — one pass over the whole session store.
@@ -635,7 +663,7 @@ _derive_dir() {
   fi
 
   if [ "$_STORE_PRESENT" = true ] && [ -n "$path" ]; then
-    enc=$(printf '%s' "$path" | tr '/' '-')
+    enc=$(_session_dir_name "$path")
     row=$(printf '%s\n' "$_SESSION_SCAN" | awk -F'\t' -v k="$enc" '$1 == k {print $2 "\t" $3; exit}')
     if [ -n "$row" ]; then
       scount="${row%%	*}"
@@ -952,7 +980,8 @@ EOF
   # Pinned conversation ids for a project that no longer exists are dead
   # weight, and would be silently inherited by a future project of the same
   # name — pointing it at a conversation about different code.
-  _session_forget "$name" || true
+  _session_forget "$name"
+  _goal_forget "$name" || true
 
   jq -nc --arg name "$name" --arg path "$path" --argjson purged "$purged" \
     '{name:$name, path:$path, removed:true, purged:$purged}'
@@ -1039,12 +1068,13 @@ EOF
 #     --continue means "the newest conversation in this directory", which two
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
-  local name="" wt="" label="" mode="continue" dangerous=0
+  local name="" wt="" label="" mode="continue" dangerous=0 detach=0
   local perm_mode="" model="" effort=""
   # Everything after `--`, quoted individually and handed to claude verbatim.
   local passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
+      --detach) detach=1 ;;
       --mode)
         shift
         mode="${1:-continue}"
@@ -1122,6 +1152,7 @@ cmd_open() {
   # (has-session, kill-session, attach) take "=name" without it.
   pane="=$tname:"
 
+  local uuid="" created=false
   if ! _tmux_has "$tname"; then
     # EVERYTHING that can fail happens before new-session. Creating the tmux
     # session first and then dying leaves an empty session behind that the
@@ -1131,7 +1162,7 @@ cmd_open() {
     # The absolute path, not a bare `claude`: tmux may attach to an existing
     # server whose environment was captured before our PATH fix, in which case
     # a bare name would not resolve inside the pane.
-    local claude_bin uuid=""
+    local claude_bin
     claude_bin=$(_find_claude) || claude_bin=claude
 
     # Options common to every mode, assembled once. EVERY value goes through
@@ -1167,6 +1198,7 @@ cmd_open() {
 
     # Past the point of no return: from here nothing else can refuse.
     tmux new-session -d -s "$tname" -c "$dir" || die "could not create tmux session" 1
+    created=true
 
     if [ "$perm_mode" = bypassPermissions ]; then
       log "WARNING: starting $slug with ALL permission checks bypassed"
@@ -1230,6 +1262,40 @@ cmd_open() {
     fi
   fi
 
+  # Detached: everything above already did the work — created the session and
+  # sent Claude the command. Only the attach is skipped, so this shares one
+  # code path with the interactive open rather than reimplementing it.
+  #
+  # `created: true` does NOT mean ready. This returns the moment send-keys
+  # lands, and Claude takes seconds to start; the caller polls `observe` until
+  # the state leaves `fresh`. Waiting here instead would pin an SSH connection
+  # open for the duration, and there is no portable timeout to bound it with.
+  #
+  # The permission mode is READ BACK rather than taken from the flag just
+  # passed. On a session that already existed those two differ, and only the
+  # recorded one is true of the claude actually running — a live session's
+  # mode cannot be changed, so answering with what was asked for would be a
+  # lie in exactly the case a driver most needs the truth.
+  if [ "$detach" = 1 ]; then
+    [ -n "$uuid" ] || uuid=$(_session_uuid_get "$slug" 2>/dev/null) || uuid=""
+    local live_perm
+    live_perm=$(_session_perm_mode "$slug")
+    jq -nc --arg target "$slug" --arg tmux "$tname" --arg dir "$dir" \
+      --arg uuid "$uuid" --arg mode "$mode" --arg perm "$live_perm" \
+      --argjson created "$created" '{
+        target:  $target,
+        tmux:    $tmux,
+        dir:     $dir,
+        uuid:    (if $uuid == "" then null else $uuid end),
+        mode:    $mode,
+        created: $created,
+        permission_mode: (if $perm == "" then null else $perm end),
+        dangerous: ($perm == "bypassPermissions"),
+        attached: false
+      }'
+    return 0
+  fi
+
   exec tmux attach -d -t "=$tname"
 }
 
@@ -1281,6 +1347,40 @@ cmd_stop() {
     } + (if $killed > 0 then {} else {reason: "no live session"} end)'
 }
 
+# _tmux_rows — one line per live tmux session:
+#   name TAB attached TAB created TAB windows TAB activity TAB pane_command
+#
+# One call for the whole host, shared by `sessions` and `observe`. The first
+# four fields are what `sessions` has always reported and their order is fixed;
+# observe's two are appended, so adding more never disturbs the old readers.
+#
+# pane_current_command resolves to the active pane of the session's current
+# window, which is where cx put Claude. session_activity is an epoch integer
+# from tmux 2.2 on and a string before it, so the reader must tolerate both.
+_tmux_rows() {
+  have tmux || return 0
+  tmux list-sessions \
+    -F '#{session_name}	#{session_attached}	#{session_created}	#{session_windows}	#{session_activity}	#{pane_current_command}' \
+    2>/dev/null || printf ''
+}
+
+# _project_slug_map — tmux-slug TAB project-name, one line per project.
+#
+# tmux rewrites a dot to an underscore, so a project called "my.app" runs in a
+# session called "cx-my_app" and reversing that textually would invent a
+# project that does not exist. Worktree names and session labels cannot contain
+# a dot (see _validate_label), so only this one component needs the lookup.
+_project_slug_map() {
+  _registry_ensure
+  local pname
+  while IFS= read -r pname; do
+    [ -n "$pname" ] || continue
+    printf '%s\t%s\n' "$(_tmux_slug "$pname")" "$pname"
+  done <<EOF
+$(jq -r '.projects[].name' "$CX_REGISTRY" 2>/dev/null)
+EOF
+}
+
 # cmd_sessions — live cx sessions on this host.
 #
 # One `tmux list-sessions`, filtered to our prefix. Sessions the user created
@@ -1293,21 +1393,8 @@ cmd_stop() {
 # a dot (see _validate_label), so only this one component needs the lookup.
 cmd_sessions() {
   local raw="" map=""
-  if have tmux; then
-    raw=$(tmux list-sessions \
-      -F '#{session_name}	#{session_attached}	#{session_created}	#{session_windows}' \
-      2>/dev/null || printf '')
-  fi
-
-  _registry_ensure
-  local pname
-  while IFS= read -r pname; do
-    [ -n "$pname" ] || continue
-    map="$map$(_tmux_slug "$pname")	$pname
-"
-  done <<EOF
-$(jq -r '.projects[].name' "$CX_REGISTRY" 2>/dev/null)
-EOF
+  raw=$(_tmux_rows)
+  map=$(_project_slug_map)
 
   # How each session was STARTED, which is the only place that is recorded —
   # the pane's claude process cannot be asked after the fact.
@@ -1367,6 +1454,306 @@ EOF
                            | $e.perm_mode == "bypassPermissions" or $e.dangerous == true) // false)
             })
       | {host: $host, sessions: .}'
+}
+
+# ---------------------------------------------------------------------------
+# observe
+# ---------------------------------------------------------------------------
+#
+# What `sessions` is to tmux, `observe` is to the conversation: the facts a
+# driver needs in order to decide whether a session is working, waiting, or
+# gone.
+#
+# It reports FACTS ONLY. Whether "quiet for ninety seconds with an unfinished
+# tool call" counts as stuck is a policy question, and policy lives on the
+# client, where the threshold is configurable and a unit test can drive the
+# classifier as a pure function. See lib/activity.sh.
+#
+# This leans further on the session store than anything before it — see the
+# "Claude session store" section above for why that is allowed but must never
+# be load-bearing. Three properties are used here, all verified against real
+# transcripts, none of them documented:
+#
+#   .type            twelve values seen in the wild, only two of which are
+#                    messages. The LAST LINE OF A TRANSCRIPT IS USUALLY NOT A
+#                    MESSAGE — `last-prompt`, `ai-title` and file-history
+#                    entries all trail the final exchange. A reader that takes
+#                    the last line and looks at its role is wrong nearly always.
+#   .isSidechain     subagent turns are interleaved into the same file and
+#                    OUTNUMBER main-thread entries about two to one. Filtering
+#                    them is essential, not a refinement.
+#   .message.stop_reason   on an assistant entry: `end_turn` means the turn is
+#                    finished and Claude is waiting for a human; `tool_use`
+#                    means it is mid-work. This is the whole idle/busy signal.
+#
+# Every one of them degrades to null, and the caller renders that as "unknown".
+
+# How far back to look for the last main-thread message. Sidechains can bury
+# the main thread under hundreds of lines, so the window has to be far larger
+# than the number of messages actually wanted; it escalates once and then gives
+# up rather than reading a 4 MB transcript in full on every poll.
+CX_OBSERVE_SCAN="${CX_OBSERVE_SCAN:-500}"
+CX_OBSERVE_SCAN_MAX="${CX_OBSERVE_SCAN_MAX:-5000}"
+
+# _is_shell_cmd CMD — is this pane sitting at a shell, i.e. has Claude exited?
+#
+# Tested against the shells rather than for "claude": the binary has been
+# `node` and is now `claude`, and a future rename would silently turn every
+# live session into a dead one. An unrecognised command means "something is
+# running", which is the safe answer.
+_is_shell_cmd() {
+  case "$1" in
+    bash | sh | zsh | fish | dash | ksh | ash | csh | tcsh) return 0 ;;
+    -bash | -sh | -zsh | -fish) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _file_bytes FILE — size in bytes. `stat -c` is GNU-only and `stat -f` is BSD;
+# `wc -c` is neither, and on a regular file it does not read the contents.
+_file_bytes() {
+  wc -c <"$1" 2>/dev/null | tr -d ' \n' || printf ''
+}
+
+# _transcript_messages FILE — main-thread messages from the tail of FILE, one
+# compact JSON object per line, oldest first.
+_transcript_messages() {
+  local f="$1" scan out=""
+  for scan in "$CX_OBSERVE_SCAN" "$CX_OBSERVE_SCAN_MAX"; do
+    # `fromjson?` is load-bearing. A transcript is append-only and is being
+    # written while we read it, so its final line is routinely a half-written
+    # object. Without the `?` every poll of a busy session is a parse error.
+    out=$(tail -n "$scan" "$f" 2>/dev/null | jq -Rc '
+      fromjson? // empty
+      | select(.isSidechain != true)
+      | select(.type == "assistant" or .type == "user")
+      | {
+          role:        .type,
+          at:          (.timestamp // null),
+          stop_reason: (.message.stop_reason // null),
+          tool_result: (has("toolUseResult")),
+          tools:       [(.message.content // []) | .[]?
+                        | select(type == "object" and .type == "tool_use") | .name],
+          text:        ((.message.content // "")
+                        | if type == "string" then .
+                          else [.[]? | select(type == "object" and .type == "text")
+                                     | .text // ""] | join("\n")
+                          end
+                        | .[0:400])
+        }' 2>/dev/null) || out=""
+    [ -n "$out" ] && break
+  done
+  printf '%s' "$out"
+}
+
+# _slug_parse SLUG — split a slug into _SP_PROJECT / _SP_WT / _SP_LABEL.
+#
+# Unambiguous because _validate_name rejects / and @ in a project name and
+# _validate_label allows only [A-Za-z0-9_-] in the other two.
+_slug_parse() {
+  local s="$1" unit
+  case "$s" in
+    *@*)
+      _SP_LABEL="${s##*@}"
+      unit="${s%@*}"
+      ;;
+    *)
+      _SP_LABEL=""
+      unit="$s"
+      ;;
+  esac
+  case "$unit" in
+    */*)
+      _SP_PROJECT="${unit%%/*}"
+      _SP_WT="${unit#*/}"
+      ;;
+    *)
+      _SP_PROJECT="$unit"
+      _SP_WT=""
+      ;;
+  esac
+}
+
+# _observe_one SLUG ROWS TAIL — one session's facts, as a JSON object.
+_observe_one() {
+  local slug="$1" rows="$2" tail_n="$3"
+  _slug_parse "$slug"
+  local project="$_SP_PROJECT" wt="$_SP_WT" label="$_SP_LABEL"
+
+  local tname dir="" uuid="" tfile="" msgs=""
+  tname=$(_tmux_name "$slug")
+
+  # A session whose project or worktree has been deleted still reports; the
+  # driver needs to see that it is gone, not have observe abort on it.
+  dir=$(_unit_dir "$project" "$wt" 2>/dev/null) || dir=""
+
+  local trow="" alive=false attached=false created="" activity="" pcmd="" shell=false
+  trow=$(printf '%s\n' "$rows" | awk -F'\t' -v n="$tname" '$1 == n { print; exit }') || trow=""
+  if [ -n "$trow" ]; then
+    alive=true
+    [ "$(printf '%s' "$trow" | cut -f2)" != 0 ] && attached=true
+    created=$(printf '%s' "$trow" | cut -f3)
+    activity=$(printf '%s' "$trow" | cut -f5)
+    pcmd=$(printf '%s' "$trow" | cut -f6)
+    _is_shell_cmd "$pcmd" && shell=true
+  fi
+
+  uuid=$(_session_uuid_get "$slug" 2>/dev/null) || uuid=""
+  [ -n "$uuid" ] && [ -n "$dir" ] && tfile="$(_session_dir "$dir")/$uuid.jsonl"
+
+  # Has Claude ever run in this directory? A brand-new session writes no
+  # transcript until its first exchange, so "up and waiting for its first
+  # prompt" and "stuck on the trust prompt" are otherwise indistinguishable.
+  # This does not settle it either, but it says which one is plausible: Claude
+  # only asks about trusting a folder the first time it is run there.
+  local seen_dir=false
+  [ -n "$dir" ] && [ -d "$(_session_dir "$dir")" ] && seen_dir=true
+
+  local present=false mtime="" bytes=""
+  if [ -n "$tfile" ] && [ -f "$tfile" ]; then
+    present=true
+    mtime=$(_mtime "$tfile" 2>/dev/null) || mtime=""
+    bytes=$(_file_bytes "$tfile")
+    msgs=$(_transcript_messages "$tfile")
+  fi
+
+  jq -nc \
+    --arg slug "$slug" --arg project "$project" --arg wt "$wt" --arg label "$label" \
+    --arg dir "$dir" --arg tname "$tname" --arg uuid "$uuid" --arg tfile "$tfile" \
+    --arg created "$created" --arg activity "$activity" --arg pcmd "$pcmd" \
+    --arg mtime "$mtime" --arg bytes "$bytes" --arg msgs "$msgs" \
+    --argjson alive "$alive" --argjson attached "$attached" --argjson shell "$shell" \
+    --argjson present "$present" --argjson seen_dir "$seen_dir" --argjson tail_n "$tail_n" '
+    def cell: if . == "" then null else . end;
+    def num:  if . == "" then null else (tonumber? // null) end;
+
+    ($msgs | split("\n") | map(select(length > 0) | fromjson? // empty)) as $m
+    | {
+        target:   $slug,
+        project:  $project,
+        worktree: ($wt    | cell),
+        label:    ($label | cell),
+        dir:      ($dir   | cell),
+        tmux: {
+          name:     $tname,
+          alive:    $alive,
+          attached: $attached,
+          shell:    $shell,
+          command:  ($pcmd     | cell),
+          created:  ($created  | num),
+          activity: ($activity | num)
+        },
+        transcript: {
+          uuid:      ($uuid  | cell),
+          path:      ($tfile | cell),
+          present:   $present,
+          # false means Claude has never run in this directory, so a first-run
+          # prompt (trust this folder?) is the likely reason nothing is written.
+          dir_seen:  $seen_dir,
+          mtime:     ($mtime | num),
+          bytes:     ($bytes | num)
+        },
+        last: ($m | last),
+        tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
+      }'
+}
+
+# _observe_slugs — every session worth reporting on: the live tmux ones, plus
+# every session cx has ever pinned that still has a transcript.
+#
+# The second half matters. A session whose Claude exited has no tmux entry at
+# all, and a driver that only saw live sessions would conclude the work had
+# never existed rather than that it needs reviving.
+_observe_slugs() {
+  local rows="$1" map="$2"
+  {
+    printf '%s\n' "$rows" |
+      jq -Rr --arg prefix "$CX_TMUX_PREFIX" --arg map "$map" '
+        ($map
+         | split("\n")
+         | map(select(length > 0) | split("\t"))
+         | map({key: .[0], value: .[1]})
+         | from_entries) as $m
+        | split("\n")
+        | .[]
+        | select(length > 0)
+        | split("\t")[0]
+        | select(startswith($prefix))
+        | ltrimstr($prefix)
+        # Recover the project from the registry rather than un-mangling the
+        # tmux name: tmux turned "my.app" into "my_app" and there is no way
+        # back from the string alone.
+        | . as $s
+        | (($s | index("@")) as $at
+           | if $at == null then {unit: $s, suffix: ""}
+             else {unit: $s[0:$at], suffix: $s[$at:]} end)
+        | . as $o
+        | (($o.unit | index("/")) as $sl
+           | if $sl == null then {p: $o.unit, rest: ""}
+             else {p: $o.unit[0:$sl], rest: $o.unit[$sl:]} end)
+        | (($m[.p] // .p) + .rest + $o.suffix)' 2>/dev/null || printf ''
+    [ -e "$CX_SESSIONS" ] && jq -r '.sessions | keys[]' "$CX_SESSIONS" 2>/dev/null
+  } | sort -u | grep -v '^$' || true
+}
+
+cmd_observe() {
+  local name="" wt="" label="" all=0 tail_n=6
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1 ;;
+      --tail)
+        shift
+        tail_n="${1:-6}"
+        ;;
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  case "$tail_n" in
+    '' | *[!0-9]*) die "--tail wants a number" 3 ;;
+  esac
+
+  [ "$all" = 1 ] || [ -n "$name" ] ||
+    die "usage: cx-agent observe [--all | <name> [--worktree W] [--session L]] [--tail N]" 3
+
+  _registry_ensure
+
+  local rows map slugs=""
+  rows=$(_tmux_rows)
+  map=$(_project_slug_map)
+
+  if [ "$all" = 1 ]; then
+    slugs=$(_observe_slugs "$rows" "$map")
+  else
+    if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
+    if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
+    slugs=$(_slug "$name" "$wt" "$label")
+  fi
+
+  local out="" slug one
+  while IFS= read -r slug; do
+    [ -n "$slug" ] || continue
+    one=$(_observe_one "$slug" "$rows" "$tail_n") || continue
+    out="$out$one
+"
+  done <<EOF
+$slugs
+EOF
+
+  printf '%s' "$out" | jq -sc \
+    --arg host "$(hostname 2>/dev/null || printf 'unknown')" \
+    --argjson now "$(date +%s)" \
+    '{host: $host, observed_at: $now, sessions: .}'
 }
 
 # ---------------------------------------------------------------------------
@@ -1534,6 +1921,7 @@ _wt_rm() {
   rmdir "$(_worktree_base "$path")" 2>/dev/null || true
 
   _session_forget "$name/$wt" || true
+  _goal_forget "$name/$wt" || true
 
   jq -nc --arg project "$name" --arg name "$wt" --arg path "$wpath" \
     --argjson killed "$killed" \
@@ -1549,6 +1937,407 @@ cmd_worktree() {
     rm | remove) _wt_rm "$@" ;;
     *) die "usage: cx-agent worktree add|list|rm ..." 3 ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# goals
+# ---------------------------------------------------------------------------
+#
+# A goal is a definition of done, plus the sessions working towards it.
+#
+# It lives on the server for the reason invariant 5 gives: servers own what
+# cannot be derived, and a goal is the only thing in cx that nothing else
+# knows. Keeping it on the client would mean losing it with the cache, and
+# make it invisible from a second machine while the sessions it describes keep
+# running here.
+#
+# A goal's MEMBERS are stored as written. A bare "api/authfix" means this
+# host; a qualified "web2:api@tests" means another one. The agent validates
+# only the bare ones — it cannot see other servers, and invariant 1 says it
+# must not try. Resolving a qualified member is the client's job, which is the
+# half that knows more than one server exists. That is what lets one goal span
+# hosts without any client-side state or any replication between servers.
+#
+# What cx does NOT do is decide whether the definition of done is met. That is
+# meaning, not structure, and it belongs to the driver — invariant 11.
+
+# Bound the two growing lists. A goal that is revised or logged against for
+# weeks should not turn its record into an unreadable wall of history.
+CX_GOAL_HISTORY=50
+
+_goals_ensure() {
+  [ -e "$CX_GOALS" ] && return 0
+  mkdir -p "$(dirname "$CX_GOALS")"
+  printf '{"version":1,"goals":{}}\n' | _write_atomic "$CX_GOALS"
+}
+
+_goal_get() {
+  [ -e "$CX_GOALS" ] || return 1
+  local g
+  g=$(jq -c --arg n "$1" '.goals[$n] // empty' "$CX_GOALS" 2>/dev/null) || return 1
+  [ -n "$g" ] || return 1
+  printf '%s' "$g"
+}
+
+# _goal_apply NAME FILTER [--arg ...] — read/modify/write one goal under lock.
+#
+# The same lock, temp file and atomic rename as _session_uuid_set. FILTER runs
+# with the goal as `.` and must return the new goal; `updated_at` and the
+# history caps are applied here so no caller can forget them.
+_goal_apply() {
+  local name="$1" filter="$2"
+  shift 2
+  _goals_ensure
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg _n "$name" --arg _t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson _cap "$CX_GOAL_HISTORY" "$@" \
+    ".goals[\$_n] |= ((. // null) | ($filter)
+       | .updated_at = \$_t
+       | .revisions = ((.revisions // []) | .[-\$_cap:])
+       | .log       = ((.log       // []) | .[-\$_cap:]))" \
+    "$CX_GOALS" >"$CX_GOALS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_GOALS.new" "$CX_GOALS"
+  _unlock
+  trap - EXIT INT TERM
+}
+
+# _goal_member_check MEMBER — a bare member must name something that exists.
+#
+# A qualified "host:unit" is stored unchecked: this server cannot see that
+# host, and reaching for it would be the client's job even if it could.
+_goal_member_check() {
+  local m="$1" dir=""
+  case "$m" in
+    *:*) return 0 ;;
+  esac
+  _slug_parse "$m"
+  # Inside a command substitution on purpose. _unit_dir reports "no such
+  # project" by calling die, which in a subshell only ends the subshell — so
+  # its exit code is caught here and the message that reaches the user names
+  # the member the user actually typed.
+  dir=$(_unit_dir "$_SP_PROJECT" "$_SP_WT" 2>/dev/null) || dir=""
+  [ -n "$dir" ] || die "no such unit on this server: $m" 2
+}
+
+_goal_print() {
+  jq -c --arg n "$1" '.goals[$n] // {}' "$CX_GOALS"
+}
+
+cmd_goal() {
+  local sub="${1:-}"
+  [ -n "$sub" ] || die "usage: cx-agent goal new|ls|show|dod|member|state|log|rm ..." 3
+  shift
+
+  case "$sub" in
+    ls | list)
+      _goals_ensure
+      local want=""
+      [ "${1:-}" = --state ] && want="${2:-}"
+      jq -c --arg want "$want" \
+        '{goals: [.goals[] | select($want == "" or .state == $want)]}' "$CX_GOALS"
+      ;;
+
+    show)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal show <name>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      _goal_print "$name"
+      ;;
+
+    new)
+      local name="" members=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --member)
+            shift
+            members="$members${1:-}
+"
+            ;;
+          -*) die "unknown option: $1" 3 ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || die "usage: cx-agent goal new <name> [--member T]...  (dod on stdin)" 3
+      _validate_label "goal name" "$name"
+      _goals_ensure
+      ! _goal_get "$name" >/dev/null 2>&1 || die "goal already exists: $name" 4
+
+      local dod
+      dod=$(cat)
+      [ -n "$dod" ] || die "empty definition of done" 3
+
+      local m
+      while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        _goal_member_check "$m"
+      done <<EOF
+$members
+EOF
+
+      _goal_apply "$name" '{
+        name:       $_n,
+        dod:        $dod,
+        members:    ($members | split("\n") | map(select(length > 0)) | unique),
+        state:      "active",
+        created_at: $_t,
+        revisions:  [],
+        log:        []
+      }' --arg dod "$dod" --arg members "$members" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    dod)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal dod <name>  (new dod on stdin)" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      local dod
+      dod=$(cat)
+      [ -n "$dod" ] || die "empty definition of done" 3
+      # Recorded, not overwritten. "Change the definition of done" is a normal
+      # thing to do halfway through, and afterwards the only way to tell what
+      # a session was actually asked for is to have kept the old text.
+      _goal_apply "$name" '
+        .revisions = ((.revisions // []) + [{at: $_t, field: "dod", from: .dod, to: $dod}])
+        | .dod = $dod' --arg dod "$dod" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    member)
+      local op="${1:-}" name="${2:-}" target="${3:-}"
+      [ -n "$op" ] && [ -n "$name" ] && [ -n "$target" ] ||
+        die "usage: cx-agent goal member add|rm <name> <target>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      case "$op" in
+        add)
+          _goal_member_check "$target"
+          _goal_apply "$name" '.members = ((.members // []) + [$m] | unique)' --arg m "$target"
+          ;;
+        rm) _goal_apply "$name" '.members = ((.members // []) - [$m])' --arg m "$target" ;;
+        *) die "usage: cx-agent goal member add|rm <name> <target>" 3 ;;
+      esac || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    state)
+      local name="${1:-}" want="${2:-}"
+      [ -n "$name" ] && [ -n "$want" ] || die "usage: cx-agent goal state <name> active|paused|done" 3
+      case "$want" in
+        active | paused | done) ;;
+        *) die "state must be active, paused or done" 3 ;;
+      esac
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      # Pausing touches nothing but this field. There is no process to signal:
+      # the driver re-reads the goal every iteration and stops when it is not
+      # active, so the tmux sessions carry on exactly as they were.
+      _goal_apply "$name" '
+        .revisions = ((.revisions // []) + [{at: $_t, field: "state", from: .state, to: $s}])
+        | .state = $s' --arg s "$want" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    log)
+      local name="" event="note" target=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --event)
+            shift
+            event="${1:-note}"
+            ;;
+          --target)
+            shift
+            target="${1:-}"
+            ;;
+          -*) die "unknown option: $1" 3 ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || die "usage: cx-agent goal log <name> [--event E] [--target T]  (text on stdin)" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      local text
+      text=$(cat)
+      _goal_apply "$name" '
+        .log = ((.log // []) + [{at: $_t, event: $e, target: (if $tg == "" then null else $tg end), text: $x}])' \
+        --arg e "$event" --arg tg "$target" --arg x "$text" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    rm)
+      local name="${1:-}"
+      [ -n "$name" ] || die "usage: cx-agent goal rm <name>" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      _lock
+      # shellcheck disable=SC2064
+      trap "_unlock" EXIT INT TERM
+      jq --arg n "$name" 'del(.goals[$n])' "$CX_GOALS" >"$CX_GOALS.new" || {
+        _unlock
+        die "could not write the goals file" 1
+      }
+      mv -f "$CX_GOALS.new" "$CX_GOALS"
+      _unlock
+      trap - EXIT INT TERM
+      jq -nc --arg n "$name" '{name: $n, removed: true}'
+      ;;
+
+    *) die "unknown goal subcommand: $sub" 3 ;;
+  esac
+}
+
+# _goal_forget UNIT — drop UNIT and its children from every goal's members.
+#
+# Called wherever _session_forget is, and for the same reason: a member that
+# names a directory nobody can open again is a goal quietly pointing at
+# nothing. The goal itself is left alone — losing one of two sessions does not
+# mean the work is over, and deleting the user's stated intent because a
+# worktree went away would be the wrong call to make on their behalf.
+_goal_forget() {
+  [ -e "$CX_GOALS" ] || return 0
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg u "$1" '
+    .goals |= with_entries(
+      .value.members |= (map(select(
+        . != $u
+        and (startswith($u + "@") | not)
+        and (startswith($u + "/") | not)
+      )))
+    )' "$CX_GOALS" >"$CX_GOALS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_GOALS.new" "$CX_GOALS"
+  _unlock
+  trap - EXIT INT TERM
+}
+
+# ---------------------------------------------------------------------------
+# nudge
+# ---------------------------------------------------------------------------
+#
+# Type a prompt into a session that is already running.
+#
+# ONE CONVERSATION, ONE WRITER. The obvious alternative — `claude -p --resume
+# <uuid>` — is wrong, and quietly so. A cx session's tmux pane is already
+# holding that conversation id, and a second claude process resuming the same
+# id gives two writers appending to one transcript with no merge between them.
+# Whichever finishes second wins the file and the other's turns are lost. So
+# steering a LIVE session goes through its pane; `ask` is for units that have
+# no live session.
+#
+# The text reaches tmux through a paste buffer rather than as a send-keys
+# argument, which buys two things. A multi-line prompt is impossible with
+# send-keys — the first newline submits, and the rest is typed into whatever
+# comes next. And the prompt never becomes part of a command line on either
+# side of the wire, so no quoting can mangle it. It arrives on stdin here for
+# the same reason `ask` does.
+
+# _tmux_paste PANE BUFFER TEXT — put TEXT in the pane's input and submit it.
+_tmux_paste() {
+  local pane="$1" buf="$2" text="$3" tmp="" rc=0
+
+  # load-buffer takes a path, and "-" for stdin is a tmux 3.0 affordance. Try
+  # it and fall back to a temp file rather than parsing a version number: the
+  # fallback is what actually tells us whether this tmux supports it.
+  if ! printf '%s' "$text" | tmux load-buffer -b "$buf" - 2>/dev/null; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cx-nudge.XXXXXX") || return 1
+    chmod 600 "$tmp" 2>/dev/null || true
+    printf '%s' "$text" >"$tmp"
+    tmux load-buffer -b "$buf" "$tmp" 2>/dev/null || rc=1
+    rm -f "$tmp"
+    [ "$rc" = 0 ] || return 1
+  fi
+
+  # -d drops the buffer once it is pasted, so a prompt does not sit in tmux's
+  # paste history afterwards. The pane target needs its trailing colon.
+  tmux paste-buffer -d -b "$buf" -t "$pane" 2>/dev/null || return 1
+  tmux send-keys -t "$pane" C-m 2>/dev/null || return 1
+}
+
+# _nudge_declined TARGET REASON — a refusal is a result, not a failure.
+#
+# Exit 0 with sent:false, the same shape `stop` uses when there was nothing to
+# stop. A driver consumes this JSON either way, and a non-zero exit would make
+# "the session is busy, try again shortly" indistinguishable from "the server
+# is broken".
+_nudge_declined() {
+  jq -nc --arg target "$1" --arg reason "$2" \
+    '{target: $target, sent: false, reason: $reason}'
+}
+
+cmd_nudge() {
+  local name="" wt="" label="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$name" ] || die "usage: cx-agent nudge <name> [--worktree W] [--session L] [--force]  (prompt on stdin)" 3
+  have tmux || die "tmux is not installed on this server" 1
+  if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
+  if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
+
+  _registry_ensure
+  local dir slug tname pane
+  dir=$(_unit_dir "$name" "$wt") || exit $?
+  slug=$(_slug "$name" "$wt" "$label")
+  tname=$(_tmux_name "$slug")
+  pane="=$tname:"
+
+  local prompt
+  prompt=$(cat)
+  [ -n "$prompt" ] || die "empty prompt" 3
+
+  if ! _tmux_has "$tname"; then
+    _nudge_declined "$slug" dead
+    return 0
+  fi
+
+  # Never type into a pane somebody is looking at. The client decides the
+  # busy/blocked cases from the transcript, because those depend on a
+  # threshold the user sets; this one is a fact the agent can check itself,
+  # and it is the one with a person on the other end of it.
+  local attached=0
+  attached=$(_tmux_rows | awk -F'\t' -v n="$tname" '$1 == n { print $2; exit }') || attached=0
+  if [ "${attached:-0}" != 0 ] && [ "$force" != 1 ]; then
+    _nudge_declined "$slug" attached
+    return 0
+  fi
+
+  _tmux_paste "$pane" "cx-nudge-$$" "$prompt" ||
+    die "could not send the prompt to $slug" 1
+
+  jq -nc --arg target "$slug" --arg tmux "$tname" \
+    --argjson chars "$(printf '%s' "$prompt" | wc -c | tr -d ' ')" '{
+      target: $target,
+      tmux:   $tmux,
+      sent:   true,
+      chars:  $chars
+    }'
 }
 
 # ---------------------------------------------------------------------------
@@ -1667,6 +2456,17 @@ cmd_ask() {
   if [ -n "$label" ]; then
     local slug uuid="" flag=--session-id
     slug=$(_slug "$name" "$wt" "$label")
+
+    # ...but only when nothing else is holding that conversation. A live tmux
+    # session already has a claude process resuming this id; starting a second
+    # one gives two writers appending to a single transcript with no merge,
+    # and the turns of whichever loses are silently orphaned. That is a real
+    # bug this used to have, and the failure is invisible — the answer comes
+    # back looking fine while history quietly goes missing.
+    if have tmux && _tmux_has "$(_tmux_name "$slug")"; then
+      die "$slug is running; a second claude on its conversation would lose turns — use nudge" 4
+    fi
+
     uuid=$(_session_uuid_ensure "$slug" "$dir" 2>/dev/null || printf '')
     if [ -n "$uuid" ]; then
       [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && flag=--resume
@@ -1742,6 +2542,11 @@ cmd_doctor() {
     --argjson session_store "$([ -d "$CX_CLAUDE_DIR/projects" ] && printf true || printf false)" \
     '{
       agent_version: $version,
+      # For diagnosis only — `cx doctor` shows what a server can do. The
+      # feature gates deliberately use `version` instead: that is one cheap
+      # line, where reaching this verb costs _find_claude, five tool_version
+      # calls and four credential stats, and a gate runs before every call.
+      capabilities: ["units", "detach", "observe", "nudge", "goals"],
       hostname: $hostname,
       project_root: $root,
       registry: { path: $registry, valid: $registry_ok },
@@ -1776,14 +2581,25 @@ cx-agent — server-side helper for cx (not intended for direct use)
   new <name> [--repo URL] [--root DIR]
   rm <name> [--purge]
   path <name> [--worktree W]
-  open <name> [--worktree W] [--session L] --mode continue|resume|shell
+  open <name> [--worktree W] [--session L] [--detach]
+              --mode continue|resume|shell
               [--permission-mode M] [--model M] [--effort E] [--dangerous]
               [-- CLAUDE_ARGS...]
   stop <name> [--worktree W] [--session L] [--all]
   sessions                      live cx tmux sessions
+  observe [--all | <name> [--worktree W] [--session L]] [--tail N]
+                                per-session facts: tmux, transcript, last turn
+  nudge <name> [--worktree W] [--session L] [--force]
+                                type a prompt into a live session (stdin)
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
+  goal new <name> [--member T]...           definition of done on stdin
+  goal ls [--state S] | show <name> | rm <name>
+  goal dod <name>                           replace it (stdin), keeping history
+  goal member add|rm <name> <target>
+  goal state <name> active|paused|done
+  goal log <name> [--event E] [--target T]  record what a driver did (stdin)
 
 Claude options apply when a session is CREATED; reattaching cannot change
 them. The permission mode is recorded so cx status can show it. --dangerous is
@@ -1829,10 +2645,19 @@ main() {
     open) cmd_open "$@" ;;
     stop) cmd_stop "$@" ;;
     sessions) cmd_sessions "$@" ;;
+    observe) cmd_observe "$@" ;;
+    nudge) cmd_nudge "$@" ;;
+    goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;
     *) die "unknown command: $cmd" 3 ;;
   esac
 }
 
-main "$@"
+# Sourcing this file with CX_AGENT_NO_MAIN=1 defines its functions without
+# running anything, which is how the unit tests reach _slug, _tmux_slug and
+# _transcript_state. It is not a test-only hack bolted on: the file already
+# takes CX_DATA_DIR, CX_REGISTRY, CX_SESSIONS and CX_CLAUDE_DIR from the
+# environment for the same reason. Invariant 6 is untouched — nothing is
+# factored out into lib/, the file is still one scp'able artifact.
+[ "${CX_AGENT_NO_MAIN:-}" = 1 ] || main "$@"

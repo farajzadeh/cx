@@ -73,7 +73,7 @@ EOF
   # re-set with eval, so a prompt containing quotes or $(...) is never
   # re-parsed — the same reason it travels to the server on stdin.
   cx_claude_opts_reset
-  local passthru=() used=0 rc=0
+  local passthru=() rc=0
   while [ $# -gt 0 ]; do
     if [ "$1" = "--" ]; then
       shift
@@ -85,9 +85,9 @@ EOF
     fi
 
     rc=0
-    used=$(cx_claude_opt "$1" "${2:-}") || rc=$?
+    cx_claude_opt "$1" "${2:-}" || rc=$?
     if [ "$rc" = 0 ]; then
-      shift "$used"
+      shift "$CX_CLAUDE_USED"
       continue
     fi
     [ "$rc" = 2 ] && return 3

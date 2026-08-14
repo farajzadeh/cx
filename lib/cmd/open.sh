@@ -9,7 +9,7 @@
 . "$CX_HOME/lib/target.sh"
 
 _open_common() {
-  local mode="$1" target="" used=0
+  local mode="$1" target="" detach=0
   shift
 
   cx_claude_opts_reset
@@ -30,14 +30,15 @@ _open_common() {
     # Captured explicitly rather than testing $? inside an elif, where it
     # would silently start referring to whatever ran last.
     local rc=0
-    used=$(cx_claude_opt "$1" "${2:-}") || rc=$?
+    cx_claude_opt "$1" "${2:-}" || rc=$?
     if [ "$rc" = 0 ]; then
-      shift "$used"
+      shift "$CX_CLAUDE_USED"
       continue
     fi
     [ "$rc" = 2 ] && return 3 # cx_claude_opt already said what was wrong
 
     case "$1" in
+      -d | --detach) detach=1 ;;
       -*)
         err "unknown option: $1"
         hint "to pass it to Claude Code instead: cx $mode <target> -- $1"
@@ -81,6 +82,9 @@ _open_common() {
     cx_agent_supports "$CX_T_HOST" "passing arguments through to Claude Code" \
       0.3.0 "$ver" || return 1
   fi
+  if [ "$detach" = 1 ]; then
+    cx_agent_observe_ok "$CX_T_HOST" "$ver" || return 1
+  fi
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -102,6 +106,12 @@ _open_common() {
     warn "Starting $(cx_target_str) with ALL permission checks bypassed."
     note "  Claude will edit files and run commands without asking."
     note "  Only sensible on a server you can afford to have broken."
+    if [ "$detach" = 1 ]; then
+      # Detached as well: nobody is watching the pane, so nothing will stop it
+      # either. Worth saying out loud, because this combination is the one that
+      # runs unsupervised.
+      note "  Detached, so no one will see it ask — because it will not ask."
+    fi
     say ""
   fi
 
@@ -109,6 +119,39 @@ _open_common() {
   # options from the ones it must hand to Claude Code untouched.
   local sep=()
   [ ${#passthru[@]} -gt 0 ] && sep=(--)
+
+  # Detached: no TTY, no exec, no attach. The session is created and Claude is
+  # started exactly as below, with the same options in the same order; the
+  # difference is only that we come back. This is what a driver uses to start
+  # work it means to steer rather than watch — and the reason the argument
+  # vector is built identically is that a detached session is precisely the
+  # one where getting --permission-mode wrong is invisible until it hangs.
+  if [ "$detach" = 1 ]; then
+    local out=""
+    out=$(cx_agent "$CX_T_HOST" open "$CX_T_PROJECT" \
+      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" --detach \
+      "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
+      "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}") || return $?
+    if [ "${CX_JSON:-0}" = 1 ]; then
+      printf '%s\n' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host: $h}' ||
+        printf '%s\n' "$out"
+      return 0
+    fi
+    local created="" tname=""
+    created=$(printf '%s' "$out" | jq -r '.created' 2>/dev/null) || true
+    tname=$(printf '%s' "$out" | jq -r '.tmux // empty' 2>/dev/null) || true
+    if [ "$created" = true ]; then
+      say "started $(cx_target_str)  ($tname)"
+      # Claude takes a few seconds to come up, and on the very first run in a
+      # directory it asks whether to trust the folder and then writes nothing
+      # until answered — so "started" is not "ready".
+      hint "check it is up with: cx peek $(cx_target_str)"
+    else
+      say "already running: $(cx_target_str)  ($tname)"
+    fi
+    hint "attach with: cx open $(cx_target_str)"
+    return 0
+  fi
 
   # Hand over the terminal. exec so cx does not linger as a parent process for
   # the whole session, and so Ctrl-C reaches tmux rather than us.
@@ -132,10 +175,22 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open <host>:<project>@<label>          a second, independent session
   cx open <host>:<project>/<worktree>       a worktree of the project
   cx open <host>:<project>/<worktree>@<label>
+  cx open -d <target>                       start it, do not attach
 
 Creates a persistent tmux session on the server and starts Claude Code in it,
 resuming that session's own conversation. If it is already running, this
 reattaches instead of starting a second one.
+
+${C_BOLD}-d${C_RESET}, ${C_BOLD}--detach${C_RESET} does everything except hand over your terminal: the session is
+created and Claude started, and cx returns. Use it to line several sessions up
+before working through them, or to start work a driver will steer:
+
+  cx open -d web1:api/authfix@impl
+  cx open -d web1:api/authfix@tests
+  cx peek                                   see what each one is doing
+
+It returns as soon as Claude has been launched, which is not the same as ready
+— the first run in any directory stops to ask whether you trust the folder.
 
 Each ${C_BOLD}@label${C_RESET} is a separate conversation, so you can run several in parallel
 on one project and come back to any of them:

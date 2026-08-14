@@ -24,7 +24,7 @@ _cx() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
-  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask status stop cache help version"
+  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge goal driver status stop cache help version"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     # shellcheck disable=SC2207
@@ -40,6 +40,12 @@ _cx() {
       else
         # shellcheck disable=SC2207
         COMPREPLY=($(compgen -W "$(_cx_hosts)" -- "$cur"))
+      fi
+      ;;
+    goal)
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        # shellcheck disable=SC2207
+        COMPREPLY=($(compgen -W "new ls show dod member pause resume done log rm" -- "$cur"))
       fi
       ;;
     provision | login | doctor)

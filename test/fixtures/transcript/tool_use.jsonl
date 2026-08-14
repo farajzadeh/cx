@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":false,"timestamp":"2026-08-12T10:00:00Z","message":{"role":"user","content":"run the tests"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-08-12T10:00:04Z","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"Running them."},{"type":"tool_use","name":"Bash","input":{}}]}}

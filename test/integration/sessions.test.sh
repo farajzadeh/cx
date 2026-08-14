@@ -188,16 +188,19 @@ assert_contains "$(on_node 'tmux capture-pane -pJ -t "=cx-api@yolo:"')" 'STUB_NO
 it "does not leak it into the project's other sessions"
 assert_not_contains "$(on_node 'tmux capture-pane -pJ -t =cx-api:')" 'STUB_NO_PERMISSIONS'
 
-it "records which session was started that way"
-assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"].dangerous" ~/.local/share/cx/sessions.json')" 'true'
+it "records which mode that session was started with"
+# The mode itself, not a boolean: --permission-mode acceptEdits and
+# --dangerously-skip-permissions are both "not the default" and cx status has
+# to be able to tell them apart.
+assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"].perm_mode" ~/.local/share/cx/sessions.json')" 'bypassPermissions'
 
-# Absent, not `false`: the negative is never written, so this file stays a list
+# Absent, not empty: the default is never written, so this file stays a list
 # of pins rather than growing an entry for every session ever opened.
 it "and records nothing for the others"
-assert_eq "$(on_node 'jq -r ".sessions[\"api\"].dangerous // false" ~/.local/share/cx/sessions.json')" 'false'
+assert_eq "$(on_node 'jq -r ".sessions[\"api\"].perm_mode // \"\"" ~/.local/share/cx/sessions.json')" ''
 
 it "without creating a marker key for them"
-assert_eq "$(on_node 'jq -r ".sessions[\"api\"] | has(\"dangerous\")" ~/.local/share/cx/sessions.json')" 'false'
+assert_eq "$(on_node 'jq -r ".sessions[\"api\"] | has(\"perm_mode\")" ~/.local/share/cx/sessions.json')" 'false'
 
 it "still pins that session its own conversation"
 assert_ne "$(on_node 'jq -r ".sessions[\"api@yolo\"].uuid" ~/.local/share/cx/sessions.json')" \
@@ -228,7 +231,7 @@ agent 'open api --session yolo --mode continue' >/dev/null 2>&1
 sleep 1
 
 it "restarting without the flag clears the record"
-assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"] | has(\"dangerous\")" ~/.local/share/cx/sessions.json')" 'false'
+assert_eq "$(on_node 'jq -r ".sessions[\"api@yolo\"] | has(\"perm_mode\")" ~/.local/share/cx/sessions.json')" 'false'
 
 it "but keeps that session's pinned conversation"
 assert_ne "$(on_node 'jq -r ".sessions[\"api@yolo\"].uuid // \"\"" ~/.local/share/cx/sessions.json')" ''
@@ -238,7 +241,7 @@ assert_not_contains "$(on_node 'tmux capture-pane -pJ -t "=cx-api@yolo:"')" 'STU
 
 _out=$(agent 'open api --session sh1 --dangerous --mode shell' 2>&1)
 it "refuses the flag for a shell session, where no Claude is started"
-assert_contains "$_out" 'meaningless with --mode shell'
+assert_contains "$_out" 'starts no Claude, so Claude options have no effect'
 
 describe "cx ask --dangerously-skip-permissions"
 
@@ -268,7 +271,7 @@ assert_contains "$_stdout" 'STUB_ANSWER: hi'
 
 _out=$(cx_run "$HOME_DIR" shell cx-test-web1:api --dangerously-skip-permissions 2>&1)
 it "cx shell rejects the flag rather than ignoring it"
-assert_contains "$_out" 'does nothing for cx shell'
+assert_contains "$_out" 'starts no Claude, so Claude options have no effect'
 
 on_node 'tmux kill-session -t "=cx-api@yolo"' >/dev/null 2>&1
 

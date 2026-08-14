@@ -35,6 +35,10 @@ _cx() {
     'shell:plain shell, no Claude'
     'code:open in VS Code over Remote-SSH'
     'ask:one-shot question'
+    'peek:what each session is doing now'
+    'nudge:send a prompt to a running session'
+    'goal:definitions of done for your sessions'
+    'driver:print the cx-driver subagent definition'
     'status:live sessions'
     'stop:end a session'
     'cache:inspect or drop cached data'
@@ -72,10 +76,13 @@ _cx() {
     open|resume|ask)
       compadd -- ${(f)"$(_cx_targets)"} --dangerously-skip-permissions
       ;;
+    nudge)
+      compadd -- ${(f)"$(_cx_targets)"} --force
+      ;;
     stop)
       compadd -- ${(f)"$(_cx_targets)"} --all
       ;;
-    shell|code|rm)
+    shell|code|peek|rm)
       compadd -- ${(f)"$(_cx_targets)"}
       ;;
   esac

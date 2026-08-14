@@ -57,6 +57,14 @@ Not in the config file; set these in the environment when you need them.
 | `CX_CONFIG_DIR` | Config location (default `~/.config/cx`). |
 | `CX_SSHD_DIR` | Host definitions (default `~/.config/cx/ssh.d`). |
 
+## Driving
+
+| Key | Default | What it does |
+|---|---|---|
+| `CX_IDLE_GRACE` | `120` | How long a session may go quiet mid-turn before `cx peek` calls it `blocked` rather than `working`. Claude routinely spends a minute inside one tool call, so this is deliberately generous — a false `blocked` costs a pointless nudge, a false `working` costs a driver that waits forever. |
+| `CX_PEEK_TAIL` | `6` | How many of a session's last messages `cx peek --json` includes. |
+| `CX_GOAL_HOST` | — | Which server holds goals when a command does not name one. Falls back to `CX_DEFAULT_HOST`, then to the only configured server if there is just one. |
+
 ## Flags
 
 | Flag | Meaning |

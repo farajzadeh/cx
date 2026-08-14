@@ -131,8 +131,11 @@ cx_target_needs_units() {
 #
 # Only called when a command actually needs the newer flag, so the common path
 # pays nothing. Without it the failure is "cx-agent: unknown option: --foo",
-# which does not tell anyone to re-provision. VERSION may be passed in when
-# the caller has already asked, to save a round trip.
+# which does not tell anyone to re-provision.
+#
+# Pass VERSION when you already have it: most callers have just run `version`
+# or `doctor` for their own reasons, and a second round trip per command is
+# the difference between a driver polling six sessions in one second and six.
 cx_agent_supports() {
   local host="$1" feature="$2" min="$3" ver="${4:-}"
   [ -n "$ver" ] || ver=$(cx_agent "$host" version 2>/dev/null) || true
@@ -144,9 +147,18 @@ cx_agent_supports() {
   return 1
 }
 
-# cx_agent_units_ok HOST [VERSION] — the gate for worktrees and named sessions.
+# The gated features. One implementation above; the minimum version lives at
+# the call site, next to the name of the thing it gates.
 cx_agent_units_ok() {
   cx_agent_supports "$1" "worktrees and named sessions" 0.2.0 "${2:-}"
+}
+
+cx_agent_observe_ok() {
+  cx_agent_supports "$1" "observing and steering sessions" 0.3.0 "${2:-}"
+}
+
+cx_agent_goals_ok() {
+  cx_agent_supports "$1" "goals" 0.3.0 "${2:-}"
 }
 
 # ---------------------------------------------------------------------------
@@ -163,11 +175,13 @@ cx_agent_units_ok() {
 CX_CLAUDE_ARGS=()
 CX_CLAUDE_PERM_MODE=""
 CX_CLAUDE_MIN_AGENT=""
+CX_CLAUDE_USED=0
 
 cx_claude_opts_reset() {
   CX_CLAUDE_ARGS=()
   CX_CLAUDE_PERM_MODE=""
   CX_CLAUDE_MIN_AGENT=""
+  CX_CLAUDE_USED=0
 }
 
 _cx_claude_add() {
@@ -186,9 +200,19 @@ _cx_claude_need() {
 
 # cx_claude_opt FLAG [VALUE] — consume one option, or return 1 if unrecognised.
 #
-# Prints how many argv words it used, so the caller's loop knows whether to
-# shift once or twice. Returns 1 without printing when FLAG is not ours, which
+# Sets CX_CLAUDE_USED to how many argv words it took, so the caller's loop
+# knows whether to shift once or twice. Returns 1 when FLAG is not ours, which
 # is how each command keeps its own options separate from these.
+#
+# CALL IT DIRECTLY, NEVER AS `used=$(cx_claude_opt ...)`. It reports the word
+# count through a global for exactly that reason: this function's real work is
+# mutating CX_CLAUDE_ARGS, CX_CLAUDE_PERM_MODE and CX_CLAUDE_MIN_AGENT, and a
+# command substitution runs it in a subshell where all three are discarded the
+# moment it returns. That failed silently and completely — the word count came
+# back correct, so argv was consumed properly and every option parsed without
+# complaint, while --permission-mode, --model, --effort and
+# --dangerously-skip-permissions all reached nothing at all.
+# shellcheck disable=SC2034  # CX_CLAUDE_USED/PERM_MODE are read by lib/cmd/*
 cx_claude_opt() {
   local flag="$1" value="${2:-}"
 
@@ -210,7 +234,7 @@ cx_claude_opt() {
       CX_CLAUDE_PERM_MODE="$value"
       _cx_claude_add --permission-mode "$value"
       _cx_claude_need 0.3.0
-      printf 2
+      CX_CLAUDE_USED=2
       ;;
     # The loud spelling of one particular mode, kept because it is what Claude
     # Code itself calls the thing and what people search for.
@@ -218,7 +242,7 @@ cx_claude_opt() {
       CX_CLAUDE_PERM_MODE=bypassPermissions
       _cx_claude_add --dangerous
       _cx_claude_need 0.2.1
-      printf 1
+      CX_CLAUDE_USED=1
       ;;
     --model)
       [ -n "$value" ] || {
@@ -227,7 +251,7 @@ cx_claude_opt() {
       }
       _cx_claude_add --model "$value"
       _cx_claude_need 0.3.0
-      printf 2
+      CX_CLAUDE_USED=2
       ;;
     --effort)
       case "$value" in
@@ -240,7 +264,7 @@ cx_claude_opt() {
       esac
       _cx_claude_add --effort "$value"
       _cx_claude_need 0.3.0
-      printf 2
+      CX_CLAUDE_USED=2
       ;;
     *) return 1 ;;
   esac

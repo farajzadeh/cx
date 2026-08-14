@@ -142,7 +142,7 @@ ${C_BOLD}PARALLEL WORK${C_RESET}
   open <target>@<label>                   a second session on the same files
 
 ${C_BOLD}WORKING${C_RESET}
-  open <target>                           attach a Claude session (resumes)
+  open <target> [-d]                      attach a Claude session (-d: don't)
     --dangerously-skip-permissions        ...with no permission checks at all
   resume <target>                         attach and pick a past session
   shell <target>                          plain shell, no Claude
@@ -150,6 +150,14 @@ ${C_BOLD}WORKING${C_RESET}
   ask <target> "prompt"                   one-shot question, prints to stdout
   status                                  live sessions across servers
   stop <target> [--all]                   end a session (--all: the project's)
+
+${C_BOLD}DRIVING${C_RESET}
+  peek [target]                           what each session is doing now
+  nudge <target> "prompt"                 type into a running session
+  goal new <name> "done when..."          a definition of done, and who is on it
+  goal ls | show | dod | member | log     inspect and edit one
+  goal pause | resume | done <name>       pause stops the driver, not the work
+  driver                                  print the cx-driver subagent
 
 ${C_BOLD}CACHE${C_RESET}
   cache status | clear [host]             inspect or drop cached data

@@ -123,8 +123,19 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx shell web1:api` | plain shell in the project, no Claude |
 | `cx code web1:api` | open in VS Code over Remote-SSH |
 | `cx ask web1:api "..."` | one-shot question; prints to stdout, no session |
+| `cx open -d web1:api` | start a session without attaching to it |
 | `cx status` | what's running right now, everywhere |
 | `cx stop web1:api [--all]` | end a session (`--all`: every one of the project's) |
+
+### Driving
+
+| | |
+|---|---|
+| `cx peek [target]` | what each session is doing: idle, working, blocked, dead |
+| `cx nudge web1:api "..."` | send a prompt to a session that's already running |
+| `cx goal new ship "..."` | a definition of done, and who's working on it |
+| `cx goal ls` / `show` / `pause` / `resume` / `done` | manage them |
+| `cx driver` | print the cx-driver subagent, to install in Claude Code |
 
 ### Working in parallel
 
@@ -177,6 +188,72 @@ over SSH shows up in `cx ls`, and one you delete by hand disappears.
 
 And they nest: `cx open web1:api/authfix@tests` is a second conversation
 inside a worktree.
+
+---
+
+## Letting them run themselves
+
+Once you have four sessions going, the problem changes: not *starting* work
+but knowing which one needs you. `cx peek` reads each session's own
+conversation and says:
+
+```
+$ cx peek
+HOST   SESSION            STATE    WHO  QUIET
+web1   api/authfix@impl   working  —    4s
+web1   api/authfix@tests  idle     —    6m
+web1   api@review         blocked  —    22m
+web2   web                dead     —    —
+```
+
+`idle` means the last turn finished and it is waiting for you. `blocked` means
+it stopped mid-turn and went quiet — nearly always a permission prompt only
+you can answer. `dead` means Claude exited.
+
+`cx nudge` sends the next instruction to one that's ready, without attaching:
+
+```sh
+cx nudge web1:api/authfix@tests "the retry test is still failing — fix it"
+```
+
+It declines, rather than making a mess, if the session is mid-turn, waiting on
+a prompt, or open in front of you. `--force` overrides that.
+
+### Definitions of done
+
+Write down what a set of sessions is *for*, and it stops being something you
+have to hold in your head:
+
+```sh
+cx goal new auth "the auth tests pass and a PR is open" \
+    --member web1:api/authfix@impl \
+    --member web2:api@tests
+
+cx goal ls                       # all of them, with state
+cx goal dod auth "...new..."     # change your mind; the old text is kept
+cx goal pause auth               # stop the driver — nothing is killed
+```
+
+Goals live on the server, next to the work, so they outlive this terminal and
+look the same from any machine you use.
+
+### The driver
+
+`cx` itself decides nothing. It reports what each session is doing and moves
+text between you and them; whether a definition of done has been *met* is a
+judgement, and judgement lives in a Claude Code subagent that cx ships:
+
+```sh
+cx driver > ~/.claude/agents/cx-driver.md
+```
+
+Then ask Claude Code to drive your cx goals. It reads each goal, looks at what
+every session is actually doing, sends the next prompt to whichever is ready,
+and stops when a goal is paused or done. It never answers a permission prompt
+for you, and it never forces a nudge — those are yours.
+
+Because nothing in cx loops, `cx goal pause` really does stop it: there is no
+process to signal, only a driver that re-reads the goal each time round.
 
 ---
 
@@ -289,6 +366,7 @@ there's nothing to install.
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | every setting and environment variable |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | when something doesn't work |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, and why it's built this way |
+| [docs/cx-driver.agent.md](docs/cx-driver.agent.md) | the driver subagent, as `cx driver` prints it |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | tests, portability rules, sending a patch |
 | [issues/](issues/) | known issues not yet fixed, with full context |
 

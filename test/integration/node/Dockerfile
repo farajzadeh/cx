@@ -37,6 +37,11 @@ RUN (getent group cxuser || groupadd cxuser) && \
 #
 # The stub is a real file rather than a printf'd heredoc because it now parses
 # arguments, and argument parsing is the thing the tests assert on.
+#
+# claude-tui is a copy of /bin/sh under another name, which the stub re-execs
+# itself through. cx decides a session is dead by seeing a shell as the pane's
+# foreground process, and a stub written in sh would otherwise look dead the
+# whole time it was running. See the note at the top of claude-stub.sh.
 COPY claude-stub.sh /tmp/claude-stub
 RUN chmod 755 /tmp/claude-stub
 
@@ -49,6 +54,8 @@ RUN printf '%s\n' \
     'mkdir -p /home/cxuser/.ssh /home/cxuser/.local/bin' \
     'cp /tmp/claude-stub /home/cxuser/.local/bin/claude' \
     'chmod 755 /home/cxuser/.local/bin/claude' \
+    'cp /bin/sh /home/cxuser/.local/bin/claude-tui' \
+    'chmod 755 /home/cxuser/.local/bin/claude-tui' \
     'chown -R cxuser:cxuser /home/cxuser/.local' \
     'if [ -f /pubkey/authorized_keys ]; then' \
     '  cp /pubkey/authorized_keys /home/cxuser/.ssh/authorized_keys' \

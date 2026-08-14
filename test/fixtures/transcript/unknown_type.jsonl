@@ -1,0 +1,4 @@
+{"type":"assistant","isSidechain":false,"timestamp":"2026-08-12T10:00:11Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}}
+{"type":"agent-name","name":"explorer"}
+{"type":"queue-operation","op":"drain"}
+{"type":"some-type-from-the-future","payload":{"nested":true}}
