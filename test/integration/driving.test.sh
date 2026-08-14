@@ -195,6 +195,34 @@ assert_contains \
   "$(on_node 'tmux capture-pane -pJ -t "=cx-api@impl:"')" \
   'not-expanded'
 
+describe "a long prompt is actually submitted, not left in the input box"
+# tmux delivers the paste and the Enter immediately; the application drains
+# them at its own pace. An Enter arriving while a large paste is still being
+# read is absorbed INTO it, leaving the prompt complete and unsent while nudge
+# reports success — the worst shape available, since a driver that trusts
+# "sent" then waits forever. Found by a driver mid-run on a 30-line prompt,
+# after dozens of shorter ones had landed.
+
+_long=$(python3 -c "print('SUBMITTED-MARKER'); print()
+print(chr(10).join('padding line %02d of a deliberately large paste' % i for i in range(1, 61)))" 2>/dev/null ||
+  awk 'BEGIN { print "SUBMITTED-MARKER"; print ""
+    for (i = 1; i <= 60; i++) printf "padding line %02d of a deliberately large paste\n", i }')
+
+printf '%s' "$_long" | cx_run "$HOME_DIR" nudge cx-test-web1:api@impl >/dev/null 2>&1
+settle 4
+
+it "reaches the session rather than parking in the input box"
+# -S -3000 reaches into the scrollback: the stub echoes every line it is given,
+# so a 60-line paste pushes the marker off the visible pane before this runs.
+assert_contains \
+  "$(on_node 'tmux capture-pane -pJ -S -3000 -t "=cx-api@impl:"')" \
+  "SUBMITTED-MARKER"
+
+it "leaves nothing pending"
+assert_eq \
+  "$(on_node 'tmux capture-pane -pJ -S -3000 -t "=cx-api@impl:" | grep -c "Pasted text #"')" \
+  0
+
 describe "nudge declines rather than making a mess"
 
 it "refuses a session that is not running"

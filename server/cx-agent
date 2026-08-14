@@ -2263,7 +2263,49 @@ _tmux_paste() {
   # -d drops the buffer once it is pasted, so a prompt does not sit in tmux's
   # paste history afterwards. The pane target needs its trailing colon.
   tmux paste-buffer -d -b "$buf" -t "$pane" 2>/dev/null || return 1
+
+  # THEN WAIT, before sending the Enter that submits it.
+  #
+  # tmux delivers both immediately; the application reads them at its own pace.
+  # A TUI in bracketed-paste mode treats everything up to the closing sequence
+  # as pasted content, and a large paste takes it a moment to drain — so an
+  # Enter that arrives during that window is absorbed INTO the paste instead of
+  # submitting it. The prompt then sits in the input box, complete and
+  # unsent, while nudge reports success.
+  #
+  # That is the worst shape of bug this code could have: a driver that trusts
+  # "sent" waits forever on a session that was never actually asked anything.
+  # It is also a race, so it passes in testing and fails under load — it was
+  # found by a driver mid-run, on a 30-line prompt, after dozens of shorter
+  # ones had landed cleanly.
+  #
+  # The wait scales with the payload because the drain does. Fractional sleep
+  # is already relied on elsewhere in this file.
+  local chars settle
+  chars=$(printf '%s' "$text" | wc -c | tr -d ' ')
+  settle=$(awk -v n="${chars:-0}" 'BEGIN {
+    s = 0.25 + n / 8000       # ~0.25s floor, plus a slice per 8KB
+    if (s > 3) s = 3          # capped: past here something else is wrong
+    printf "%.2f", s
+  }')
+  sleep "$settle"
+
   tmux send-keys -t "$pane" C-m 2>/dev/null || return 1
+
+  # Confirm it actually submitted, and retry the Enter once if not.
+  #
+  # This reads the pane, which is deliberately NOT how cx classifies session
+  # state — the TUI's rendering has no compatibility promise and `observe`
+  # stays off it. Confirming a keystroke we just sent is a different job: it
+  # asks only whether our own action took effect, and the cost of being wrong
+  # is a stalled driver rather than a mislabelled state.
+  local pending
+  pending=$(tmux capture-pane -pJ -t "$pane" 2>/dev/null |
+    grep -c 'Pasted text #' || true)
+  if [ "${pending:-0}" -gt 0 ]; then
+    sleep 0.5
+    tmux send-keys -t "$pane" C-m 2>/dev/null || true
+  fi
 }
 
 # _nudge_declined TARGET REASON — a refusal is a result, not a failure.
