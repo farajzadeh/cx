@@ -207,17 +207,24 @@ EOF
     fi
   done
 
+  # Narrowing to one target happens here rather than in the query: the agent's
+  # observe already accepts a single slug, but asking for --all and filtering
+  # costs one round trip either way and keeps this path identical to the
+  # unfiltered one.
+  #
+  # BOTH output paths must filter. They did not, once: the table narrowed and
+  # --json did not, so `cx peek <target> --json` answered with every session on
+  # the host. Nothing looked wrong — a caller that took .sessions[0], which is
+  # what a driver naturally does, simply read a different session's transcript
+  # and believed it. Found by a probe session reporting another project's work
+  # as its own.
   if [ "${CX_JSON:-0}" = 1 ]; then
-    _peek_json "$hosts" "$tmp" "$now"
+    _peek_json "$hosts" "$tmp" "$now" "$one_target"
     rm -rf "$tmp"
     return 0
   fi
   rm -rf "$tmp"
 
-  # Narrowing to one target happens here rather than in the query: the agent's
-  # observe already accepts a single slug, but asking for --all and filtering
-  # costs one round trip either way and keeps this path identical to the
-  # unfiltered one.
   if [ -n "$one_target" ]; then
     rows=$(printf '%s' "$rows" | awk -F'\t' -v t="$one_target" '$2 == t || index($2, t "@") == 1')
   fi
@@ -251,13 +258,16 @@ EOF
 # _peek_json — the driver's view: the agent's facts with the derived state
 # folded in, so a caller never has to reimplement the ladder.
 _peek_json() {
-  local hosts="$1" tmp="$2" now="$3" h safe
+  local hosts="$1" tmp="$2" now="$3" only="${4:-}" h safe
   {
     for h in $hosts; do
       safe=$(cx_sanitize "$h")
       [ -s "$tmp/$safe.json" ] || continue
       jq -e . "$tmp/$safe.json" >/dev/null 2>&1 || continue
-      jq -c --arg h "$h" '.sessions[]? | . + {host: $h}' "$tmp/$safe.json" 2>/dev/null
+      jq -c --arg h "$h" --arg only "$only" '
+        .sessions[]?
+        | select($only == "" or .target == $only or (.target | startswith($only + "@")))
+        | . + {host: $h}' "$tmp/$safe.json" 2>/dev/null
     done
   } | while IFS= read -r line; do
     [ -n "$line" ] || continue

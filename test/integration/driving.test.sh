@@ -117,6 +117,35 @@ assert_eq \
   "$(cx_run "$HOME_DIR" --json peek cx-test-web1:api | jq -r '.sessions[0].steerable')" \
   true
 
+describe "a target narrows both output paths, not just the table"
+# The table filtered and --json did not, so `cx peek <target> --json` answered
+# with every session on the host. A driver taking .sessions[0] then read a
+# different session's transcript and believed it — silent, and wrong.
+
+agent "open api --session other --detach --mode continue" >/dev/null 2>&1
+
+it "the table shows only the asked-for session"
+assert_eq \
+  "$(cx_run "$HOME_DIR" peek cx-test-web1:api@impl | grep -c 'api@other')" \
+  0
+
+it "--json shows only the asked-for session too"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json peek cx-test-web1:api@impl | jq -r '.sessions[].target')" \
+  "api@impl"
+
+it "a bare project still covers its labelled sessions"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json peek cx-test-web1:api | jq -r '.sessions | length')" \
+  2
+
+it "and no target still returns everything"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json peek | jq -r '.sessions | length')" \
+  2
+
+cx_run "$HOME_DIR" stop cx-test-web1:api@other >/dev/null 2>&1
+
 describe "nudge puts a prompt into the running session"
 
 _n=$(cx_run "$HOME_DIR" nudge cx-test-web1:api@impl "write the retry patch")
