@@ -13,6 +13,10 @@
 
 cmd_ask() {
   local target="" prompt=""
+  # cx ask runs `claude -p`, so it also forwards the options that only work in
+  # print mode. Kept separate from CX_CLAUDE_ARGS because cx open must never
+  # accept them — there they would be silently meaningless.
+  local _ask_args=() _ask_needs_agent=0
 
   case "${1:-}" in
     -h | --help)
@@ -40,10 +44,23 @@ history, so the question lands in the same thread cx open would attach to:
   cx ask web1:api@review "summarise what we decided"
 
 ${C_BOLD}OPTIONS${C_RESET}
+  --permission-mode <mode>   acceptEdits, plan, auto, manual, dontAsk,
+                             bypassPermissions
   --dangerously-skip-permissions
-      Answer with all permission checks bypassed, so Claude may edit files and
-      run commands without asking. Applies to this one invocation only.
-      The warning goes to stderr, so piped output is unaffected.
+                             the loud spelling of bypassPermissions
+  --model <model>            opus, sonnet, haiku, or a full model id
+  --effort <level>           low, medium, high, xhigh, max
+  --output-format <fmt>      text (default), json, stream-json
+  --json-schema <schema>     JSON Schema for structured output
+  --max-budget-usd <amount>  cap what this one call may spend
+  -- <args...>               passed to Claude Code verbatim
+
+Everything here applies to this one invocation; nothing is recorded. Warnings
+go to stderr, so piped output stays clean.
+
+Structured output makes cx ask usable from a script:
+
+  cx ask web1:api --output-format json "which tests are failing?" | jq -r .result
 
 For an interactive conversation, use cx open instead.
 EOF
@@ -51,14 +68,41 @@ EOF
       ;;
   esac
 
-  # The flag is recognised anywhere in the argv; the first remaining word is
+  # Options are recognised anywhere in the argv; the first remaining word is
   # the target and the rest is the question. Assembled in place rather than
   # re-set with eval, so a prompt containing quotes or $(...) is never
   # re-parsed — the same reason it travels to the server on stdin.
-  local dangerous=0
+  cx_claude_opts_reset
+  local passthru=() used=0 rc=0
   while [ $# -gt 0 ]; do
+    if [ "$1" = "--" ]; then
+      shift
+      while [ $# -gt 0 ]; do
+        passthru=("${passthru[@]+"${passthru[@]}"}" "$1")
+        shift
+      done
+      break
+    fi
+
+    rc=0
+    used=$(cx_claude_opt "$1" "${2:-}") || rc=$?
+    if [ "$rc" = 0 ]; then
+      shift "$used"
+      continue
+    fi
+    [ "$rc" = 2 ] && return 3
+
     case "$1" in
-      --dangerously-skip-permissions) dangerous=1 ;;
+      # Print-mode options, meaningful only because cx ask runs claude -p.
+      --output-format | --json-schema | --max-budget-usd)
+        [ -n "${2:-}" ] || {
+          err "$1 needs a value"
+          return 3
+        }
+        _ask_args=("${_ask_args[@]+"${_ask_args[@]}"}" "$1" "$2")
+        _ask_needs_agent=1
+        shift
+        ;;
       *)
         if [ -z "$target" ]; then
           target="$1"
@@ -105,18 +149,22 @@ EOF
     cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
   fi
 
-  local danger_args=()
-  if [ "$dangerous" = 1 ]; then
-    cx_agent_supports "$CX_T_HOST" \
-      "--dangerously-skip-permissions" 0.2.1 "$ver" || return 1
-    danger_args=(--dangerous)
+  cx_claude_opts_ok "$CX_T_HOST" "$ver" || return 1
+  if [ "$_ask_needs_agent" = 1 ] || [ ${#passthru[@]} -gt 0 ]; then
+    cx_agent_supports "$CX_T_HOST" "these Claude options" 0.3.0 "$ver" || return 1
+  fi
+
+  if [ "$CX_CLAUDE_PERM_MODE" = bypassPermissions ]; then
     # stderr, not stdout: cx ask is built to be piped, and a warning in the
     # answer would corrupt whatever consumes it.
     warn "answering with ALL permission checks bypassed"
   fi
 
-  # Prompt travels on stdin; only the target is passed as arguments.
+  # Prompt travels on stdin; only the target and options are arguments.
   cx_target_args
+  local sep=()
+  [ ${#passthru[@]} -gt 0 ] && sep=(--)
+
   local opts
   opts=$(cx_ssh_opts)
   # shellcheck disable=SC2086
@@ -124,5 +172,7 @@ EOF
     ssh $opts "$CX_T_HOST" \
       "$CX_AGENT_PATH$(cx_remote_quote ask "$CX_T_PROJECT" \
         "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" \
-        "${danger_args[@]+"${danger_args[@]}"}")"
+        "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
+        "${_ask_args[@]+"${_ask_args[@]}"}" \
+        "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}")"
 }

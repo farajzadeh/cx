@@ -23,10 +23,12 @@
 set -eu
 
 # 0.2.0 added --worktree/--session to open, stop, ask and path, plus the
-# worktree subcommand. 0.2.1 added --dangerous to open and ask. The client
-# feature-gates on this: an older agent would reject the new flags as unknown
-# options, which says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.2.1"
+# worktree subcommand. 0.2.1 added --dangerous to open and ask. 0.3.0 added
+# --permission-mode/--model/--effort, `--` passthrough, ask's print-mode
+# options, and recorded perm_mode in place of the `dangerous` boolean. The
+# client feature-gates on this: an older agent would reject the new flags as
+# unknown options, which says nothing about needing to re-provision.
+CX_AGENT_VERSION="0.3.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -180,6 +182,24 @@ _validate_label() {
   esac
 }
 
+# Claude Code's own choice lists. Validated here as well as in the client so
+# a typo is a sentence rather than a pane that exits before you can read it.
+# Deliberately not validating --model: aliases, full ids and future models all
+# arrive here, and a stale allowlist would reject a model that works.
+_validate_perm_mode() {
+  case "$1" in
+    acceptEdits | auto | bypassPermissions | manual | dontAsk | plan) ;;
+    *) die "unknown permission mode: $1 (acceptEdits, auto, bypassPermissions, manual, dontAsk, plan)" 3 ;;
+  esac
+}
+
+_validate_effort() {
+  case "$1" in
+    low | medium | high | xhigh | max) ;;
+    *) die "unknown effort level: $1 (low, medium, high, xhigh, max)" 3 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Naming: units, slugs and tmux sessions
 # ---------------------------------------------------------------------------
@@ -285,6 +305,29 @@ _unit_dir() {
 # install locations explicitly. The explicit list matters because tmux may
 # reuse an already-running server whose environment predates our PATH fix, so
 # anything we hand to `tmux send-keys` must not depend on PATH at all.
+# _claude_supports BIN FLAG — does the installed Claude Code accept FLAG?
+#
+# Worth a subprocess because the alternative fails in the worst possible way:
+# an unknown flag makes claude exit immediately inside the tmux pane, so the
+# session appears to open and is then just a dead shell, with the actual error
+# already scrolled past. Checking first turns that into a sentence.
+#
+# Degrades to "yes" when --help cannot be read at all: a probe that itself
+# failed is not evidence of anything, and refusing to open would be worse than
+# letting claude report the problem itself.
+_CLAUDE_HELP=""
+_claude_supports() {
+  local bin="$1" flag="$2"
+  if [ -z "$_CLAUDE_HELP" ]; then
+    _CLAUDE_HELP=$("$bin" --help 2>/dev/null || printf '')
+    [ -n "$_CLAUDE_HELP" ] || return 0
+  fi
+  case "$_CLAUDE_HELP" in
+    *"$flag"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _find_claude() {
   local c
   if c=$(command -v claude 2>/dev/null) && [ -n "$c" ]; then
@@ -445,24 +488,25 @@ _session_uuid_set() {
   trap - EXIT INT TERM
 }
 
-# _session_set_dangerous SLUG true|false — record how a session was STARTED.
+# _session_set_perm_mode SLUG MODE — record how a session was STARTED.
 #
 # Permission mode is fixed when the pane's claude process launches, so it
-# cannot be changed by reattaching. Recording it is what lets `cx status` show
-# which live sessions are running unguarded, and lets a later `cx open` say so
-# instead of silently handing over an unguarded terminal.
+# cannot be changed by reattaching, and from inside an attached session there
+# is nothing to see — the prompts simply never come. Recording it is what lets
+# `cx status` show it and a later `cx open` say so instead of silently handing
+# over a session running under rules you did not choose.
 #
-# `false` DELETES the key rather than storing it. Two reasons: absent already
-# means guarded everywhere that reads it, and storing the negative would
-# create an entry for every session that has nothing else worth recording —
-# turning this file from a list of pins into a list of every session ever
-# opened. Clearing still has to happen explicitly, because a previous session
-# under the same slug may have set it and a stale `true` would make cx status
-# lie in the direction that matters.
-_session_set_dangerous() {
+# An empty MODE DELETES the key rather than storing a default. Two reasons:
+# absent already means "Claude's own default" everywhere that reads it, and
+# storing the negative would create an entry for every session that has
+# nothing else worth recording — turning this file from a list of pins into a
+# list of every session ever opened. Clearing still has to happen explicitly,
+# because a previous session under the same slug may have set it and a stale
+# value would make cx status lie about the session running now.
+_session_set_perm_mode() {
   # Nothing to clear and nothing to record: leave the file untouched, and do
-  # not create it just to say "no".
-  if [ "$2" != true ] && [ ! -e "$CX_SESSIONS" ]; then
+  # not create it just to say "default".
+  if [ -z "$2" ] && [ ! -e "$CX_SESSIONS" ]; then
     return 0
   fi
   _sessions_ensure
@@ -472,11 +516,13 @@ _session_set_dangerous() {
   # has($s) rather than a null test: `.sessions[$s] |= ...` on a missing key
   # CREATES it holding null, which is how an "entry created for every session
   # ever opened" crept back in via the clearing path.
-  jq --arg s "$1" --argjson d "$2" '
-    if $d then
-      .sessions[$s] = ((.sessions[$s] // {}) + {dangerous: true})
+  jq --arg s "$1" --arg m "$2" '
+    if $m != "" then
+      .sessions[$s] = ((.sessions[$s] // {}) + {perm_mode: $m})
     elif (.sessions | has($s)) then
-      .sessions[$s] |= del(.dangerous)
+      # `dangerous` is the pre-0.3.0 spelling; drop it here too so an upgraded
+      # agent does not leave a stale marker behind after a plain restart.
+      .sessions[$s] |= (del(.perm_mode) | del(.dangerous))
       # An entry that held nothing but the marker is now empty; drop it.
       | if .sessions[$s] == {} then del(.sessions[$s]) else . end
     else . end' \
@@ -489,11 +535,19 @@ _session_set_dangerous() {
   trap - EXIT INT TERM
 }
 
-# _session_is_dangerous SLUG — true if that session was started unguarded.
+# _session_perm_mode SLUG — the recorded mode, or empty.
+# Falls back to the boolean `dangerous` that 0.2.1 wrote, so a session started
+# before an agent upgrade is still reported correctly while it keeps running.
+_session_perm_mode() {
+  [ -e "$CX_SESSIONS" ] || return 0
+  jq -r --arg s "$1" \
+    '.sessions[$s] | (.perm_mode // (if .dangerous == true then "bypassPermissions" else "" end)) // ""' \
+    "$CX_SESSIONS" 2>/dev/null || printf ''
+}
+
+# _session_is_dangerous SLUG — true if that session bypasses every check.
 _session_is_dangerous() {
-  [ -e "$CX_SESSIONS" ] || return 1
-  jq -e --arg s "$1" '.sessions[$s].dangerous == true' \
-    "$CX_SESSIONS" >/dev/null 2>&1
+  [ "$(_session_perm_mode "$1")" = bypassPermissions ]
 }
 
 # _session_forget UNIT — drop UNIT's pins, its labelled sessions, and (when
@@ -986,6 +1040,9 @@ EOF
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
   local name="" wt="" label="" mode="continue" dangerous=0
+  local perm_mode="" model="" effort=""
+  # Everything after `--`, quoted individually and handed to claude verbatim.
+  local passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --mode)
@@ -1000,19 +1057,56 @@ cmd_open() {
         shift
         label="${1:-}"
         ;;
+      --permission-mode)
+        shift
+        perm_mode="${1:-}"
+        ;;
+      --model)
+        shift
+        model="${1:-}"
+        ;;
+      --effort)
+        shift
+        effort="${1:-}"
+        ;;
       --dangerous) dangerous=1 ;;
+      --)
+        shift
+        while [ $# -gt 0 ]; do
+          passthru=("${passthru[@]+"${passthru[@]}"}" "$1")
+          shift
+        done
+        break
+        ;;
       -*) die "unknown option: $1" 3 ;;
       *) [ -z "$name" ] && name="$1" ;;
     esac
     shift
   done
 
-  [ -n "$name" ] || die "usage: cx-agent open <name> [--worktree W] [--session L] [--mode MODE] [--dangerous]" 3
+  [ -n "$name" ] || die "usage: cx-agent open <name> [--worktree W] [--session L] [--mode MODE] [OPTIONS] [-- ARGS]" 3
   have tmux || die "tmux is not installed on this server" 1
   if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
   if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
-  if [ "$dangerous" = 1 ] && [ "$mode" = shell ]; then
-    die "--dangerous is meaningless with --mode shell: no Claude is started" 3
+
+  # --dangerous is the loud spelling of one particular permission mode. Accept
+  # both, refuse to guess when they disagree.
+  if [ "$dangerous" = 1 ]; then
+    if [ -n "$perm_mode" ] && [ "$perm_mode" != bypassPermissions ]; then
+      die "--dangerous conflicts with --permission-mode $perm_mode" 3
+    fi
+    perm_mode=bypassPermissions
+  fi
+  [ -n "$perm_mode" ] && _validate_perm_mode "$perm_mode"
+  [ -n "$effort" ] && _validate_effort "$effort"
+
+  if [ "$mode" = shell ]; then
+    # A shell session runs no Claude, so every one of these would be dropped
+    # on the floor. Saying so beats appearing to honour them.
+    if [ -n "$perm_mode" ] || [ -n "$model" ] || [ -n "$effort" ] ||
+      [ ${#passthru[@]} -gt 0 ]; then
+      die "--mode shell starts no Claude, so Claude options have no effect" 3
+    fi
   fi
 
   _registry_ensure
@@ -1029,20 +1123,56 @@ cmd_open() {
   pane="=$tname:"
 
   if ! _tmux_has "$tname"; then
-    tmux new-session -d -s "$tname" -c "$dir" || die "could not create tmux session" 1
+    # EVERYTHING that can fail happens before new-session. Creating the tmux
+    # session first and then dying leaves an empty session behind that the
+    # next `cx open` cheerfully reattaches to, so the failure turns into a
+    # dead shell that claims to be your project.
+    #
     # The absolute path, not a bare `claude`: tmux may attach to an existing
     # server whose environment was captured before our PATH fix, in which case
     # a bare name would not resolve inside the pane.
     local claude_bin uuid=""
     claude_bin=$(_find_claude) || claude_bin=claude
 
-    # A literal, appended to the command line rather than passed through cx_q:
-    # it contains no user data, so there is nothing here to quote.
-    local danger=""
-    if [ "$dangerous" = 1 ]; then
-      danger=" --dangerously-skip-permissions"
+    # Options common to every mode, assembled once. EVERY value goes through
+    # cx_q: this string becomes a command line inside the pane, so a model
+    # name or a passed-through argument containing a space or a quote would
+    # otherwise be re-split by the pane's shell.
+    local opts="" a
+    if [ -n "$perm_mode" ]; then
+      _claude_supports "$claude_bin" --permission-mode ||
+        die "the Claude Code on this server has no --permission-mode; upgrade it" 1
+      opts="$opts --permission-mode $(cx_q "$perm_mode")"
+    fi
+    if [ -n "$model" ]; then
+      opts="$opts --model $(cx_q "$model")"
+    fi
+    if [ -n "$effort" ]; then
+      _claude_supports "$claude_bin" --effort ||
+        die "the Claude Code on this server has no --effort; upgrade it" 1
+      opts="$opts --effort $(cx_q "$effort")"
+    fi
+
+    # Name the session after its cx slug so it is identifiable from INSIDE:
+    # Claude shows it in the prompt box, the /resume picker and the terminal
+    # title. Added silently and only when supported — it is a convenience, and
+    # an older Claude Code must not fail to start over one.
+    if _claude_supports "$claude_bin" "-n, --name"; then
+      opts="$opts --name $(cx_q "$slug")"
+    fi
+
+    for a in "${passthru[@]+"${passthru[@]}"}"; do
+      opts="$opts $(cx_q "$a")"
+    done
+
+    # Past the point of no return: from here nothing else can refuse.
+    tmux new-session -d -s "$tname" -c "$dir" || die "could not create tmux session" 1
+
+    if [ "$perm_mode" = bypassPermissions ]; then
       log "WARNING: starting $slug with ALL permission checks bypassed"
       log "         Claude will not ask before editing files or running commands"
+    elif [ -n "$perm_mode" ]; then
+      log "note: starting $slug with permission mode $perm_mode"
     fi
 
     case "$mode" in
@@ -1056,35 +1186,47 @@ cmd_open() {
           local flag=--session-id
           [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && flag=--resume
           tmux send-keys -t "$pane" \
-            "$(cx_q "$claude_bin") $flag $(cx_q "$uuid")$danger" C-m
+            "$(cx_q "$claude_bin") $flag $(cx_q "$uuid")$opts" C-m
         else
           # No id could be generated (no uuidgen, no /dev/urandom, no procfs).
           # Degrade to the old single-session behavior rather than refusing.
           tmux send-keys -t "$pane" \
-            "$(cx_q "$claude_bin") --continue$danger 2>/dev/null || $(cx_q "$claude_bin")$danger" C-m
+            "$(cx_q "$claude_bin") --continue$opts 2>/dev/null || $(cx_q "$claude_bin")$opts" C-m
         fi
         ;;
-      resume) tmux send-keys -t "$pane" "$(cx_q "$claude_bin") --resume$danger" C-m ;;
+      resume) tmux send-keys -t "$pane" "$(cx_q "$claude_bin") --resume$opts" C-m ;;
       shell) : ;;
       *) die "unknown mode: $mode" 3 ;;
     esac
 
-    # Record how it was started, including when it was NOT dangerous: a
-    # previous session under the same slug may have been, and a stale `true`
-    # would make cx status lie in the direction that matters.
+    # Record how it was started, including when the mode is Claude's default:
+    # a previous session under the same slug may have set one, and a stale
+    # value would describe a session that is no longer running.
     if [ "$mode" != shell ]; then
-      _session_set_dangerous "$slug" "$([ "$dangerous" = 1 ] && printf true || printf false)" || true
+      _session_set_perm_mode "$slug" "$perm_mode" || true
     fi
   else
-    # Reattaching. Permission mode was fixed when the pane's claude launched,
-    # so neither passing the flag nor omitting it changes anything now — and
-    # the difference is invisible once you are attached. Say so both ways.
-    if _session_is_dangerous "$slug"; then
+    # Reattaching. Everything above was fixed when the pane's claude launched,
+    # so passing these options now changes nothing — and the difference is
+    # invisible once you are attached. Say so in both directions.
+    local live_mode
+    live_mode=$(_session_perm_mode "$slug")
+
+    if [ "$live_mode" = bypassPermissions ]; then
       log "WARNING: $slug is already running with ALL permission checks bypassed"
-      [ "$dangerous" = 1 ] || log "         (restart it with: cx stop, then cx open)"
-    elif [ "$dangerous" = 1 ]; then
-      log "note: $slug is already running WITH permission checks; --dangerously-skip-permissions"
-      log "      cannot be applied to a live session. Stop it first to change that."
+      [ "$perm_mode" = bypassPermissions ] ||
+        log "         (restart it with: cx stop, then cx open)"
+    elif [ -n "$live_mode" ] && [ "$live_mode" != "$perm_mode" ]; then
+      log "note: $slug is already running with permission mode $live_mode"
+    fi
+
+    if [ -n "$perm_mode" ] && [ "$perm_mode" != "$live_mode" ]; then
+      log "note: --permission-mode cannot be applied to a live session."
+      log "      Stop it first: cx stop, then cx open."
+    fi
+    if [ -n "$model" ] || [ -n "$effort" ] || [ ${#passthru[@]} -gt 0 ]; then
+      log "note: $slug is already running; model, effort and passed-through"
+      log "      options only apply when a session is created."
     fi
   fi
 
@@ -1215,7 +1357,14 @@ EOF
               attached:  ($r[1] != "0"),
               created:   ($r[2] | tonumber? // null),
               windows:   ($r[3] | tonumber? // null),
-              dangerous: (($pins.sessions[$target].dangerous) // false)
+              # `dangerous` is the pre-0.3.0 spelling, still honoured so a
+              # session started before an agent upgrade reports correctly
+              # while it keeps running.
+              mode:      ($pins.sessions[$target] as $e
+                          | $e.perm_mode
+                            // (if $e.dangerous == true then "bypassPermissions" else null end)),
+              dangerous: (($pins.sessions[$target] as $e
+                           | $e.perm_mode == "bypassPermissions" or $e.dangerous == true) // false)
             })
       | {host: $host, sessions: .}'
 }
@@ -1413,6 +1562,8 @@ cmd_worktree() {
 # to mangle this way, and there is no length limit to worry about.
 cmd_ask() {
   local name="" wt="" label="" dangerous=0
+  local perm_mode="" model="" effort="" out_format="" schema="" budget=""
+  local passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --worktree)
@@ -1423,14 +1574,59 @@ cmd_ask() {
         shift
         label="${1:-}"
         ;;
+      --permission-mode)
+        shift
+        perm_mode="${1:-}"
+        ;;
+      --model)
+        shift
+        model="${1:-}"
+        ;;
+      --effort)
+        shift
+        effort="${1:-}"
+        ;;
+      --output-format)
+        shift
+        out_format="${1:-}"
+        ;;
+      --json-schema)
+        shift
+        schema="${1:-}"
+        ;;
+      --max-budget-usd)
+        shift
+        budget="${1:-}"
+        ;;
       --dangerous) dangerous=1 ;;
+      --)
+        shift
+        while [ $# -gt 0 ]; do
+          passthru=("${passthru[@]+"${passthru[@]}"}" "$1")
+          shift
+        done
+        break
+        ;;
       -*) die "unknown option: $1" 3 ;;
       *) [ -z "$name" ] && name="$1" ;;
     esac
     shift
   done
 
-  [ -n "$name" ] || die "usage: cx-agent ask <name> [--worktree W] [--session L] [--dangerous]  (prompt on stdin)" 3
+  [ -n "$name" ] || die "usage: cx-agent ask <name> [OPTIONS] [-- ARGS]  (prompt on stdin)" 3
+
+  if [ "$dangerous" = 1 ]; then
+    if [ -n "$perm_mode" ] && [ "$perm_mode" != bypassPermissions ]; then
+      die "--dangerous conflicts with --permission-mode $perm_mode" 3
+    fi
+    perm_mode=bypassPermissions
+  fi
+  [ -n "$perm_mode" ] && _validate_perm_mode "$perm_mode"
+  [ -n "$effort" ] && _validate_effort "$effort"
+  case "${out_format:-text}" in
+    text | json | stream-json) ;;
+    *) die "unknown output format: $out_format (text, json, stream-json)" 3 ;;
+  esac
   if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
   if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
 
@@ -1447,13 +1643,23 @@ cmd_ask() {
 
   cd "$dir" || die "cannot enter $dir" 1
 
-  # Unlike open, this is a fresh process every time, so the mode applies to
-  # this invocation only and there is nothing to record.
-  local danger_args=()
-  if [ "$dangerous" = 1 ]; then
-    danger_args=(--dangerously-skip-permissions)
-    log "WARNING: answering with ALL permission checks bypassed"
+  # Unlike open, this is a fresh process every time, so all of this applies to
+  # this invocation only and there is nothing to record. Real argv here, not a
+  # command line — nothing is going through a shell, so nothing needs quoting.
+  local opt_args=()
+  if [ -n "$perm_mode" ]; then
+    opt_args=("${opt_args[@]+"${opt_args[@]}"}" --permission-mode "$perm_mode")
+    [ "$perm_mode" = bypassPermissions ] &&
+      log "WARNING: answering with ALL permission checks bypassed"
   fi
+  [ -n "$model" ] && opt_args=("${opt_args[@]+"${opt_args[@]}"}" --model "$model")
+  [ -n "$effort" ] && opt_args=("${opt_args[@]+"${opt_args[@]}"}" --effort "$effort")
+  [ -n "$out_format" ] && opt_args=("${opt_args[@]+"${opt_args[@]}"}" --output-format "$out_format")
+  [ -n "$schema" ] && opt_args=("${opt_args[@]+"${opt_args[@]}"}" --json-schema "$schema")
+  [ -n "$budget" ] && opt_args=("${opt_args[@]+"${opt_args[@]}"}" --max-budget-usd "$budget")
+  for _a in "${passthru[@]+"${passthru[@]}"}"; do
+    opt_args=("${opt_args[@]+"${opt_args[@]}"}" "$_a")
+  done
 
   # Without a label this stays what it always was: a one-shot with no history.
   # With one, the question joins that named session's conversation, so `cx ask
@@ -1468,11 +1674,11 @@ cmd_ask() {
       # value, so with the prompt in between it would swallow the prompt as the
       # session id and leave Claude with nothing to answer.
       exec "$claude_bin" "$flag" "$uuid" \
-        "${danger_args[@]+"${danger_args[@]}"}" -p "$prompt"
+        "${opt_args[@]+"${opt_args[@]}"}" -p "$prompt"
     fi
   fi
 
-  "$claude_bin" "${danger_args[@]+"${danger_args[@]}"}" -p "$prompt"
+  "$claude_bin" "${opt_args[@]+"${opt_args[@]}"}" -p "$prompt"
 }
 
 # ---------------------------------------------------------------------------
@@ -1570,14 +1776,19 @@ cx-agent — server-side helper for cx (not intended for direct use)
   new <name> [--repo URL] [--root DIR]
   rm <name> [--purge]
   path <name> [--worktree W]
-  open <name> [--worktree W] [--session L] [--dangerous]
-              --mode continue|resume|shell
+  open <name> [--worktree W] [--session L] --mode continue|resume|shell
+              [--permission-mode M] [--model M] [--effort E] [--dangerous]
+              [-- CLAUDE_ARGS...]
   stop <name> [--worktree W] [--session L] [--all]
   sessions                      live cx tmux sessions
-  ask <name> [--worktree W] [--session L] [--dangerous]   claude -p (stdin)
+  ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
+             [--effort E] [--output-format F] [--json-schema S]
+             [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
 
---dangerous passes --dangerously-skip-permissions to Claude Code. For open it
-applies only when the session is created, and is recorded so it stays visible.
+Claude options apply when a session is CREATED; reattaching cannot change
+them. The permission mode is recorded so cx status can show it. --dangerous is
+the loud spelling of --permission-mode bypassPermissions. Anything after `--`
+is passed to Claude Code verbatim.
   worktree add <project> <name> [--branch B] [--from REF]
   worktree list <project>
   worktree rm <project> <name> [--force]

@@ -149,6 +149,115 @@ cx_agent_units_ok() {
   cx_agent_supports "$1" "worktrees and named sessions" 0.2.0 "${2:-}"
 }
 
+# ---------------------------------------------------------------------------
+# Claude options
+# ---------------------------------------------------------------------------
+#
+# The options cx forwards to Claude Code, shared by open/resume and ask
+# because both mean exactly the same thing by them. Validated here so a typo
+# costs nothing — for cx open the alternative is a tmux session that appears
+# to start and is really a dead shell, with claude's error already gone.
+
+# Set by cx_claude_opt; append to an agent invocation as
+#   "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}"
+CX_CLAUDE_ARGS=()
+CX_CLAUDE_PERM_MODE=""
+CX_CLAUDE_MIN_AGENT=""
+
+cx_claude_opts_reset() {
+  CX_CLAUDE_ARGS=()
+  CX_CLAUDE_PERM_MODE=""
+  CX_CLAUDE_MIN_AGENT=""
+}
+
+_cx_claude_add() {
+  CX_CLAUDE_ARGS=("${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" "$@")
+}
+
+# _cx_claude_need VERSION — raise the agent version these options require.
+#
+# Per-option rather than one blanket minimum, so someone on an agent that
+# already understands a flag is not told to re-provision for it.
+_cx_claude_need() {
+  if [ -z "$CX_CLAUDE_MIN_AGENT" ] || ! cx_version_ge "$CX_CLAUDE_MIN_AGENT" "$1"; then
+    CX_CLAUDE_MIN_AGENT="$1"
+  fi
+}
+
+# cx_claude_opt FLAG [VALUE] — consume one option, or return 1 if unrecognised.
+#
+# Prints how many argv words it used, so the caller's loop knows whether to
+# shift once or twice. Returns 1 without printing when FLAG is not ours, which
+# is how each command keeps its own options separate from these.
+cx_claude_opt() {
+  local flag="$1" value="${2:-}"
+
+  case "$flag" in
+    --permission-mode)
+      case "$value" in
+        acceptEdits | auto | bypassPermissions | manual | dontAsk | plan) ;;
+        "")
+          err "--permission-mode needs a value"
+          hint "one of: acceptEdits, auto, bypassPermissions, manual, dontAsk, plan"
+          return 2
+          ;;
+        *)
+          err "unknown permission mode: $value"
+          hint "one of: acceptEdits, auto, bypassPermissions, manual, dontAsk, plan"
+          return 2
+          ;;
+      esac
+      CX_CLAUDE_PERM_MODE="$value"
+      _cx_claude_add --permission-mode "$value"
+      _cx_claude_need 0.3.0
+      printf 2
+      ;;
+    # The loud spelling of one particular mode, kept because it is what Claude
+    # Code itself calls the thing and what people search for.
+    --dangerously-skip-permissions)
+      CX_CLAUDE_PERM_MODE=bypassPermissions
+      _cx_claude_add --dangerous
+      _cx_claude_need 0.2.1
+      printf 1
+      ;;
+    --model)
+      [ -n "$value" ] || {
+        err "--model needs a value (e.g. opus, sonnet, haiku, or a full model id)"
+        return 2
+      }
+      _cx_claude_add --model "$value"
+      _cx_claude_need 0.3.0
+      printf 2
+      ;;
+    --effort)
+      case "$value" in
+        low | medium | high | xhigh | max) ;;
+        *)
+          err "unknown effort level: ${value:-(missing)}"
+          hint "one of: low, medium, high, xhigh, max"
+          return 2
+          ;;
+      esac
+      _cx_claude_add --effort "$value"
+      _cx_claude_need 0.3.0
+      printf 2
+      ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+# cx_claude_needs_agent — were any of these options given at all?
+cx_claude_needs_agent() {
+  [ -n "$CX_CLAUDE_MIN_AGENT" ]
+}
+
+# cx_claude_opts_ok HOST [VERSION] — the version gate for whatever was given.
+cx_claude_opts_ok() {
+  [ -n "$CX_CLAUDE_MIN_AGENT" ] || return 0
+  cx_agent_supports "$1" "these Claude options" "$CX_CLAUDE_MIN_AGENT" "${2:-}"
+}
+
 # cx_target_resolve TARGET — resolve fully, consulting servers if needed.
 cx_target_resolve() {
   local t="${1:-}"

@@ -27,8 +27,9 @@ they are what you type after the host:
   web1   api           review
   web1   api/authfix   —          ->  cx open web1:api/authfix
 
-MODE flags a session started with --dangerously-skip-permissions as
-${C_BOLD}no-perms${C_RESET}. A live session's permission mode cannot be changed and is
+MODE is the permission mode the session was started with — ${C_BOLD}acceptEdits${C_RESET},
+${C_BOLD}plan${C_RESET}, and so on, with bypassPermissions shown as ${C_BOLD}no-perms${C_RESET}. Blank means
+Claude's default. A live session's permission mode cannot be changed and is
 invisible from inside it, so this is the only place it shows.
 EOF
       return 0
@@ -67,7 +68,13 @@ EOF
         | [ $h,
             ((.target // .project) | sub("@.*$"; "")),
             (.label // "—"),
-            (if .dangerous then "no-perms" else "" end),
+            # bypassPermissions gets the blunt name: it is the one worth
+            # spotting across a screenful of sessions. `.dangerous` alone is
+            # what a pre-0.3.0 agent reports.
+            (if   .mode == "bypassPermissions" then "no-perms"
+             elif .mode != null                then .mode
+             elif .dangerous                   then "no-perms"
+             else "" end),
             (if .attached then "attached" else "detached" end),
             (if .created == null then "—"
              else ($now - .created) as $a

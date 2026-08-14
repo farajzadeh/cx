@@ -25,11 +25,40 @@ mode=interactive
 tag=plain
 prompt=""
 danger=no
+perm=""
+model=""
+effort=""
+dispname=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --version)
       echo "9.9.9 (Claude Code stub)"
+      exit 0
+      ;;
+    # The agent greps --help before passing a newer flag, so that an old
+    # Claude Code produces a sentence rather than a pane that exits before you
+    # can read the error. This list is what the stub claims to accept; drop a
+    # line from it to test the refusal path.
+    --help)
+      cat <<'HELP'
+Usage: claude [options] [command] [prompt]
+
+Options:
+  -c, --continue                        Continue the most recent conversation
+  -r, --resume [value]                  Resume a conversation by session ID
+  --session-id <uuid>                   Use a specific session ID
+  --permission-mode <mode>              Permission mode for the session
+  --dangerously-skip-permissions        Bypass all permission checks.
+  --model <model>                       Model for the current session
+  --effort <level>                      Effort level for the current session
+  -n, --name <name>                     Set a display name for this session
+  --add-dir <directories...>            Additional directories
+  --output-format <format>              Output format
+  --json-schema <schema>                JSON Schema for structured output
+  --max-budget-usd <amount>             Maximum dollar amount
+  -p, --print                           Print response and exit
+HELP
       exit 0
       ;;
     -p | --print) mode=print ;;
@@ -52,6 +81,23 @@ while [ $# -gt 0 ]; do
       ;;
     --continue) tag='continue' ;;
     --dangerously-skip-permissions) danger=yes ;;
+    --permission-mode)
+      shift
+      perm="${1:-}"
+      [ "$perm" = bypassPermissions ] && danger=yes
+      ;;
+    --model)
+      shift
+      model="${1:-}"
+      ;;
+    --effort)
+      shift
+      effort="${1:-}"
+      ;;
+    -n | --name)
+      shift
+      dispname="${1:-}"
+      ;;
     -*) ;; # any other flag: ignored
     *) prompt="${prompt:+$prompt }$1" ;;
   esac
@@ -59,12 +105,17 @@ while [ $# -gt 0 ]; do
 done
 
 # Record every invocation so a test can inspect the full argv history.
-printf '%s\t%s\t%s\t%s\t%s\n' "$(pwd)" "$mode" "$tag" "$session" "$danger" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$(pwd)" "$mode" "$tag" "$session" "$danger" "$perm" "$model" "$effort" \
   >>"${CX_STUB_LOG:-$HOME/.cx-claude-stub.log}" 2>/dev/null || true
 
 # The marker is printed rather than only logged, because a tmux pane is all a
 # test can see for an interactive session.
 [ "$danger" = yes ] && echo "STUB_NO_PERMISSIONS"
+[ -n "$perm" ] && echo "STUB_PERM_MODE: $perm"
+[ -n "$model" ] && echo "STUB_MODEL: $model"
+[ -n "$effort" ] && echo "STUB_EFFORT: $effort"
+[ -n "$dispname" ] && echo "STUB_NAME: $dispname"
 
 if [ "$mode" = print ]; then
   [ -n "$session" ] && echo "STUB_SESSION: $session"

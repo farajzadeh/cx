@@ -9,14 +9,38 @@
 . "$CX_HOME/lib/target.sh"
 
 _open_common() {
-  local mode="$1" target="" dangerous=0
+  local mode="$1" target="" used=0
   shift
 
+  cx_claude_opts_reset
+  local passthru=()
+
   while [ $# -gt 0 ]; do
+    # Everything after `--` goes to Claude Code verbatim. Collected first so a
+    # passed-through flag is never mistaken for one of ours.
+    if [ "$1" = "--" ]; then
+      shift
+      while [ $# -gt 0 ]; do
+        passthru=("${passthru[@]+"${passthru[@]}"}" "$1")
+        shift
+      done
+      break
+    fi
+
+    # Captured explicitly rather than testing $? inside an elif, where it
+    # would silently start referring to whatever ran last.
+    local rc=0
+    used=$(cx_claude_opt "$1" "${2:-}") || rc=$?
+    if [ "$rc" = 0 ]; then
+      shift "$used"
+      continue
+    fi
+    [ "$rc" = 2 ] && return 3 # cx_claude_opt already said what was wrong
+
     case "$1" in
-      --dangerously-skip-permissions) dangerous=1 ;;
       -*)
         err "unknown option: $1"
+        hint "to pass it to Claude Code instead: cx $mode <target> -- $1"
         return 3
         ;;
       *) [ -z "$target" ] && target="$1" ;;
@@ -31,9 +55,10 @@ _open_common() {
     return 3
   }
 
-  if [ "$dangerous" = 1 ] && [ "$mode" = shell ]; then
-    err "--dangerously-skip-permissions does nothing for cx shell"
-    hint "cx shell starts no Claude; use cx open for a Claude session"
+  if [ "$mode" = shell ] &&
+    { cx_claude_needs_agent || [ ${#passthru[@]} -gt 0 ]; }; then
+    err "cx shell starts no Claude, so Claude options have no effect"
+    hint "use cx open for a Claude session"
     return 3
   fi
 
@@ -51,9 +76,10 @@ _open_common() {
   if cx_target_needs_units; then
     cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
   fi
-  if [ "$dangerous" = 1 ]; then
-    cx_agent_supports "$CX_T_HOST" \
-      "--dangerously-skip-permissions" 0.2.1 "$ver" || return 1
+  cx_claude_opts_ok "$CX_T_HOST" "$ver" || return 1
+  if [ ${#passthru[@]} -gt 0 ]; then
+    cx_agent_supports "$CX_T_HOST" "passing arguments through to Claude Code" \
+      0.3.0 "$ver" || return 1
   fi
 
   # A live session means work is already in flight; opening it is safe even if
@@ -72,14 +98,17 @@ _open_common() {
   # Said before handing over the terminal, because once tmux has it the
   # scrollback belongs to Claude and this would scroll away unread.
   cx_target_args
-  local danger_args=()
-  if [ "$dangerous" = 1 ]; then
-    danger_args=(--dangerous)
+  if [ "$CX_CLAUDE_PERM_MODE" = bypassPermissions ]; then
     warn "Starting $(cx_target_str) with ALL permission checks bypassed."
     note "  Claude will edit files and run commands without asking."
     note "  Only sensible on a server you can afford to have broken."
     say ""
   fi
+
+  # The passthrough goes last, after `--`, so the agent can tell cx's own
+  # options from the ones it must hand to Claude Code untouched.
+  local sep=()
+  [ ${#passthru[@]} -gt 0 ] && sep=(--)
 
   # Hand over the terminal. exec so cx does not linger as a parent process for
   # the whole session, and so Ctrl-C reaches tmux rather than us.
@@ -88,8 +117,9 @@ _open_common() {
   # shellcheck disable=SC2086
   exec ssh -t $opts "$CX_T_HOST" \
     "$CX_AGENT_PATH$(cx_remote_quote open "$CX_T_PROJECT" \
-      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" \
-      "${danger_args[@]+"${danger_args[@]}"}" --mode "$mode")"
+      "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" \
+      "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
+      "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}")"
 }
 
 cmd_open() {
@@ -121,16 +151,28 @@ The session survives disconnection: close your laptop, and Claude keeps
 working. Reattach with the same command. Detach without stopping: Ctrl-b d
 
 ${C_BOLD}OPTIONS${C_RESET}
+  --permission-mode <mode>
+      How much Claude asks before acting. One of:
+        acceptEdits         apply edits, still ask before running commands
+        plan                plan only, change nothing
+        auto | manual | dontAsk
+        bypassPermissions   ask for nothing at all
   --dangerously-skip-permissions
-      Start Claude with all permission checks bypassed: it edits files and
-      runs commands without asking. Claude Code recommends this only for
-      sandboxes with no internet access.
+      The loud spelling of --permission-mode bypassPermissions: Claude edits
+      files and runs commands without asking. Claude Code recommends this only
+      for sandboxes with no internet access.
+  --model <model>       opus, sonnet, haiku, or a full model id
+  --effort <level>      low, medium, high, xhigh, max
+  -- <args...>          everything after -- goes to Claude Code verbatim
 
-      It applies when the session is ${C_BOLD}created${C_RESET}, not when you reattach — a
-      live session's permission mode cannot be changed, so to turn it off,
-      cx stop the session and open it again. cx records which sessions were
-      started this way and marks them in cx status, because otherwise there
-      is no way to tell from inside.
+All of these apply when the session is ${C_BOLD}created${C_RESET}, not when you reattach: a
+live session cannot be reconfigured, so to change one, cx stop the session and
+open it again. cx records the permission mode and shows it in cx status,
+because otherwise there is no way to tell from inside a session.
+
+  cx open web1:api --permission-mode acceptEdits
+  cx open web1:api --model opus --effort high
+  cx open web1:api -- --add-dir /srv/shared
 
 Related: cx wt (worktrees), cx resume (pick an older conversation),
          cx shell (no Claude), cx status (what is running)
