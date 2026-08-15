@@ -139,6 +139,7 @@ ${C_BOLD}PARALLEL WORK${C_RESET}
   wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
   wt ls [host[:project]]                  list worktrees
   wt rm <target>/<name> [--force]         remove one (its branch is kept)
+                                          (worktree is the long spelling of wt)
   open <target>@<label>                   a second session on the same files
 
 ${C_BOLD}WORKING${C_RESET}

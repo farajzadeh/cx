@@ -38,6 +38,9 @@ docker run --rm -v "$PWD":/w -w /w bash:3.2 bash test/unit/compat.test.sh
 
 ./test/lint-portability.sh                 # the bash-3.2/BSD construct ban, alone
 ./install.sh --check                       # requirements table; writes nothing
+
+./test/doc-audit.sh                        # run what the docs promise, on a REAL server
+CX_AUDIT_HOST=web1 ./test/doc-audit.sh     # ...against a different one
 ```
 
 CI additionally runs `shellcheck` and `shfmt -d -i 2 -ci`. Run them through
@@ -339,6 +342,14 @@ is documentation of the architecture, not a snapshot taken once. Specifically:
   future instance to trip over the same thing.
 
 If a change makes something here inaccurate, the change is not finished.
+
+**`test/doc-audit.sh` checks the docs by running them.** It is not in
+`test/run.sh` because it needs a real server with Claude signed in and it
+spends tokens — but it is the only thing that catches a documented sequence
+that no longer works. It found three: `worktree` missing from the usage text,
+the environment forms of the global flags undocumented, and `cx new` followed
+by `cx wt add` failing because a fresh project has no commit to branch from.
+Run it when the docs change.
 
 ## Conventions
 

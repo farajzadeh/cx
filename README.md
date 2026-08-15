@@ -172,6 +172,10 @@ the same repository on its own branch, in its own directory. Two Claude
 sessions in two worktrees edit different files and cannot overwrite each
 other's work, which two sessions in one directory absolutely can.
 
+A worktree branches from a commit, so a project needs at least one before it
+can have any — `cx new` without `--repo` gives you an empty repository, and cx
+will say so rather than passing git's error through.
+
 ```sh
 cx wt add web1:api/authfix           # new branch 'authfix', new directory
 cx wt add web1:api/bug-123           # a second task, at the same time
@@ -357,6 +361,24 @@ existing `~/.tmux.conf` or registry, and doesn't invoke `sudo` at all when
 there's nothing to install.
 
 ---
+
+## A worked example
+
+[**farajzadeh/jalali**](https://github.com/farajzadeh/jalali) is a Persian
+calendar — an HTTP API and a web UI — built end to end by two unattended
+Claude sessions driven with cx. Its
+[wiki](https://github.com/farajzadeh/jalali/wiki) is the full walkthrough:
+the definition of done, the driver loop, the real log, and an honest page on
+what went wrong.
+
+Worth reading for the parts that are not the happy path. The reviewer session
+cross-checked 400 years of dates against ICU before the first endpoint
+existed, unpacked a browser into `/tmp` without root to test keyboard
+navigation for real, and found a holiday cache being handed out by reference —
+where one handler calling `.sort()` would have poisoned every later response
+for the life of the process.
+
+It also found three bugs in cx itself, which is the other reason it is here.
 
 ## Documentation
 

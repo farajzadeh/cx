@@ -65,6 +65,30 @@ Not in the config file; set these in the environment when you need them.
 | `CX_PEEK_TAIL` | `6` | How many of a session's last messages `cx peek --json` includes. |
 | `CX_GOAL_HOST` | — | Which server holds goals when a command does not name one. Falls back to `CX_DEFAULT_HOST`, then to the only configured server if there is just one. |
 
+## The flags, as environment variables
+
+Every global flag is also read from the environment, and deliberately so:
+`bin/cx` defaults them with `:=` rather than assigning, so a value you export
+survives. That is what lets a script or a CI job set the behaviour once
+instead of threading a flag through every call.
+
+| Variable | Flag | Set it to |
+|---|---|---|
+| `CX_JSON` | `--json` | `1` for machine-readable output |
+| `CX_REFRESH` | `-r`, `--refresh` | `1` to always fetch |
+| `CX_NO_CACHE` | `--no-cache` | `1` to bypass without writing |
+| `CX_FORCE_STALE` | `--stale` | `1` to accept cached data of any age |
+| `CX_ASSUME_YES` | `-y`, `--yes` | `1` to answer every prompt yes |
+| `CX_NO_COLOR` | `--no-color` | `1` to disable colour (`NO_COLOR` works too) |
+
+```sh
+export CX_JSON=1 CX_ASSUME_YES=1     # a cron job that parses output
+cx ls | jq '.projects[].name'
+```
+
+Resetting these unconditionally at startup would break that, and did once —
+hence the `:=`.
+
 ## Flags
 
 | Flag | Meaning |

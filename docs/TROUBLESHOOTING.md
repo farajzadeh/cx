@@ -429,6 +429,20 @@ kept alive.
 
 ---
 
+### `<project> has no commits yet — commit something before adding a worktree`
+
+A git worktree branches from a commit, and `cx new` without `--repo` leaves
+you an empty repository. Make one commit and the worktree works:
+
+```sh
+cx shell web1:api
+# then, on the server:
+git commit --allow-empty -m "init"
+```
+
+cx checks for this rather than letting git's `fatal: invalid reference` out,
+because that message names a branch you never asked for.
+
 ## Targets
 
 ### `'api' exists on more than one server`
