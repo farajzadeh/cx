@@ -1207,6 +1207,25 @@ cmd_open() {
       log "note: starting $slug with permission mode $perm_mode"
     fi
 
+    # EVERY LAUNCH BELOW IS `exec`ed, so Claude REPLACES the pane's shell
+    # instead of running as its child.
+    #
+    # Without it the pane's process is bash with Claude underneath, and exiting
+    # Claude drops whoever is attached onto a shell prompt on this server. For
+    # an operator that is merely untidy — cx already reports a shell pane as
+    # `dead` (lib/activity.sh), and `cx shell` exists for when a shell is what
+    # you actually want. For anything that hands a session to someone who is
+    # not meant to have shell access, it is a hole, and exiting Claude is the
+    # whole exploit.
+    #
+    # With exec, Claude exiting ends the pane, and with it the window and the
+    # session — which is precisely the `dead` state cx already models.
+    #
+    # The tradeoff: a Claude that dies during startup takes its error message
+    # with it, where before the message stayed on screen above a shell prompt.
+    # That is why the binary and its flags are validated above, before the
+    # point of no return; anything that survives those checks and still fails
+    # is diagnosed with `cx shell`.
     case "$mode" in
       continue)
         uuid=$(_session_uuid_ensure "$slug" "$dir" 2>/dev/null || printf '')
@@ -1218,15 +1237,25 @@ cmd_open() {
           local flag=--session-id
           [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && flag=--resume
           tmux send-keys -t "$pane" \
-            "$(cx_q "$claude_bin") $flag $(cx_q "$uuid")$opts" C-m
+            "exec $(cx_q "$claude_bin") $flag $(cx_q "$uuid")$opts" C-m
         else
           # No id could be generated (no uuidgen, no /dev/urandom, no procfs).
           # Degrade to the old single-session behavior rather than refusing.
+          #
+          # This is the one branch that keeps a `||` fallback, and a bare `exec`
+          # would destroy it: exec replaces the shell, so nothing survives to
+          # run the right-hand side when the left exits non-zero. Running the
+          # chain under `exec sh -c` keeps both properties — the fallback still
+          # fires, and the pane's root process is a NON-interactive shell that
+          # exits with the chain, so no prompt is left behind either.
+          local fallback_cmd
+          fallback_cmd="$(cx_q "$claude_bin") --continue$opts 2>/dev/null || $(cx_q "$claude_bin")$opts"
           tmux send-keys -t "$pane" \
-            "$(cx_q "$claude_bin") --continue$opts 2>/dev/null || $(cx_q "$claude_bin")$opts" C-m
+            "exec sh -c $(cx_q "$fallback_cmd")" C-m
         fi
         ;;
-      resume) tmux send-keys -t "$pane" "$(cx_q "$claude_bin") --resume$opts" C-m ;;
+      resume) tmux send-keys -t "$pane" "exec $(cx_q "$claude_bin") --resume$opts" C-m ;;
+      # `shell` is the one mode whose entire purpose is a shell. Left alone.
       shell) : ;;
       *) die "unknown mode: $mode" 3 ;;
     esac
