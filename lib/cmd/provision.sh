@@ -71,6 +71,12 @@ _provision_one() {
   # stderr is deliberately left unredirected: inside $(...) only stdout is
   # captured, so bootstrap's progress reaches the user's terminal live while
   # its final JSON line is collected here.
+  #
+  # The exception is an interactive run: with a TTY (-t), ssh runs the remote
+  # under a pseudo-terminal that MERGES its stderr into stdout, so bootstrap's
+  # error messages are captured into $summary rather than shown live. That is
+  # exactly the case where a human is watching and most wants to see what went
+  # wrong — so on failure the captured output is printed below, not discarded.
   rc=0
   # shellcheck disable=SC2086
   summary=$(ssh $tflag $opts "$alias" \
@@ -79,6 +85,14 @@ _provision_one() {
   if [ "${rc:-0}" -ne 0 ]; then
     say ""
     err "bootstrap failed on $alias"
+    # Surface what bootstrap actually said. Under a TTY this holds the full
+    # transcript including the failing line; without one it may be empty
+    # because the error already streamed live — so print only when there is
+    # something, and mark it as the remote's own words.
+    if [ -n "$summary" ]; then
+      printf '%s\n' "$summary" | tr -d '\r' | sed 's/^/  bootstrap| /' >&2
+    fi
+    hint "re-run is safe (bootstrap is idempotent): cx provision $alias"
     return 1
   fi
 
