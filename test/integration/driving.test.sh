@@ -207,6 +207,24 @@ assert_eq \
   "$(cx_run "$HOME_DIR" --json peek cx-test-web1:api | jq -r '.sessions[0].steerable')" \
   true
 
+describe "cx bar puts the same answer on one line"
+
+it "says nothing when nothing is waiting"
+# `fresh` is not waiting for an answer: nobody has asked it anything yet. An
+# empty line is the point — the tmux status bar collapses rather than holding
+# space for a message about there being no message.
+assert_eq "$(cx_run "$HOME_DIR" bar --plain)" ""
+
+it "exits 0 with nothing to say"
+run_rc cx_run "$HOME_DIR" bar
+assert_eq "$_T_RC" 0
+
+it "names the session once its state is one being watched for"
+assert_eq "$(cx_run "$HOME_DIR" bar --plain --states fresh)" "cx 1: api@impl"
+
+it "does not qualify the name with the host, there being only one"
+assert_not_contains "$(cx_run "$HOME_DIR" bar --plain --states fresh)" "cx-test-web1:"
+
 describe "a target narrows both output paths, not just the table"
 # The table filtered and --json did not, so `cx peek <target> --json` answered
 # with every session on the host. A driver taking .sessions[0] then read a
@@ -266,6 +284,9 @@ it "peek now calls it idle"
 assert_eq \
   "$(cx_run "$HOME_DIR" --json peek cx-test-web1:api | jq -r '.sessions[0].state')" \
   idle
+
+it "and the bar names it as waiting for you"
+assert_eq "$(cx_run "$HOME_DIR" bar --plain)" "cx 1: api@impl"
 
 it "the tail carries what was said"
 assert_contains \

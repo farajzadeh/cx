@@ -59,7 +59,7 @@ js() {
 
 grp "every command answers --help, exits 0, and names itself"
 for c in host provision login doctor new ls rm wt worktree open resume shell \
-  code ask peek nudge goal driver status stop cache; do
+  code ask peek nudge bar goal driver status stop cache; do
   o=$("$CX" "$c" --help 2>&1)
   r=$?
   if [ "$r" != 0 ]; then
@@ -85,6 +85,7 @@ rc 0 "$CX" ls
 rc 0 "$CX" status
 rc 0 "$CX" doctor
 rc 0 "$CX" peek
+rc 0 "$CX" bar
 rc 0 "$CX" cache status
 rc 0 "$CX" host ls
 rc 0 "$CX" wt ls
@@ -139,6 +140,14 @@ rc 0 "$CX" nudge "$T@nosuch" hello
 out "sent to" "$CX" nudge "$T@t1" "Reply with exactly DOCAUDIT-OK and nothing else."
 sleep 14
 out "DOCAUDIT-OK" tmux capture-pane -pJ -S -200 -t "=cx-$P@t1:"
+
+grp "bar (README: In the status bar)"
+# The session above has had a turn by now, so it is one the bar should name.
+# The states are spelled out rather than left to the default: whether it reads
+# idle or is still finishing is a race, and neither answer is the point here.
+out "$P@t1" "$CX" bar --plain --states blocked,idle,fresh
+out "status-right" "$CX" bar --setup
+rc 3 "$CX" bar "$T"
 
 grp "ask (README) — and the two-writer refusal"
 out "PONG" "$CX" ask "$T" "reply with exactly PONG and nothing else"

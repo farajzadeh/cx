@@ -31,6 +31,7 @@ bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
+bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
