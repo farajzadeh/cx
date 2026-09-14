@@ -33,6 +33,7 @@ bash test/unit/activity.test.sh            # session state + the transcript read
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
+bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -229,7 +230,7 @@ re-provision instead of surfacing "unknown option: --worktree".
 
 ## Driving sessions
 
-Four commands, and the split between them is invariant 11 made concrete:
+Five commands, and the split between them is invariant 11 made concrete:
 
 - **`cx peek`** — the agent's `observe` verb reports raw facts per session
   (tmux liveness, the pane's current command, the transcript's mtime and its
@@ -284,6 +285,17 @@ Four commands, and the split between them is invariant 11 made concrete:
   A consequence worth knowing before building a tab per session: the agent
   attaches with `tmux attach -d`, so **a tab takes its session from whoever
   else is attached** — and they take it back. Two places on one session fight.
+
+- **`cx tabs`** — a tab per live session in the *local* tmux. The only command
+  that touches tmux on the client, and the reason that is allowed: cx still
+  runs no Claude here and keeps no state here, and every window it opens is a
+  plain `cx open`. Enumerates with the agent's cheap `sessions` verb, not
+  `observe` — a tmux question deserves a tmux answer, one second against six —
+  and decorates the preview from the state cache for free.
+
+  One shot like everything else: it builds windows and hands over the terminal,
+  never watching for new sessions or closing tabs whose session ended.
+  Re-running is the mechanism, so a session that already has a tab is skipped.
 
 - **`cx nudge`** — types into a live session. Declines with **exit 0** and
   `sent: false` when the session is not ready, following `cmd_stop`'s

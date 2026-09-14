@@ -236,6 +236,21 @@ cannot leave a phantom client sizing the window: a tab takes its session from
 whoever else is attached. Two places attached to one session will keep taking
 it from each other.
 
+**`cx tabs`** — a tmux tab per live session, on the machine cx is running on.
+The only command that drives tmux on the *client*, which is less of a departure
+than it looks: cx still runs no Claude here and keeps no state here, every
+window it opens is a plain `cx open`, and arranging the user's own terminal is
+what a client is for.
+
+It asks the agent's `sessions` verb rather than `observe` — "is there a tmux
+session" is a tmux question answered in about a second, while observe reads a
+transcript per session and takes six. The state beside each tab comes free from
+the cache `cx bar` keeps, and is allowed to be missing.
+
+One shot, like everything else: it builds windows and hands over the terminal.
+It does not watch for new sessions or close tabs whose session ended. Re-running
+is the mechanism, which is why a session that already has a tab is skipped.
+
 **`cx nudge`** — types into a live session. It declines with **exit 0** and
 `sent: false` when the session is not ready, following the precedent that
 stopping an already-stopped project is not an error: a driver in a loop has to

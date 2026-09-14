@@ -252,14 +252,28 @@ cx bar --plain              # no tmux styling, for a shell prompt or another bar
 
 ### A tab per session
 
-The same states, one per tmux tab. `cx open` records its target on the local
-tmux window it was launched in, so a tab you open labels itself:
+The same states, one per tmux tab:
 
 ```sh
-tmux new -s cx
-cx open local:api          # this tab is now  ● api
+cx tabs          # a tab per live session, then attaches you to them
+cx tabs -n       # ...or just show what it would open
+```
+
+```
+  + web1:api                        idle
+  ! web1:api@review                 blocked   open elsewhere — this tab takes it
+  + web1:api/authfix                working
+```
+
+Re-run it whenever you start new sessions: one that already has a tab is
+skipped, and tabs are never closed for you.
+
+Tabs you open by hand work too, because `cx open` records its target on the
+local tmux window it was launched in:
+
+```sh
 # C-b c
-cx open local:api@review   # and this one     ▲ api@review
+cx open local:api@review   # this tab is now  ▲ api@review
 ```
 
 ```
@@ -289,7 +303,9 @@ Two things worth knowing before you build this layout:
   detaches whoever was already there. That is deliberate — a dropped SSH leaves
   a phantom client and tmux sizes the window to the smallest one — but it means
   a tab and a separate terminal on the same session will take it from each
-  other, repeatedly. Pick one place to attach from.
+  other, repeatedly. Pick one place to attach from. `cx tabs` marks the
+  sessions this applies to with `!` before it opens anything, and `-n` shows
+  them without acting.
 - **The tag outlives the session.** cx execs ssh, so there is no "afterwards" in
   which to clean up. A tab keeps its target until something else claims it;
   what it shows then is that session's real state, `✗` included.
