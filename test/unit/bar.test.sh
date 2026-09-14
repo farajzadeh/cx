@@ -366,6 +366,34 @@ assert_exit 3 cmd_bar --icons emoji --window web1:api
 it "prints no stray space for a tab with no icon"
 assert_eq "$(cmd_bar --icons nerd --window '')" ""
 
+describe "cx_state_seed — a just-opened session's tab"
+
+reset_hosts
+mkdir -p "$CX_CACHE_DIR"
+
+it "adds a session the cache has never seen"
+cx_state_seed web1:new fresh
+assert_eq "$(cx_state_read web1:new)" fresh
+
+it "never replaces a row that was actually observed"
+printf 'web1:api\tidle\n' >"$(cx_state_file)"
+cx_state_seed web1:api fresh
+assert_eq "$(cx_state_read web1:api)" idle
+
+it "keeps the other rows"
+cx_state_seed web1:other fresh
+assert_eq "$(cx_state_read web1:api)" idle
+
+it "keeps the file's age, so a seed cannot make an old picture look fresh"
+printf 'web1:api\tidle\n' >"$(cx_state_file)"
+touch -t 200001010000 "$(cx_state_file)"
+cx_state_seed web1:later fresh
+assert_eq "$(cx_state_read web1:api)" ""
+
+it "reads every row at once for a caller that needs them all"
+printf 'web1:a\tidle\nweb1:b\tblocked\n' >"$(cx_state_file)"
+assert_eq "$(cx_state_rows | grep -c .)" 2
+
 describe "cx bar — arguments"
 
 it "rejects an unknown state"

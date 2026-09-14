@@ -148,6 +148,7 @@ _open_common() {
         printf '%s\n' "$out"
       return 0
     fi
+    cx_state_seed "$(cx_target_str)" fresh
     local created="" tname=""
     created=$(printf '%s' "$out" | jq -r '.created' 2>/dev/null) || true
     tname=$(printf '%s' "$out" | jq -r '.tmux // empty' 2>/dev/null) || true
@@ -164,6 +165,11 @@ _open_common() {
     return 0
   fi
 
+  # The tab shows something the moment it opens instead of after the next
+  # status-line refresh. Only if the state cache has never seen this session:
+  # an observation always beats a guess, and cx_state_seed keeps the file's age
+  # so a seed cannot make the rest of the picture look fresh.
+  cx_state_seed "$(cx_target_str)" fresh
   _open_tag_window
 
   # Hand over the terminal. exec so cx does not linger as a parent process for

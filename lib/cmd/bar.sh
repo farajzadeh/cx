@@ -170,7 +170,7 @@ _bar_setup() {
 # cx — the sessions waiting for you, in the tmux status bar.
 # Append to ~/.tmux.conf, then: tmux source-file ~/.tmux.conf
 
-set -g status-interval 30
+set -g status-interval 10
 set -g status-right-length 100
 set -g status-right "#($self bar) #[default]%H:%M"
 
@@ -186,8 +186,9 @@ bind-key j run-shell -b "$self jump"
 # Notes
 #   * The absolute path is deliberate: tmux runs status commands under the
 #     environment its server started with, which usually has no ~/.local/bin.
-#   * status-interval is one SSH round trip per server. 30s is a reasonable
-#     floor; 10s is a lot of connections for a line you glance at.
+#   * status-interval is one SSH round trip per server, and on a server with
+#     two dozen sessions each one costs well under a second. 10s keeps the
+#     icons current; raise it if you have many servers or a slow link.
 #   * If your SSH key needs an agent, the tmux server needs to see it:
 #     add SSH_AUTH_SOCK to update-environment, or run cx from a terminal
 #     first — the shared connection cx opens is reused for a while.

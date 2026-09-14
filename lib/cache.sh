@@ -263,3 +263,37 @@ cx_state_rows() {
   [ "${age:-99999}" -lt "$ttl" ] || return 1
   cat "$f"
 }
+
+# cx_state_seed TARGET STATE — put TARGET in the state cache if it is not there.
+#
+# For a session that has just been opened: its tab should show something now,
+# not after the next status-line refresh. Two restraints keep a seed from
+# becoming a lie:
+#
+#   * It never replaces a row. An observation always beats a guess, so a
+#     session the cache already knows keeps what was seen.
+#   * It keeps the file's age. The age is what says how old the OTHER rows
+#     are, and a seed must not make a ten-minute-old picture look fresh —
+#     touching the file would have done exactly that for every tab at once.
+cx_state_seed() {
+  local target="$1" state="$2" f tmp
+  [ -n "$target" ] && [ -n "$state" ] || return 0
+  cx_cache_init
+  f=$(cx_state_file)
+  if [ -s "$f" ] && awk -F'\t' -v t="$target" '$1 == t { found = 1 } END { exit !found }' "$f"; then
+    return 0
+  fi
+  tmp="$f.seed.$$"
+  {
+    [ -f "$f" ] && cat "$f"
+    printf '%s\t%s\n' "$target" "$state"
+  } >"$tmp" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  }
+  if [ -f "$f" ]; then
+    touch -r "$f" "$tmp" 2>/dev/null || true
+  fi
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
