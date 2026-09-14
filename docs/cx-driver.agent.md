@@ -41,6 +41,7 @@ and pick the members out yourself.)
 | state | what it means | what you do |
 |---|---|---|
 | `idle` | the last turn finished; waiting for input | judge, then nudge or finish |
+| `starting` | Claude has not finished starting — usually the trust prompt of a new directory | nothing: never nudge it. If it lasts past a minute, ask the user to answer it with `cx open <target>` |
 | `fresh` | up, but this conversation has not started | send the opening prompt |
 | `working` | mid-turn right now | nothing. Leave it alone |
 | `blocked` | stopped on a permission prompt — exact when Claude reported it, a guess after long silence otherwise | escalate to the user |
@@ -128,6 +129,9 @@ your prompt says so and names the goal and the member. Then:
       $A goal state <name> done
 
   A member is `project[/worktree][@label]`: pass the parts as the flags above.
+- **Never nudge a member with `hooks: true` and no `claude`, no `event` and no
+  transcript.** It has not finished starting, and on a trust prompt your Enter
+  would end it. The agent refuses anyway; report it for the user to answer.
 - **observe gives facts, not states.** Read them in this order:
   `claude.status` `waiting` is a permission prompt (escalate, never answer);
   `busy` is working; `idle` with a transcript is waiting for you. With no

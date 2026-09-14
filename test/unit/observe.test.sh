@@ -231,6 +231,19 @@ assert_eq "$(cmd_observe --all --tail 0 | jq -r '.sessions[] | select(.target ==
 
 rm -rf "$CX_CLAUDE_DIR/sessions" "$CX_STATE_DIR"
 
+describe "observe — which sessions were started with hooks"
+
+jq '.sessions.api.hooks = true' "$CX_SESSIONS" >"$TMP/s" && mv "$TMP/s" "$CX_SESSIONS"
+OBS=$(cmd_observe --all --tail 0)
+
+it "reports a session started with hooks"
+assert_eq "$(target api | jq -r .hooks)" true
+
+it "and one that was not"
+assert_eq "$(target my.app | jq -r .hooks)" false
+
+jq '.sessions.api |= del(.hooks)' "$CX_SESSIONS" >"$TMP/s" && mv "$TMP/s" "$CX_SESSIONS"
+
 describe "_transcript_messages — the byte window and its escalation"
 
 BIG="$TMP/big.jsonl"

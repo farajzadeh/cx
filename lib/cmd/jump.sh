@@ -73,7 +73,7 @@ EOF
   local st state_list=""
   for st in $(printf '%s' "$states" | tr ',' ' '); do
     case "$st" in
-      idle | blocked | working | fresh | dead | unknown) state_list="$state_list $st" ;;
+      idle | blocked | working | fresh | starting | dead | unknown) state_list="$state_list $st" ;;
       *)
         err "unknown state: $st"
         return 3

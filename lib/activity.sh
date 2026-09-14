@@ -32,7 +32,7 @@ _CX_ACTIVITY_LOADED=1
 export CX_IDLE_GRACE CX_PEEK_TAIL
 
 # cx_activity_state ALIVE SHELL UUID PRESENT LAST_ROLE LAST_STOP QUIET
-#                   [CLAUDE_STATUS CLAUDE_KIND EVENT]
+#                   [CLAUDE_STATUS CLAUDE_KIND EVENT HOOKED]
 #
 # ALIVE/SHELL/PRESENT are the strings "true" or "false"; UUID and the LAST_*
 # fields are empty when unknown; QUIET is seconds since the transcript was last
@@ -51,6 +51,9 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 #                  idle or fresh. Only sessions cx started with its hooks have
 #                  one, and the agent drops a report older than the tmux session
 #                  it would describe.
+#   HOOKED         "true" when cx started the session with its hooks, so Claude
+#                  is expected to report — and saying nothing means it has not
+#                  finished starting.
 #
 # CLAUDE_STATUS BEATS EVENT, and the order was found the hard way. Pressing
 # Escape at a permission prompt fires no hook at all — no Stop, nothing — so a
@@ -64,6 +67,7 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 # Prints exactly one of:
 #
 #   dead      no tmux session, or the pane is back at a shell — Claude exited
+#   starting  up, but Claude has not finished starting — often a trust prompt
 #   fresh     up, but this conversation has not been written to yet
 #   idle      the last turn finished; it is waiting for a human
 #   working   busy right now
@@ -78,7 +82,7 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 cx_activity_state() {
   local alive="$1" shell="$2" uuid="$3" present="$4"
   local last_role="$5" last_stop="$6" quiet="$7"
-  local claude_status="${8:-}" claude_kind="${9:-}" event="${10:-}"
+  local claude_status="${8:-}" claude_kind="${9:-}" event="${10:-}" hooked="${11:-}"
 
   if [ "$alive" != true ] || [ "$shell" = true ]; then
     # A background session never had a tmux session to lose, and cx used to
@@ -144,6 +148,20 @@ cx_activity_state() {
       ;;
   esac
 
+  # Started with cx's hooks, running, and not a word from Claude: no status
+  # file, no hook, no transcript. It has not finished starting, and the usual
+  # reason it stays that way is a directory Claude has never trusted, where it
+  # opens on "do you trust this folder?" with "No, exit" selected. Typing a
+  # prompt there sends the Enter that picks it and ends the session — found on
+  # a real server, by exactly that.
+  #
+  # Only with no transcript either. A conversation on disk proves Claude
+  # started, whatever happened to cx's own state files (invariant 4).
+  if [ "$hooked" = true ] && [ "$present" != true ]; then
+    printf 'starting'
+    return 0
+  fi
+
   # No pinned conversation means cx has no way to find this session's
   # transcript — an old session from before pinning, or a store that has been
   # cleared. Not an error, just nothing to say.
@@ -204,6 +222,9 @@ cx_activity_state() {
 # looks the same as one still booting. Refusing here would break the primary
 # flow, which is `open --detach` followed immediately by the task.
 #
+# `starting` is refused above all: a Claude still on its trust prompt exits on
+# the Enter that submits a prompt, taking the session with it.
+#
 # The rest are refused: `working` would interleave with a turn in progress,
 # `blocked` needs a human rather than more text, `dead` has nothing to type
 # into, and `unknown` means we do not know enough to be typing at all.
@@ -221,6 +242,7 @@ cx_activity_color() {
     working) printf '%s%s%s' "$C_CYAN" "$1" "$C_RESET" ;;
     blocked) printf '%s%s%s' "$C_YELLOW" "$1" "$C_RESET" ;;
     fresh) printf '%s%s%s' "$C_GREEN" "$1" "$C_RESET" ;;
+    starting) printf '%s%s%s' "$C_DIM" "$1" "$C_RESET" ;;
     dead) printf '%s%s%s' "$C_RED" "$1" "$C_RESET" ;;
     *) printf '%s%s%s' "$C_DIM" "$1" "$C_RESET" ;;
   esac
@@ -245,7 +267,7 @@ cx_activity_color() {
 cx_activity_rows() {
   local host="$1" file="$2" now="$3"
   local target alive shell attached uuid present last_role last_stop mtime created
-  local cstatus ckind event quiet age state
+  local cstatus ckind event hooked quiet age state
 
   # Every field is emitted with a "-" placeholder when it is absent, and the
   # placeholder is not decoration. TAB IS IFS WHITESPACE: with IFS set to it,
@@ -258,7 +280,7 @@ cx_activity_rows() {
   #
   # The rows printed below keep the same convention for the same reason: their
   # last two columns are routinely empty.
-  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created cstatus ckind event; do
+  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created cstatus ckind event hooked; do
     [ -n "$target" ] || continue
 
     [ "$uuid" = - ] && uuid=""
@@ -274,7 +296,7 @@ cx_activity_rows() {
     [ "$created" != - ] && age=$((now - created))
 
     state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-      "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event")
+      "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event" "$hooked")
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$host" "$target" "$state" "$attached" "${quiet:--}" "${age:--}"
@@ -297,7 +319,8 @@ $(jq -r '
         # become the same "-" as every other missing fact.
         (.claude.status      | f),
         (.claude.kind        | f),
-        (.event.state        | f)
+        (.event.state        | f),
+        (.hooks | tostring)
       ] | @tsv' "$file" 2>/dev/null)
 EOF
 }

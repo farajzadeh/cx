@@ -679,4 +679,53 @@ assert_eq "$(onstops)" 1
 
 cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
 
+describe "a session still starting is never typed into"
+# Real Claude, first run in a directory it has never trusted, opens on a
+# question with "No, exit" selected — and the Enter that submits a prompt picks
+# it. A nudge into a brand-new project ended the session that way on a real
+# server. The stub plays that dialog here.
+
+# set-environment needs a running tmux server, and the block above stopped every
+# session on this node, so the server had exited: the variable went nowhere and
+# the stub started already trusted. A placeholder session keeps the server up.
+on_node 'tmux has-session -t =holder 2>/dev/null || tmux new-session -d -s holder' >/dev/null
+on_node 'tmux set-environment -g CX_STUB_TRUST 1' >/dev/null
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks@new >/dev/null 2>&1
+on_node 'tmux set-environment -gu CX_STUB_TRUST' >/dev/null
+settle 3
+
+new_json() { cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@new | jq -r ".sessions[0].$1"; }
+
+it "reads as starting while Claude is asking whether to trust the folder"
+assert_eq "$(new_json state)" starting
+
+it "is not steerable"
+assert_eq "$(new_json steerable)" false
+
+it "records that it was started with hooks"
+assert_eq "$(new_json hooks)" true
+
+it "and nudge declines"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json nudge cx-test-web1:hooks@new 'hello' | jq -r '.reason')" \
+  starting
+
+it "the agent refuses too, so an older client cannot type into it either"
+assert_contains "$(on_node 'printf hello | $HOME/.local/bin/cx-agent nudge hooks --session new')" '"reason":"starting"'
+
+it "and the session is still alive afterwards"
+assert_ok on_node 'tmux has-session -t "=cx-hooks@new"'
+
+on_node 'tmux send-keys -t "=cx-hooks@new:" trust C-m' >/dev/null
+settle 3
+
+it "becomes fresh once the folder is trusted and Claude is running"
+assert_eq "$(new_json state)" fresh
+
+it "and then takes a prompt"
+assert_eq "$(cx_run "$HOME_DIR" --json nudge cx-test-web1:hooks@new 'hello' | jq -r '.sent')" true
+
+cx_run "$HOME_DIR" stop cx-test-web1:hooks@new >/dev/null 2>&1
+on_node 'tmux kill-session -t =holder' >/dev/null 2>&1
+
 summary

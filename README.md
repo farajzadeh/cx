@@ -217,7 +217,10 @@ web2   web                dead     —    —
 
 `idle` means the last turn finished and it is waiting for you. `blocked` means
 it is stopped on a permission prompt only you can answer. `dead` means Claude
-exited. Finished sessions are counted rather than listed — `cx peek --all`
+exited. `starting` means Claude has not finished starting — in a directory it
+has never been told to trust it asks first, and cx will not type into that
+question, since the Enter that sends a prompt would answer "No, exit". Answer
+it once with `cx open <target>`. Finished sessions are counted rather than listed — `cx peek --all`
 shows them, and `cx forget <target>` drops one you are done with.
 
 `cx nudge` sends the next instruction to one that's ready, without attaching:
@@ -313,6 +316,7 @@ cx open local:api@review   # this tab is now  ▲ api@review
 | `◐` | spinner | working |
 | `▲` | warning triangle | blocked — it needs an answer only you can give |
 | `○` | empty circle | fresh — up, nothing asked of it yet |
+| `◌` | hourglass | starting — Claude has not finished starting; often a new folder's trust prompt |
 | `✗` | times-circle | dead |
 
 Icons are drawn in your status bar's own colours: the shape carries the state,

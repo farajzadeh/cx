@@ -376,21 +376,33 @@ tmux list-panes -a -F '#{session_name} #{pane_current_command}'
 The error is in the safe direction: cx will refuse to nudge such a session
 rather than typing your prompt into a shell.
 
-### A session is stuck on `fresh`
+### A session is stuck on `starting`
 
-`fresh` means Claude is up but this conversation has never been written to.
-Claude writes nothing until its first exchange, so this is normal right after
-`cx open -d` — and it stays true if nobody has sent it anything.
-
-If it persists after you nudged it, attach and look:
+Claude has not finished starting. For more than a few seconds, that is almost
+always its **"do you trust this folder?"** prompt, which it shows the first time
+it runs in a directory — and which blocks everything until answered. Answer it
+once and the session behaves normally from then on:
 
 ```sh
 cx open <target>
 ```
 
-The usual cause is Claude's **"do you trust this folder?"** prompt, which it
-shows the first time it runs in any directory and which blocks everything
-until answered. Answer it once and the session behaves normally afterwards.
+cx refuses to nudge a session in this state, and that is deliberate: the
+prompt has **"No, exit" selected**, so the Enter that sends a prompt would end
+Claude and the session with it. `cx nudge --force` overrides the refusal, and
+on that prompt it will do exactly that.
+
+### A session is stuck on `fresh`
+
+`fresh` means Claude is up and ready, but this conversation has never been
+written to. Claude writes nothing until its first exchange, so this is normal
+right after `cx open -d` — and it stays true if nobody has sent it anything.
+Send it one: `cx nudge <target> "..."`.
+
+### `cx nudge` says "has not finished starting — not sent"
+
+See "A session is stuck on `starting`" above: answer the trust prompt with
+`cx open <target>`, then nudge again.
 
 ### `cx nudge` says "is mid-turn — not sent"
 

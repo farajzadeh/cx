@@ -233,6 +233,22 @@ esac
 #
 # Then stay alive, one turn per line of stdin. Exiting instead would drop the
 # pane back to a shell, which is exactly how cx detects a dead session.
+# CX_STUB_TRUST=1 plays the first run in a directory Claude has never trusted:
+# a question with "No, exit" selected, and nothing else — no hook, no status
+# file — until it is answered. Real Claude exits on a bare Enter there, and so
+# does this, which is the whole point: a nudge that types into it ends the
+# session. Answering "trust" carries on as normal.
+if [ "${CX_STUB_TRUST:-0}" = 1 ]; then
+  echo "Quick safety check: Is this a project you created or one you trust?"
+  echo "❯ No, exit"
+  echo "  Yes, I trust this folder"
+  IFS= read -r _answer || exit 1
+  if [ "$_answer" != trust ]; then
+    echo "STUB: not trusted, exiting"
+    exit 1
+  fi
+fi
+
 _src=startup
 [ "$tag" = resume ] && _src=resume
 _hook SessionStart ",\"source\":\"$_src\""

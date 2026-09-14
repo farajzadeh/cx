@@ -31,8 +31,9 @@ set -eu
 # open installs to feed it, open --no-hooks, forget, and attach_detaches in
 # sessions (open no longer detaches other clients on tmux 3.1+), goal on-stop
 # with the driver pass a member's Stop hook starts, and the merged fact in list
-# and worktree list with worktree rm --merged. The client feature-gates on
-# this: an
+# and worktree list with worktree rm --merged, and the record of which
+# sessions were started with hooks that lets nudge refuse one still starting.
+# The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
 CX_AGENT_VERSION="0.4.0"
@@ -597,6 +598,49 @@ _session_set_perm_mode() {
   trap - EXIT INT TERM
 }
 
+# _session_set_hooks SLUG 0|1 — record whether a session was STARTED with the
+# hooks cmd_open hands Claude.
+#
+# A hooked session reports SessionStart the moment Claude is really running.
+# So one that is up in tmux with no report, no status file and no transcript
+# has not finished starting — and in a directory Claude has never trusted, it
+# stays that way, showing "do you trust this folder?" with "No, exit" selected,
+# where the Enter that submits a prompt exits Claude and ends the session. The
+# pane cannot be asked whether it was given hooks, so this is written down.
+#
+# Only the positive is stored, by the same rule as perm_mode: absent already
+# means "no hooks", and clearing still happens explicitly because a previous
+# session under the same slug may have set it.
+_session_set_hooks() {
+  if [ "$2" != 1 ] && [ ! -e "$CX_SESSIONS" ]; then
+    return 0
+  fi
+  _sessions_ensure
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg s "$1" --arg on "$2" '
+    if $on == "1" then
+      .sessions[$s] = ((.sessions[$s] // {}) + {hooks: true})
+    elif (.sessions | has($s)) then
+      .sessions[$s] |= del(.hooks)
+      | if .sessions[$s] == {} then del(.sessions[$s]) else . end
+    else . end' \
+    "$CX_SESSIONS" >"$CX_SESSIONS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_SESSIONS.new" "$CX_SESSIONS"
+  _unlock
+  trap - EXIT INT TERM
+}
+
+# _session_hooked SLUG — was it started with hooks?
+_session_hooked() {
+  [ -e "$CX_SESSIONS" ] || return 1
+  jq -e --arg s "$1" '.sessions[$s].hooks == true' "$CX_SESSIONS" >/dev/null 2>&1
+}
+
 # _session_perm_mode SLUG — the recorded mode, or empty.
 # Falls back to the boolean `dangerous` that 0.2.1 wrote, so a session started
 # before an agent upgrade is still reported correctly while it keeps running.
@@ -1108,7 +1152,7 @@ EOF
 #     --continue means "the newest conversation in this directory", which two
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
-  local name="" wt="" label="" mode="continue" dangerous=0 detach=0 hooks=1
+  local name="" wt="" label="" mode="continue" dangerous=0 detach=0 hooks=1 hooked=0
   local perm_mode="" model="" effort=""
   # Everything after `--`, quoted individually and handed to claude verbatim.
   local passthru=()
@@ -1246,7 +1290,10 @@ cmd_open() {
         *) agent_bin="$HOME/.local/bin/cx-agent" ;;
       esac
       settings=$(_hook_settings "$agent_bin" 2>/dev/null) || settings=""
-      [ -n "$settings" ] && opts="$opts --settings $(cx_q "$settings")"
+      if [ -n "$settings" ]; then
+        opts="$opts --settings $(cx_q "$settings")"
+        hooked=1
+      fi
     fi
 
     for a in "${passthru[@]+"${passthru[@]}"}"; do
@@ -1322,6 +1369,7 @@ cmd_open() {
     # value would describe a session that is no longer running.
     if [ "$mode" != shell ]; then
       _session_set_perm_mode "$slug" "$perm_mode" || true
+      _session_set_hooks "$slug" "$hooked" || true
     fi
   else
     # Reattaching. Everything above was fixed when the pane's claude launched,
@@ -1757,7 +1805,8 @@ _observe_load() {
   _OBS_PINS=""
   if [ -e "$CX_SESSIONS" ]; then
     _OBS_PINS=$(jq -r '(.sessions // {}) | to_entries[]
-      | select(.value.uuid != null) | [.key, .value.uuid] | @tsv' \
+      | select(.value.uuid != null)
+      | [.key, .value.uuid, (if .value.hooks == true then "1" else "0" end)] | @tsv' \
       "$CX_SESSIONS" 2>/dev/null) || _OBS_PINS=""
   fi
 }
@@ -1905,6 +1954,13 @@ _observe_resolve() {
       load("_OR_PINS", uuid, 1)
       load("_OR_WTS", wt, 2)
       load("_OR_ROWS", row, 0)
+      # Which sessions were started with hooks: the third column of the pins.
+      np = split(ENVIRON["_OR_PINS"], PL, "\n")
+      for (i = 1; i <= np; i++) {
+        if (PL[i] == "") continue
+        split(PL[i], pf, "\t")
+        if (pf[3] == "1") hk[pf[1]] = 1
+      }
       # Claude processes, reachable by the conversation they hold and by the
       # tmux session they run in. The conversation is the better key: it is
       # what cx pinned. The tmux name covers a session with no pin.
@@ -1957,9 +2013,10 @@ _observe_resolve() {
         else if (tname in bytmux) c = bytmux[tname]
         if (c != "") { split(c, cf, "\t"); cs = cf[3]; cat = cf[4]; ck = cf[5]; cp = cf[6] }
 
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
           s, dash(proj), dash(w), dash(label), dash(d), dash(u), tname, \
-          alive, att, dash(cr), dash(ac), dash(pc), dash(sd), cs, cat, ck, cp
+          alive, att, dash(cr), dash(ac), dash(pc), dash(sd), cs, cat, ck, cp, \
+          ((s in hk) ? "true" : "false")
       }
     }'
 }
@@ -2058,12 +2115,12 @@ EOF
 
   local facts="" msgs="" m="" keep line
   local s proj w lbl dir uuid tname alive att created activity pcmd sdir
-  local cstatus cat ckind cpid estate eat evia
+  local cstatus cat ckind cpid estate eat evia hooked
   local tfile present seen shell mtime bytes
   keep="$tail_n"
   [ "$keep" -ge 1 ] || keep=1
 
-  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir cstatus cat ckind cpid; do
+  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir cstatus cat ckind cpid hooked; do
     [ -n "$s" ] || continue
     [ "$proj" = - ] && proj=""
     [ "$w" = - ] && w=""
@@ -2165,7 +2222,7 @@ EOF
       fi
     fi
 
-    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia
+    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia	$hooked
 "
   done <<EOF
 $resolved
@@ -2236,6 +2293,9 @@ EOF
                 at:    ($f[23] | num),
                 via:   ($f[24] | cell)
               } end),
+              # Started with cx hooks, so silence from Claude means it has not
+              # finished starting rather than that nobody can tell.
+              hooks: ($f[25] == "true"),
               last: ($m | last),
               tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
             }))
@@ -3323,6 +3383,38 @@ cmd_nudge() {
   if [ "${attached:-0}" != 0 ] && [ "$force" != 1 ]; then
     _nudge_declined "$slug" attached
     return 0
+  fi
+
+  # Never type into a Claude that has not finished starting. A session started
+  # with hooks reports SessionStart once Claude is really running; until then
+  # the pane is booting or, in a directory Claude has never trusted, showing
+  # "do you trust this folder?" with "No, exit" selected — and the Enter that
+  # submits a prompt picks it, exits Claude, and ends the session. Found that
+  # way: the first nudge into a new project killed it. Checked here as well as
+  # by the client, so an older client cannot do it either.
+  #
+  # A report older than the tmux session belongs to an earlier one. Claude's
+  # own status file is the other proof of life, which is what keeps a deleted
+  # state directory from blocking a session that is plainly running.
+  if [ "$force" != 1 ] && _session_hooked "$slug"; then
+    local nuuid tcreated evat=""
+    nuuid=$(_session_uuid_get "$slug" 2>/dev/null) || nuuid=""
+    tcreated=$(_tmux_rows | awk -F'\t' -v n="$tname" '$1 == n { print $3; exit }') || tcreated=""
+    if [ -n "$nuuid" ] && [ -r "$CX_STATE_DIR/$nuuid" ]; then
+      IFS='	' read -r _ evat _ <"$CX_STATE_DIR/$nuuid" 2>/dev/null || evat=""
+    fi
+    case "$evat" in
+      '' | *[!0-9]*) evat=0 ;;
+    esac
+    case "$tcreated" in
+      '' | *[!0-9]*) tcreated=0 ;;
+    esac
+    if [ "$evat" = 0 ] || [ "$evat" -lt "$tcreated" ]; then
+      if [ -z "$nuuid" ] || ! _observe_claude | awk -F'\t' -v u="$nuuid" '$1 == u { f = 1 } END { exit !f }'; then
+        _nudge_declined "$slug" starting
+        return 0
+      fi
+    fi
   fi
 
   _tmux_paste "$pane" "cx-nudge-$$" "$prompt" ||

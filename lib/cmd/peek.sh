@@ -137,7 +137,7 @@ _peek_rows() {
 _peek_age() {
   local quiet="$1" age="$2" state="$3" n=""
   case "$state" in
-    fresh) n="$age" ;;
+    fresh | starting) n="$age" ;;
     dead) n="" ;;
     *) n="$quiet" ;;
   esac
@@ -171,6 +171,8 @@ Reads each session's own conversation and reports one of:
   ${C_YELLOW}blocked${C_RESET}    mid-turn but gone quiet — usually a permission prompt
   ${C_RED}dead${C_RESET}       Claude exited; the pane is back at a shell
   ${C_GREEN}fresh${C_RESET}      up, but this conversation has not started yet
+  ${C_DIM}starting${C_RESET}   Claude has not finished starting — often the trust-this-folder
+             prompt of a new directory; answer it with cx open
   ${C_DIM}unknown${C_RESET}    no pinned conversation, or nothing readable
 
 QUIET is how long the conversation has been silent. A session counts as

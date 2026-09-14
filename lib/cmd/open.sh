@@ -148,7 +148,7 @@ _open_common() {
         printf '%s\n' "$out"
       return 0
     fi
-    cx_state_seed "$(cx_target_str)" fresh
+    cx_state_seed "$(cx_target_str)" starting
     local created="" tname=""
     created=$(printf '%s' "$out" | jq -r '.created' 2>/dev/null) || true
     tname=$(printf '%s' "$out" | jq -r '.tmux // empty' 2>/dev/null) || true
@@ -158,6 +158,8 @@ _open_common() {
       # directory it asks whether to trust the folder and then writes nothing
       # until answered — so "started" is not "ready".
       hint "check it is up with: cx peek $(cx_target_str)"
+      hint "a directory Claude has not seen before asks whether to trust it:"
+      hint "  answer that once with: cx open $(cx_target_str)"
     else
       say "already running: $(cx_target_str)  ($tname)"
     fi
@@ -169,7 +171,7 @@ _open_common() {
   # status-line refresh. Only if the state cache has never seen this session:
   # an observation always beats a guess, and cx_state_seed keeps the file's age
   # so a seed cannot make the rest of the picture look fresh.
-  cx_state_seed "$(cx_target_str)" fresh
+  cx_state_seed "$(cx_target_str)" starting
   _open_tag_window
 
   # Hand over the terminal. exec so cx does not linger as a parent process for

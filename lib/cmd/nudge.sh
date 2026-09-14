@@ -38,6 +38,7 @@ Nudge declines, without erroring, when the session is not ready for input:
 
   ${C_CYAN}working${C_RESET}   mid-turn — wait for it to finish
   ${C_YELLOW}blocked${C_RESET}   quiet mid-turn, usually a permission prompt only you can answer
+  starting  Claude has not finished starting — often the trust-this-folder prompt
   ${C_RED}dead${C_RESET}      Claude has exited — restart it with cx open -d
   attached  you have it open; cx will not type over your shoulder
 
@@ -134,7 +135,7 @@ EOF
 # _nudge_state OBSERVE_JSON — classify the one session observe reported on.
 _nudge_state() {
   local obs="$1" now alive shell uuid present last_role last_stop mtime
-  local cstatus ckind event quiet=""
+  local cstatus ckind event hooked quiet=""
   now=$(cx_now)
   alive=$(printf '%s' "$obs" | jq -r '.sessions[0].tmux.alive | tostring' 2>/dev/null) || return 1
   [ -n "$alive" ] && [ "$alive" != null ] || return 1
@@ -150,9 +151,10 @@ _nudge_state() {
   cstatus=$(printf '%s' "$obs" | jq -r '.sessions[0].claude.status // ""')
   ckind=$(printf '%s' "$obs" | jq -r '.sessions[0].claude.kind // ""')
   event=$(printf '%s' "$obs" | jq -r '.sessions[0].event.state // ""')
+  hooked=$(printf '%s' "$obs" | jq -r '.sessions[0].hooks | tostring')
   [ -n "$mtime" ] && quiet=$((now - mtime))
   cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-    "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event"
+    "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event" "$hooked"
 }
 
 # _nudge_report TARGET SENT REASON STATE
@@ -193,6 +195,11 @@ _nudge_report() {
     attached)
       note "$target is open in front of you — not sent."
       hint "type it there, or override with: cx nudge $target --force \"...\""
+      ;;
+    starting)
+      note "$target has not finished starting — not sent."
+      hint "typing into it now could end it: a new directory asks whether to trust it,"
+      hint "and the Enter that sends a prompt answers no. Answer it once with: cx open $target"
       ;;
     fresh)
       note "$target has no conversation yet — not sent."

@@ -92,21 +92,23 @@ _bar_style() {
 _bar_icon() {
   if [ "$_CX_BAR_ICONS" = nerd ]; then
     case "$1" in
-      idle) printf '\357\201\230' ;;    # U+F058 check-circle: finished, your turn
-      working) printf '\357\204\220' ;; # U+F110 spinner
-      blocked) printf '\357\201\261' ;; # U+F071 exclamation-triangle
-      fresh) printf '\357\204\214' ;;   # U+F10C circle-o: nothing asked of it yet
-      dead) printf '\357\201\227' ;;    # U+F057 times-circle
-      *) printf '\357\201\231' ;;       # U+F059 question-circle
+      idle) printf '\357\201\230' ;;     # U+F058 check-circle: finished, your turn
+      working) printf '\357\204\220' ;;  # U+F110 spinner
+      blocked) printf '\357\201\261' ;;  # U+F071 exclamation-triangle
+      fresh) printf '\357\204\214' ;;    # U+F10C circle-o: nothing asked of it yet
+      starting) printf '\357\211\222' ;; # U+F252 hourglass-half: not finished starting
+      dead) printf '\357\201\227' ;;     # U+F057 times-circle
+      *) printf '\357\201\231' ;;        # U+F059 question-circle
     esac
     return 0
   fi
   case "$1" in
-    idle) printf '\342\227\217' ;;    # U+25CF ● finished, waiting for you
-    working) printf '\342\227\220' ;; # U+25D0 ◐ mid-turn
-    blocked) printf '\342\226\262' ;; # U+25B2 ▲ needs an answer only you have
-    fresh) printf '\342\227\213' ;;   # U+25CB ○ up, nothing asked of it yet
-    dead) printf '\342\234\227' ;;    # U+2717 ✗
+    idle) printf '\342\227\217' ;;     # U+25CF ● finished, waiting for you
+    working) printf '\342\227\220' ;;  # U+25D0 ◐ mid-turn
+    blocked) printf '\342\226\262' ;;  # U+25B2 ▲ needs an answer only you have
+    fresh) printf '\342\227\213' ;;    # U+25CB ○ up, nothing asked of it yet
+    starting) printf '\342\227\214' ;; # U+25CC ◌ not finished starting
+    dead) printf '\342\234\227' ;;     # U+2717 ✗
     *) printf '?' ;;
   esac
 }
@@ -354,10 +356,10 @@ EOF
   local state_list="" st
   for st in $(printf '%s' "$states" | tr ',' ' '); do
     case "$st" in
-      idle | blocked | working | fresh | dead | unknown) state_list="$state_list $st" ;;
+      idle | blocked | working | fresh | starting | dead | unknown) state_list="$state_list $st" ;;
       *)
         err "unknown state: $st"
-        hint "one of: idle, blocked, working, fresh, dead, unknown"
+        hint "one of: idle, blocked, working, fresh, starting, dead, unknown"
         return 3
         ;;
     esac

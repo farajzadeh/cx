@@ -394,6 +394,23 @@ it "reads every row at once for a caller that needs them all"
 printf 'web1:a\tidle\nweb1:b\tblocked\n' >"$(cx_state_file)"
 assert_eq "$(cx_state_rows | grep -c .)" 2
 
+describe "cx bar --window — a session still starting"
+
+mkdir -p "$CX_CACHE_DIR"
+printf 'web1:boot\tstarting\nweb1:new\tfresh\n' >"$(cx_state_file)"
+
+it "has a mark of its own"
+assert_eq "$(cmd_bar --plain --window web1:boot)" "$(printf '\342\227\214') "
+
+it "which is not the mark for fresh"
+assert_ne "$(cmd_bar --plain --window web1:boot)" "$(cmd_bar --plain --window web1:new)"
+
+it "and has a Nerd Font glyph too"
+assert_eq "$(cmd_bar --plain --icons nerd --window web1:boot)" "$(printf '\357\211\222') "
+
+it "can be watched for with --states"
+assert_ok cmd_bar --plain --states starting
+
 describe "cx bar — arguments"
 
 it "rejects an unknown state"

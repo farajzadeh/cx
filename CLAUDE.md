@@ -265,9 +265,10 @@ Five commands, and the split between them is invariant 11 made concrete:
   (`CX_IDLE_GRACE`) and because a pure function is the only part of this a unit
   test can pin — inside the monolithic agent it would be untestable.
 
-  States: `dead` (no tmux, or the pane is back at a shell) · `fresh` (up, but
-  this conversation has not started) · `idle` (last turn ended) · `working`
-  (moving) · `blocked` (mid-turn and quiet past the grace period) · `unknown`.
+  States: `dead` (no tmux, or the pane is back at a shell) · `starting` (up,
+  but Claude has not finished starting) · `fresh` (up, but this conversation
+  has not started) · `idle` (last turn ended) · `working` (moving) · `blocked`
+  (mid-turn and quiet past the grace period) · `unknown`.
 
   `fresh` deliberately never expires. Claude writes no transcript until its
   first exchange, so "just started" and "nobody has given it anything to do"
@@ -484,6 +485,24 @@ Two more sources, both fast paths over the transcript and neither load-bearing:
   fast** (the notifier is backgrounded). The session id becomes a file name,
   so it is validated like any other input, and `event` is dispatched ahead of
   the agent's jq check because that check dies with exit 1.
+
+**A new directory's trust prompt ends a session that is typed into.** The
+first time Claude runs in a directory it has not been told to trust, it opens
+on "do you trust this folder?" with **"No, exit" selected** — even with
+`--dangerously-skip-permissions`. While that prompt is up it writes **no status
+file, fires no hook, and has no transcript**; all three arrive once it is
+answered. `cx nudge` pastes a prompt and presses Enter, and that Enter picks
+"No, exit": Claude quits, and because the pane execs Claude, the session goes
+with it. This broke cx's main flow — `cx open -d` then `cx nudge` — on every new
+project, and a real goal-on-stop run found it. Where trust is recorded
+(`~/.claude.json`) is inherited from parent directories in ways cx cannot
+predict, so cx does not read it. Instead `cmd_open` records `hooks: true` for a
+session it started with hooks, and **a hooked session that is running with no
+status file, no hook report and no transcript is `starting`**, which is never
+steerable. `cx-agent nudge` refuses it too (reason `starting`), so an older
+client cannot type into it either; `--force` still overrides. A transcript on
+disk overrules the missing report, which is what keeps a deleted state
+directory from reading as `starting` (invariant 4).
 
 **The status file outranks the hook.** Pressing Escape at a permission prompt
 fires **no hook at all** — not Stop, nothing — so a hook's `blocked` outlives

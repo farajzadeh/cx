@@ -89,6 +89,31 @@ assert_eq "$(cmd_sessions | jq -r .attach_detaches)" true
 it "and still lists the sessions"
 assert_eq "$(cmd_sessions | jq -r '.sessions[0].target')" api
 
+describe "_session_set_hooks — remembering how a session was started"
+
+printf '{"version":1,"sessions":{"api":{"uuid":"u-api"}}}\n' >"$CX_SESSIONS"
+
+it "records a session started with hooks"
+_session_set_hooks api 1
+assert_ok _session_hooked api
+
+it "clears it when the next session under that name has none"
+_session_set_hooks api 0
+assert_fail _session_hooked api
+
+it "and keeps the rest of the entry"
+assert_eq "$(jq -r '.sessions.api.uuid' "$CX_SESSIONS")" u-api
+
+it "drops an entry that held nothing but the flag"
+_session_set_hooks lonely 1
+_session_set_hooks lonely 0
+assert_eq "$(jq -r '.sessions | has("lonely")' "$CX_SESSIONS")" false
+
+it "creates no file just to say there are no hooks"
+rm -f "$CX_SESSIONS"
+_session_set_hooks api 0
+assert_fail test -e "$CX_SESSIONS"
+
 describe "cmd_forget — drop a finished session"
 
 cat >"$CX_SESSIONS" <<'EOF'

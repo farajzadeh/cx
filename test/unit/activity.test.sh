@@ -176,6 +176,35 @@ assert_eq "$(state true false uuid false '' '' '' busy interactive '')" working
 it "keeps idle with no transcript fresh"
 assert_eq "$(state true false uuid false '' '' '' idle interactive '')" fresh
 
+describe "cx_activity_state — a session that has not finished starting"
+
+# state ALIVE SHELL UUID PRESENT ROLE STOP QUIET CLAUDE_STATUS KIND EVENT HOOKED
+
+it "calls a hooked session with no word from Claude starting"
+# The trust prompt of a new directory looks exactly like this: running, no
+# status file, no hook, no transcript. Typing into it ends the session.
+assert_eq "$(state true false uuid false '' '' '' '' '' '' true)" starting
+
+it "never treats starting as ready for a prompt"
+assert_fail cx_activity_is_steerable starting
+
+it "calls it fresh once Claude's status file appears"
+assert_eq "$(state true false uuid false '' '' '' idle interactive '' true)" fresh
+
+it "calls it fresh once SessionStart has reported"
+assert_eq "$(state true false uuid false '' '' '' '' '' fresh true)" fresh
+
+it "trusts a transcript on disk over the lack of a report"
+# The state directory is a cache (invariant 4): delete it, and a session with a
+# conversation must still read from that conversation, not as starting.
+assert_eq "$(state true false uuid true assistant end_turn 5 '' '' '' true)" idle
+
+it "leaves a session started without hooks as it always was"
+assert_eq "$(state true false uuid false '' '' '' '' '' '' false)" fresh
+
+it "does not call a dead session starting"
+assert_eq "$(state false false uuid false '' '' '' '' '' '' true)" dead
+
 it "keeps idle idle for a session with no pin, whose transcript cx cannot look for"
 # Not finding a transcript is only evidence of a fresh conversation when cx knew
 # which conversation to look for. Seen for real: a 26-day-old session.
