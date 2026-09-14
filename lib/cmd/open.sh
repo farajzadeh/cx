@@ -153,6 +153,8 @@ _open_common() {
     return 0
   fi
 
+  _open_tag_window
+
   # Hand over the terminal. exec so cx does not linger as a parent process for
   # the whole session, and so Ctrl-C reaches tmux rather than us.
   local opts
@@ -163,6 +165,45 @@ _open_common() {
       "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" \
       "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
       "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}")"
+}
+
+# _open_tag_window — tell the LOCAL tmux which session this window now holds.
+#
+# Records the target as a window user option, which is what `cx bar --window`
+# reads to put a state icon in the tab title. Setting an option is invisible:
+# a window that was not opened for this keeps looking exactly as it did, and
+# anyone not using the tab format never sees a difference. Renaming the window
+# is therefore opt-in (CX_TMUX_TITLE=1) — tmux turns off automatic-rename for
+# any window given an explicit name, which is a lasting change to how the
+# user's own tmux behaves, not ours to make by default.
+#
+# $TMUX means "there is a tmux around this process". That is the right test
+# even though cx is about to attach to a tmux on the far side: the one being
+# tagged is the one whose tab you are looking at.
+#
+# Nothing is cleaned up afterwards, because there is no afterwards — cx execs
+# ssh. A tag left behind is not wrong: it names a session that still exists,
+# and the tab shows whatever that session is doing, `dead` included.
+_open_tag_window() {
+  [ -n "${TMUX:-}" ] || return 0
+  [ "${CX_TMUX_TAG:-1}" = 1 ] || return 0
+  cx_have tmux || return 0
+
+  # Addressed by $TMUX_PANE, never by "the current window". Current means the
+  # session's active window, which is not this one whenever the session is
+  # detached or the window is opening in the background — nine tabs started at
+  # once all tagged the same window, the last one created, and the other eight
+  # silently got nothing.
+  local at=()
+  [ -n "${TMUX_PANE:-}" ] && at=(-t "$TMUX_PANE")
+
+  tmux set-option -w "${at[@]+"${at[@]}"}" @cx_target "$(cx_target_str)" \
+    >/dev/null 2>&1 || true
+  if [ "${CX_TMUX_TITLE:-0}" = 1 ]; then
+    tmux rename-window "${at[@]+"${at[@]}"}" "$(cx_target_unit_str)" \
+      >/dev/null 2>&1 || true
+  fi
+  return 0
 }
 
 cmd_open() {
