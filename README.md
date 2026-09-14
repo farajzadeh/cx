@@ -224,6 +224,28 @@ cx nudge web1:api/authfix@tests "the retry test is still failing — fix it"
 It declines, rather than making a mess, if the session is mid-turn, waiting on
 a prompt, or open in front of you. `--force` overrides that.
 
+### Knowing without looking
+
+A session cx starts reports its own state. `cx open` hands Claude Code a set of
+hooks, and Claude Code keeps a status file of its own, so `blocked` means Claude
+is showing a permission prompt *now* — not "it has been quiet for two minutes,
+it might be". Sessions started before this, and any started with
+`cx open --no-hooks`, fall back to reading the conversation as before.
+
+To be told when a session starts needing you, put an executable at
+`~/.config/cx/notify` **on the server**. It runs whenever a session turns
+`blocked` or `idle`, with the session, its state and a message:
+
+```sh
+#!/bin/sh
+# ~/.config/cx/notify — $1 target, $2 blocked|idle, $3 message
+[ "$2" = blocked ] || exit 0          # only permission prompts, say
+curl -s -d "$CX_NOTIFY_HOST $1: ${3:-needs you}" ntfy.sh/your-topic >/dev/null
+```
+
+It runs on the server, so it has to reach you from there: ntfy, Pushover, a
+chat webhook. It is run in the background and never waited for.
+
 ### In the status bar
 
 `cx bar` is the same answer on one line, for tmux to keep in front of you:

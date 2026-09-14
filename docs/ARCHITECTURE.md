@@ -187,6 +187,15 @@ exchange, so "just started" and "nobody has given it anything to do" are the
 same fact; whether that has gone on too long depends on what the caller has
 already sent, which only the caller knows.
 
+**Where the state comes from.** Three sources, most trusted first: Claude
+Code's own status file (`~/.claude/sessions/<pid>.json`: `idle`, `busy`, or
+`waiting` for a permission prompt), then what the session's hooks last reported
+through `cx-agent event`, then the transcript. The first two are exact and the
+third is inference. The status file outranks the hook because an Escape at a
+permission prompt fires no hook at all, so a hook's `blocked` can outlive the
+prompt. Both are observed rather than documented, like the transcript layout,
+and both degrade to the transcript reading when absent.
+
 **`cx bar`** — the same classification, rendered as one line for a tmux status
 bar: which sessions are waiting for a human, blocked before idle, and nothing
 at all when the answer is none. It shares `cx_activity_rows` with peek and adds

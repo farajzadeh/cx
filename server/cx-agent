@@ -27,7 +27,9 @@ set -eu
 # --permission-mode/--model/--effort, `--` passthrough, ask's print-mode
 # options, and recorded perm_mode in place of the `dangerous` boolean; plus
 # observe, nudge, goal and open --detach. 0.4.0 added observe --unit and
-# --slug. The client feature-gates on this: an
+# --slug, the claude and event facts in observe, the event verb and the hooks
+# open installs to feed it, and open --no-hooks. The client feature-gates on
+# this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
 CX_AGENT_VERSION="0.4.0"
@@ -47,6 +49,14 @@ CX_SESSIONS="${CX_SESSIONS:-$CX_DATA_DIR/sessions.json}"
 # conversation. It is the one thing here that only a human can supply, which
 # is exactly why invariant 5 says the server should hold it.
 CX_GOALS="${CX_GOALS:-$CX_DATA_DIR/goals.json}"
+
+# What each session's Claude Code hooks last reported, one small file per
+# conversation id. A cache in the invariant-4 sense: delete the directory and
+# observe falls back to reading transcripts, exactly as it did before hooks.
+CX_STATE_DIR="${CX_STATE_DIR:-$CX_DATA_DIR/state}"
+
+# Run on the server when a session starts needing its human — see cmd_event.
+CX_NOTIFY="${CX_NOTIFY:-$HOME/.config/cx/notify}"
 
 # Worktrees live in a hidden directory beside the project, one subdirectory per
 # project, so `ls ~/projects` stays readable and `rm --purge` is one removal.
@@ -1069,13 +1079,14 @@ EOF
 #     --continue means "the newest conversation in this directory", which two
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
-  local name="" wt="" label="" mode="continue" dangerous=0 detach=0
+  local name="" wt="" label="" mode="continue" dangerous=0 detach=0 hooks=1
   local perm_mode="" model="" effort=""
   # Everything after `--`, quoted individually and handed to claude verbatim.
   local passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --detach) detach=1 ;;
+      --no-hooks) hooks=0 ;;
       --mode)
         shift
         mode="${1:-continue}"
@@ -1191,6 +1202,22 @@ cmd_open() {
     # an older Claude Code must not fail to start over one.
     if _claude_supports "$claude_bin" "-n, --name"; then
       opts="$opts --name $(cx_q "$slug")"
+    fi
+
+    # Hooks, so Claude reports its own state instead of cx inferring it from
+    # the transcript — see cmd_event. Same terms as --name: only when this
+    # Claude Code accepts --settings, and never a reason to refuse to start.
+    # The agent is named by absolute path because the hook runs inside Claude,
+    # whose PATH is whatever the pane inherited.
+    if [ "$hooks" = 1 ] && [ "$mode" != shell ] &&
+      _claude_supports "$claude_bin" --settings; then
+      local agent_bin="$0" settings=""
+      case "$agent_bin" in
+        /*) ;;
+        *) agent_bin="$HOME/.local/bin/cx-agent" ;;
+      esac
+      settings=$(_hook_settings "$agent_bin" 2>/dev/null) || settings=""
+      [ -n "$settings" ] && opts="$opts --settings $(cx_q "$settings")"
     fi
 
     for a in "${passthru[@]+"${passthru[@]}"}"; do
@@ -1672,6 +1699,57 @@ _observe_load() {
   fi
 }
 
+# _observe_claude — what Claude Code says about its own running processes, one
+# line per process that is verifiably still alive:
+#
+#   session_id TAB tmux_session TAB status TAB status_at TAB kind TAB pid
+#
+# Claude Code keeps $CX_CLAUDE_DIR/sessions/<pid>.json up to date with
+# `status` (busy or idle), `kind` (interactive or bg), the tmux pane it runs
+# in and the conversation it holds. Like the transcript layout it is observed,
+# not documented, so it is a fast path and never load-bearing: no directory,
+# no files, or files in some other shape all leave observe reading
+# transcripts, exactly as it did before.
+#
+# The files outlive their processes, and a pid gets reused. So a file counts
+# only if its pid is running AND — where /proc can say — that process started
+# at the moment the file records. Two real files on the machine this was
+# written on passed `kill -0` for pids that had been reused by something else.
+_observe_claude() {
+  local d="$CX_CLAUDE_DIR/sessions" f row sid tmx st at kind pid start stat rest
+  [ -d "$d" ] || return 0
+  for f in "$d"/*.json; do
+    [ -f "$f" ] || continue
+    row=$(jq -r '
+      select(type == "object" and (.sessionId | type) == "string" and (.pid | type) == "number")
+      | def f: if . == null or . == "" then "-" else tostring end;
+      [ .sessionId,
+        ((.tmux // "") | split(":")[0] | f),
+        (.status | f),
+        (((.statusUpdatedAt // 0) / 1000 | floor) | f),
+        (.kind | f),
+        (.pid | tostring),
+        (.procStart | f)
+      ] | @tsv' "$f" 2>/dev/null) || continue
+    [ -n "$row" ] || continue
+    IFS='	' read -r sid tmx st at kind pid start <<EOF
+$row
+EOF
+    kill -0 "$pid" 2>/dev/null || continue
+    if [ "$start" != - ] && [ -r "/proc/$pid/stat" ]; then
+      # starttime is field 22. Field 2 is the command name in parentheses and
+      # may itself contain spaces or parentheses, so count from after the LAST
+      # ") " rather than splitting the whole line.
+      read -r stat <"/proc/$pid/stat" 2>/dev/null || continue
+      rest="${stat##*) }"
+      # shellcheck disable=SC2086
+      set -- $rest
+      [ "${20:-}" = "$start" ] || continue
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$tmx" "$st" "$at" "$kind" "$pid"
+  done
+}
+
 # _observe_candidates ROWS MAP — every slug `observe --all` might report: the
 # live tmux sessions, plus every session cx has ever pinned.
 #
@@ -1732,7 +1810,8 @@ _observe_worktrees() {
 # without opening a file, one line each:
 #
 #   slug project worktree label dir uuid tmux_name alive attached created
-#   activity pane_command session_store_dir
+#   activity pane_command session_store_dir claude_status claude_status_at
+#   claude_kind claude_pid
 #
 # with "-" for anything empty. The note on IFS in lib/activity.sh applies to
 # every TSV read back with `read`, and this one is: a blank middle column would
@@ -1743,7 +1822,7 @@ _observe_worktrees() {
 # multi-byte character with one dash instead of one per byte, and a project
 # under a non-ASCII path would silently never find its transcripts.
 _observe_resolve() {
-  _OR_SLUGS="$1" _OR_ROWS="$2" _OR_WTS="$3" \
+  _OR_SLUGS="$1" _OR_ROWS="$2" _OR_WTS="$3" _OR_CLAUDES="${4:-}" \
     _OR_PATHS="$_OBS_PATHS" _OR_PINS="$_OBS_PINS" \
     _OR_PREFIX="$CX_TMUX_PREFIX" _OR_CLAUDE="$CX_CLAUDE_DIR" \
     LC_ALL=C awk '
@@ -1763,6 +1842,16 @@ _observe_resolve() {
       load("_OR_PINS", uuid, 1)
       load("_OR_WTS", wt, 2)
       load("_OR_ROWS", row, 0)
+      # Claude processes, reachable by the conversation they hold and by the
+      # tmux session they run in. The conversation is the better key: it is
+      # what cx pinned. The tmux name covers a session with no pin.
+      nc = split(ENVIRON["_OR_CLAUDES"], CL, "\n")
+      for (i = 1; i <= nc; i++) {
+        if (CL[i] == "") continue
+        split(CL[i], cf, "\t")
+        bysid[cf[1]] = CL[i]
+        if (cf[2] != "-") bytmux[cf[2]] = CL[i]
+      }
       pre = ENVIRON["_OR_PREFIX"]
       cdir = ENVIRON["_OR_CLAUDE"]
 
@@ -1799,9 +1888,15 @@ _observe_resolve() {
         sd = ""
         if (d != "") { e = d; gsub(/[^A-Za-z0-9-]/, "-", e); sd = cdir "/projects/" e }
 
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+        cs = "-"; cat = "-"; ck = "-"; cp = "-"
+        c = ""
+        if (u != "" && (u in bysid)) c = bysid[u]
+        else if (tname in bytmux) c = bytmux[tname]
+        if (c != "") { split(c, cf, "\t"); cs = cf[3]; cat = cf[4]; ck = cf[5]; cp = cf[6] }
+
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
           s, dash(proj), dash(w), dash(label), dash(d), dash(u), tname, \
-          alive, att, dash(cr), dash(ac), dash(pc), dash(sd)
+          alive, att, dash(cr), dash(ac), dash(pc), dash(sd), cs, cat, ck, cp
       }
     }'
 }
@@ -1896,15 +1991,16 @@ EOF
     slugs=$(_slug "$name" "$wt" "$label")
   fi
   wts=$(_observe_worktrees "$slugs")
-  resolved=$(_observe_resolve "$slugs" "$rows" "$wts")
+  resolved=$(_observe_resolve "$slugs" "$rows" "$wts" "$(_observe_claude)")
 
   local facts="" msgs="" m="" keep line
   local s proj w lbl dir uuid tname alive att created activity pcmd sdir
+  local cstatus cat ckind cpid estate eat evia
   local tfile present seen shell mtime bytes
   keep="$tail_n"
   [ "$keep" -ge 1 ] || keep=1
 
-  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir; do
+  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir cstatus cat ckind cpid; do
     [ -n "$s" ] || continue
     [ "$proj" = - ] && proj=""
     [ "$w" = - ] && w=""
@@ -1915,6 +2011,32 @@ EOF
     [ "$activity" = - ] && activity=""
     [ "$pcmd" = - ] && pcmd=""
     [ "$sdir" = - ] && sdir=""
+    [ "$cstatus" = - ] && cstatus=""
+    [ "$cat" = - ] && cat=""
+    [ "$ckind" = - ] && ckind=""
+    [ "$cpid" = - ] && cpid=""
+
+    # What this session's hooks last reported, if cx started it with hooks.
+    # Only while tmux is up, and only if written after tmux started it: the
+    # file is keyed by conversation, a conversation outlives its session, and
+    # a report left by the last session to hold it would describe a turn that
+    # is long over.
+    estate=""
+    eat=""
+    evia=""
+    if [ -n "$uuid" ] && [ "$alive" = true ] && [ -r "$CX_STATE_DIR/$uuid" ]; then
+      # The fourth field, the hook's message, is read into _ only so that it
+      # does not run on into the third.
+      IFS='	' read -r estate eat evia _ <"$CX_STATE_DIR/$uuid" 2>/dev/null || estate=""
+      case "$eat" in
+        '' | *[!0-9]*) estate="" ;;
+        *) [ -z "$created" ] || [ "$eat" -ge "$created" ] || estate="" ;;
+      esac
+      [ -n "$estate" ] || {
+        eat=""
+        evia=""
+      }
+    fi
 
     shell=false
     [ "$alive" = true ] && _is_shell_cmd "$pcmd" && shell=true
@@ -1980,7 +2102,7 @@ EOF
       fi
     fi
 
-    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen
+    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia
 "
   done <<EOF
 $resolved
@@ -2036,10 +2158,179 @@ EOF
                 mtime:    ($f[11] | num),
                 bytes:    ($f[12] | num)
               },
+              # What Claude Code says about its own process, when a live one
+              # was found for this session.
+              claude: (if $f[18] == "" then null else {
+                status: $f[18],
+                at:     ($f[19] | num),
+                kind:   ($f[20] | cell),
+                pid:    ($f[21] | num)
+              } end),
+              # What the hooks last reported, when cx started the session
+              # with hooks and the report is newer than its tmux session.
+              event: (if $f[22] == "" then null else {
+                state: $f[22],
+                at:    ($f[23] | num),
+                via:   ($f[24] | cell)
+              } end),
               last: ($m | last),
               tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
             }))
       }'
+}
+
+# ---------------------------------------------------------------------------
+# event — what a Claude Code hook just reported
+# ---------------------------------------------------------------------------
+#
+# The transcript says what a session DID. It cannot say that Claude is showing
+# a permission prompt right now: from a transcript, `blocked` is a guess made
+# after CX_IDLE_GRACE seconds of silence. A hook is Claude telling us, at the
+# moment it happens. So `open` starts every session with hooks that run
+# `cx-agent event`, and this records the latest report per conversation for
+# observe to read.
+#
+# Structure, not meaning (invariant 11): an event name maps to a state and
+# nothing is decided about the work. And no loop: Claude's process fires the
+# hook, this runs once and exits.
+
+# _hook_settings AGENT — the --settings JSON that routes Claude's hooks here.
+#
+# Passed per launch rather than written into ~/.claude/settings.json, so the
+# user's own settings are never touched and a session started by an older cx
+# simply has no hooks.
+_hook_settings() {
+  local cmd
+  cmd="$(cx_q "$1") event"
+  jq -nc --arg c "$cmd" '
+    {hooks: (
+      ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+       "PostToolUseFailure", "PermissionRequest", "Notification", "Stop",
+       "SessionEnd"]
+      | map({key: ., value: [{hooks: [{type: "command", command: $c, timeout: 10}]}]})
+      | from_entries)}'
+}
+
+# _event_state EVENT NOTIFICATION_TYPE SOURCE — the state an event means, or
+# nothing for an event that says nothing about state.
+_event_state() {
+  case "$1" in
+    UserPromptSubmit | PreToolUse | PostToolUse | PostToolUseFailure) printf 'working' ;;
+    # PermissionRequest is the dedicated event; Notification's
+    # permission_prompt says the same thing and is older. Either means the
+    # turn is stopped on a question only a human can answer.
+    PermissionRequest) printf 'blocked' ;;
+    Notification)
+      case "$2" in
+        permission_prompt) printf 'blocked' ;;
+        # Claude has been waiting for input for a while. Idle, and already so.
+        idle_prompt) printf 'idle' ;;
+      esac
+      ;;
+    Stop) printf 'idle' ;;
+    SessionStart)
+      # A new conversation has nothing in it; a resumed one is waiting for its
+      # next prompt. A compaction can happen mid-turn, so it says nothing.
+      case "$3" in
+        startup | clear) printf 'fresh' ;;
+        resume) printf 'idle' ;;
+      esac
+      ;;
+  esac
+  return 0
+}
+
+# cmd_event — record a hook's report. Run BY CLAUDE, with the hook's JSON on
+# stdin, never by a person.
+#
+# Three rules, each because the caller is Claude:
+#
+#   * NOTHING ON STDOUT. For several events Claude adds a hook's stdout to the
+#     conversation as context; PermissionRequest reads it as a decision.
+#   * EXIT 0, ALWAYS. A hook's exit status is an instruction — 2 blocks the
+#     action — and a full disk or a missing jq must never become a refused
+#     tool call.
+#   * RETURN FAST. Hooks run inline with the turn. The notifier is started in
+#     the background and not waited for.
+cmd_event() {
+  local input parsed sid ev ntype source detail st prev="" pstate="" file
+  input=$(cat 2>/dev/null) || input=""
+  [ -n "$input" ] && have jq || return 0
+
+  parsed=$(printf '%s' "$input" | jq -r '
+    def f: if . == null or . == "" then "-" else tostring end;
+    [ (.session_id | f),
+      (.hook_event_name | f),
+      (.notification_type | f),
+      (.source | f),
+      # A PermissionRequest carries no message, only the tool it is for —
+      # verified against a real session — and the tool is the useful part.
+      ((.message // (if .tool_name then "wants to use " + .tool_name else "" end))
+        | gsub("[\t\n\r]"; " ") | .[0:200] | f)
+    ] | @tsv' 2>/dev/null) || return 0
+  IFS='	' read -r sid ev ntype source detail <<EOF
+$parsed
+EOF
+
+  # The id becomes a file name. It comes from Claude, but it is still input,
+  # and "../" in it would write somewhere else entirely.
+  case "$sid" in
+    - | *[!A-Za-z0-9-]*) return 0 ;;
+  esac
+  file="$CX_STATE_DIR/$sid"
+
+  if [ "$ev" = SessionEnd ]; then
+    rm -f "$file" 2>/dev/null || true
+    return 0
+  fi
+
+  st=$(_event_state "$ev" "$ntype" "$source")
+  [ -n "$st" ] || return 0
+  [ "$detail" = - ] && detail=""
+
+  mkdir -p "$CX_STATE_DIR" 2>/dev/null || return 0
+  if [ -r "$file" ]; then
+    IFS= read -r prev <"$file" 2>/dev/null || prev=""
+    pstate="${prev%%	*}"
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$st" "$(date +%s)" "$ev" "$detail" \
+    >"$file.tmp.$$" 2>/dev/null && mv -f "$file.tmp.$$" "$file" 2>/dev/null ||
+    rm -f "$file.tmp.$$" 2>/dev/null || true
+
+  # Tell the human, on the transition only. A session that goes on waiting is
+  # not news, and the hooks fire on every tool call.
+  if [ "$st" != "$pstate" ]; then
+    case "$st" in
+      blocked | idle) _event_notify "$sid" "$st" "$detail" ;;
+    esac
+  fi
+  return 0
+}
+
+# _event_notify SESSION_ID STATE DETAIL — run the user's notifier, if any.
+#
+# $CX_NOTIFY (~/.config/cx/notify) is the user's own executable: ntfy, a
+# Pushover curl, notify-send — whatever reaches them. cx owns none of it; it
+# supplies the facts and gets out of the way:
+#
+#   notify <target> <state> [<message>]      with CX_NOTIFY_HOST set
+#
+# Detached and not waited for, so a slow notifier never holds up Claude.
+_event_notify() {
+  [ -x "$CX_NOTIFY" ] || return 0
+  local slug=""
+  if [ -e "$CX_SESSIONS" ]; then
+    slug=$(jq -r --arg u "$1" \
+      '(.sessions // {}) | to_entries[] | select(.value.uuid == $u) | .key' \
+      "$CX_SESSIONS" 2>/dev/null | head -n 1) || slug=""
+  fi
+  [ -n "$slug" ] || return 0
+  (
+    CX_NOTIFY_HOST=$(hostname 2>/dev/null || printf 'unknown')
+    export CX_NOTIFY_HOST
+    nohup "$CX_NOTIFY" "$slug" "$2" "$3" </dev/null >/dev/null 2>&1 &
+  ) >/dev/null 2>&1
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -2909,7 +3200,7 @@ cx-agent — server-side helper for cx (not intended for direct use)
   new <name> [--repo URL] [--root DIR]
   rm <name> [--purge]
   path <name> [--worktree W]
-  open <name> [--worktree W] [--session L] [--detach]
+  open <name> [--worktree W] [--session L] [--detach] [--no-hooks]
               --mode continue|resume|shell
               [--permission-mode M] [--model M] [--effort E] [--dangerous]
               [-- CLAUDE_ARGS...]
@@ -2921,6 +3212,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
           --slug S              exactly S, reported even if absent (repeatable)
   nudge <name> [--worktree W] [--session L] [--force]
                                 type a prompt into a live session (stdin)
+  event                         record a Claude Code hook's report (stdin);
+                                installed by open, run by Claude
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
@@ -2960,6 +3253,13 @@ main() {
       ;;
     help | --help | -h)
       usage
+      return 0
+      ;;
+    # Ahead of the jq check below, which dies with exit 1. The caller here is
+    # a Claude Code hook, and cmd_event's contract is to exit 0 whatever is
+    # missing.
+    event)
+      cmd_event "$@"
       return 0
       ;;
   esac

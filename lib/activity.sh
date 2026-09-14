@@ -32,10 +32,34 @@ _CX_ACTIVITY_LOADED=1
 export CX_IDLE_GRACE CX_PEEK_TAIL
 
 # cx_activity_state ALIVE SHELL UUID PRESENT LAST_ROLE LAST_STOP QUIET
+#                   [CLAUDE_STATUS CLAUDE_KIND EVENT]
 #
 # ALIVE/SHELL/PRESENT are the strings "true" or "false"; UUID and the LAST_*
 # fields are empty when unknown; QUIET is seconds since the transcript was last
 # written, or empty.
+#
+# The three optional facts are better sources than the transcript when the
+# agent has them, and each is empty when it does not:
+#
+#   CLAUDE_STATUS  idle, busy or waiting, from Claude Code's own per-process
+#                  status file. `waiting` is a permission prompt on screen —
+#                  verified against a real session. Undocumented, like the
+#                  transcript layout, and checked by the agent to belong to a
+#                  process that is still running.
+#   CLAUDE_KIND    interactive or bg. A background session has no tmux at all.
+#   EVENT          what a Claude Code hook last reported: working, blocked,
+#                  idle or fresh. Only sessions cx started with its hooks have
+#                  one, and the agent drops a report older than the tmux session
+#                  it would describe.
+#
+# CLAUDE_STATUS BEATS EVENT, and the order was found the hard way. Pressing
+# Escape at a permission prompt fires no hook at all — no Stop, nothing — so a
+# hook's `blocked` outlives the prompt it described, while the status file
+# goes back to idle the moment the prompt is dismissed. A hook's report is used
+# only where there is no status file to consult.
+#
+# Each is a fast path and never load-bearing: with all three empty, the ladder
+# is exactly the transcript reading it always was.
 #
 # Prints exactly one of:
 #
@@ -54,15 +78,68 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 cx_activity_state() {
   local alive="$1" shell="$2" uuid="$3" present="$4"
   local last_role="$5" last_stop="$6" quiet="$7"
+  local claude_status="${8:-}" claude_kind="${9:-}" event="${10:-}"
 
-  [ "$alive" = true ] || {
+  if [ "$alive" != true ] || [ "$shell" = true ]; then
+    # A background session never had a tmux session to lose, and cx used to
+    # call one dead while it worked. Claude's own status file is the only thing
+    # that knows it is there. An interactive session with no tmux is dead
+    # whatever its status file says: that file outlives a killed process.
+    if [ "$claude_kind" = bg ]; then
+      case "$claude_status" in
+        idle)
+          printf 'idle'
+          return 0
+          ;;
+        busy)
+          printf 'working'
+          return 0
+          ;;
+        waiting)
+          printf 'blocked'
+          return 0
+          ;;
+      esac
+    fi
     printf 'dead'
     return 0
-  }
-  [ "$shell" = true ] && {
-    printf 'dead'
-    return 0
-  }
+  fi
+
+  # Claude's word about its own process, when there is one to read. Every
+  # value is exact: `waiting` is the permission prompt that a transcript can
+  # only guess at after CX_IDLE_GRACE seconds of silence, and `busy` is a turn
+  # in progress however long it has been quiet — a ten-minute test run is not
+  # blocked, and before this, a driver escalated it as though it were.
+  case "$claude_status" in
+    waiting)
+      printf 'blocked'
+      return 0
+      ;;
+    busy)
+      printf 'working'
+      return 0
+      ;;
+    idle)
+      # Waiting for input. With no transcript yet, that input is the first
+      # prompt: `fresh`, for the reasons given below.
+      if [ "$present" = true ]; then
+        printf 'idle'
+      else
+        printf 'fresh'
+      fi
+      return 0
+      ;;
+  esac
+
+  # No status file: a hook's report, if cx started this session with hooks.
+  # Still exact about what it saw, which is the reason it comes before any
+  # reading of the transcript.
+  case "$event" in
+    working | blocked | idle | fresh)
+      printf '%s' "$event"
+      return 0
+      ;;
+  esac
 
   # No pinned conversation means cx has no way to find this session's
   # transcript — an old session from before pinning, or a store that has been
@@ -165,7 +242,7 @@ cx_activity_color() {
 cx_activity_rows() {
   local host="$1" file="$2" now="$3"
   local target alive shell attached uuid present last_role last_stop mtime created
-  local quiet age state
+  local cstatus ckind event quiet age state
 
   # Every field is emitted with a "-" placeholder when it is absent, and the
   # placeholder is not decoration. TAB IS IFS WHITESPACE: with IFS set to it,
@@ -178,12 +255,15 @@ cx_activity_rows() {
   #
   # The rows printed below keep the same convention for the same reason: their
   # last two columns are routinely empty.
-  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created; do
+  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created cstatus ckind event; do
     [ -n "$target" ] || continue
 
     [ "$uuid" = - ] && uuid=""
     [ "$last_role" = - ] && last_role=""
     [ "$last_stop" = - ] && last_stop=""
+    [ "$cstatus" = - ] && cstatus=""
+    [ "$ckind" = - ] && ckind=""
+    [ "$event" = - ] && event=""
 
     quiet=""
     age=""
@@ -191,7 +271,7 @@ cx_activity_rows() {
     [ "$created" != - ] && age=$((now - created))
 
     state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-      "$last_role" "$last_stop" "$quiet")
+      "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event")
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$host" "$target" "$state" "$attached" "${quiet:--}" "${age:--}"
@@ -209,7 +289,12 @@ $(jq -r '
         (.last.role          | f),
         (.last.stop_reason   | f),
         (.transcript.mtime   | f),
-        (.tmux.created       | f)
+        (.tmux.created       | f),
+        # From agent 0.4.0 on. An older agent leaves them out, and they then
+        # become the same "-" as every other missing fact.
+        (.claude.status      | f),
+        (.claude.kind        | f),
+        (.event.state        | f)
       ] | @tsv' "$file" 2>/dev/null)
 EOF
 }

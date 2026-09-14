@@ -124,6 +124,79 @@ assert_fail cx_activity_is_steerable blocked
 it "refuses to type into a dead session"
 assert_fail cx_activity_is_steerable dead
 
+describe "cx_activity_state — what Claude reports about itself"
+
+# state ALIVE SHELL UUID PRESENT LAST_ROLE LAST_STOP QUIET CLAUDE_STATUS KIND EVENT
+
+it "lets a hook's blocked beat a transcript that says the turn finished"
+# A permission prompt is exactly what a transcript cannot show. The hook says
+# so the moment it appears, instead of 120 seconds of silence later.
+assert_eq "$(state true false uuid true assistant end_turn 5 '' '' blocked)" blocked
+
+it "lets a hook's idle beat a transcript that still looks mid-turn"
+assert_eq "$(state true false uuid true assistant tool_use 5 '' '' idle)" idle
+
+it "lets a hook's working beat a long silence"
+# A long tool call is quiet and busy. Only a permission prompt makes it
+# blocked, and that would have come as its own event.
+assert_eq "$(state true false uuid true assistant tool_use 9999 '' '' working)" working
+
+it "reports a hook's fresh"
+assert_eq "$(state true false uuid false '' '' '' '' '' fresh)" fresh
+
+it "ignores an event it does not recognise"
+assert_eq "$(state true false uuid true assistant end_turn 5 '' '' sideways)" idle
+
+it "never lets a hook revive a session whose tmux is gone"
+assert_eq "$(state false false uuid true assistant end_turn 5 idle interactive working)" dead
+
+it "trusts Claude's own idle over a transcript that looks mid-turn"
+assert_eq "$(state true false uuid true assistant tool_use 9999 idle interactive '')" idle
+
+it "calls busy working while the transcript is moving"
+assert_eq "$(state true false uuid true assistant tool_use 30 busy interactive '')" working
+
+it "keeps busy working however long it has been quiet"
+# A long test run is busy and silent. Claude reports a permission prompt as
+# `waiting`, so busy is never a prompt in disguise.
+assert_eq "$(state true false uuid true assistant tool_use 9999 busy interactive '')" working
+
+it "calls waiting blocked — Claude's own word for a permission prompt"
+assert_eq "$(state true false uuid true assistant end_turn 5 waiting interactive '')" blocked
+
+it "lets Claude's status beat a hook's blocked that has outlived its prompt"
+# Escape at a permission prompt fires no hook: the hook still says blocked
+# while the status file has already gone back to idle. Verified on a real
+# session.
+assert_eq "$(state true false uuid true assistant tool_use 5 idle interactive blocked)" idle
+
+it "calls busy with no transcript yet working, not fresh"
+assert_eq "$(state true false uuid false '' '' '' busy interactive '')" working
+
+it "keeps idle with no transcript fresh"
+assert_eq "$(state true false uuid false '' '' '' idle interactive '')" fresh
+
+it "sees a background session that has no tmux at all"
+# cx used to report these as dead while they worked.
+assert_eq "$(state false false uuid true '' '' '' busy bg '')" working
+
+it "sees a background session waiting for input"
+assert_eq "$(state false false uuid true '' '' '' idle bg '')" idle
+
+it "sees a background session stopped on a permission prompt"
+assert_eq "$(state false false uuid true '' '' '' waiting bg '')" blocked
+
+it "calls an interactive session with no tmux dead whatever its status file says"
+# The status file outlives a killed process; the agent checks the pid, and this
+# is the second line of defence.
+assert_eq "$(state false false uuid true '' '' '' busy interactive '')" dead
+
+it "lets Claude's status speak for a session with no pinned conversation"
+assert_eq "$(state true false '' false '' '' '' busy interactive '')" working
+
+it "still says unknown for no pin and no status"
+assert_eq "$(state true false '' false '' '' '' '' '' '')" unknown
+
 # ---------------------------------------------------------------------------
 #
 # Everything above is pure bash and runs anywhere. Everything below needs jq,

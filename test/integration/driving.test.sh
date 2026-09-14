@@ -365,7 +365,14 @@ assert_contains "$(cx_run "$HOME_DIR" ask cx-test-web1:api 'hi')" "STUB_ANSWER"
 describe "a session whose Claude exited reads as dead"
 
 on_node 'tmux send-keys -t "=cx-api@impl:" C-d' >/dev/null 2>&1
-settle 3
+# Wait for the session to end, not for a fixed time. C-d is read only after any
+# input still queued in the pane — the long prompt above is dozens of lines —
+# and every line now fires hooks, so how long that takes is not a constant.
+_n=0
+while [ "$_n" -lt 30 ] && on_node 'tmux has-session -t "=cx-api@impl"' >/dev/null 2>&1; do
+  settle 1
+  _n=$((_n + 1))
+done
 
 it "peek notices the pane fell back to a shell"
 assert_eq \
@@ -468,5 +475,98 @@ it "reports the sessions it can still see"
 # The project was removed above, so its registered sessions are gone with it;
 # what matters here is that a missing store is not an error.
 assert_not_contains "$(cx_run "$HOME_DIR" peek)" "cx:"
+
+# ---------------------------------------------------------------------------
+# Claude reporting its own state
+#
+# Everything above reads transcripts. From agent 0.4.0 a session cx starts also
+# carries hooks that report straight to `cx-agent event`, and observe reads
+# Claude Code's own status file. The stub plays real Claude's part in both —
+# the event names, and `waiting` for a permission prompt, are what a real
+# Claude Code 2.1 session was seen to produce.
+
+cx_run "$HOME_DIR" new cx-test-web1:hooks >/dev/null 2>&1
+on_node 'mkdir -p $HOME/.config/cx && printf "#!/bin/sh\nprintf \"%%s|%%s\\n\" \"\$1\" \"\$2\" >>\$HOME/notified\n" >$HOME/.config/cx/notify && chmod +x $HOME/.config/cx/notify' >/dev/null
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks >/dev/null 2>&1
+settle 3
+
+hooks_obs() { agent "observe hooks --tail 0" | jq -r ".sessions[0].$1"; }
+
+describe "a session cx starts reports its own state"
+
+it "hands Claude cx's hooks, and Claude reports the session starting"
+assert_eq "$(hooks_obs event.state)" fresh
+
+it "names the hook the report came from"
+assert_eq "$(hooks_obs event.via)" SessionStart
+
+it "finds Claude's own status file for the session"
+assert_eq "$(hooks_obs claude.status)" idle
+
+it "still calls it fresh, since nothing has been asked of it"
+assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks | jq -r '.sessions[0].state')" fresh
+
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks "write the patch" >/dev/null 2>&1
+settle 3
+
+it "hears the turn finish from the Stop hook"
+assert_eq "$(hooks_obs event.state)" idle
+
+it "calls it idle"
+assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks | jq -r '.sessions[0].state')" idle
+
+it "runs the user's notifier when the session starts waiting"
+assert_contains "$(on_node 'cat $HOME/notified 2>/dev/null')" "hooks|idle"
+
+it "never prints anything back to Claude from a hook"
+# Claude reads a hook's stdout as context, and as a decision for
+# PermissionRequest. The stub collects whatever the hooks printed.
+assert_eq "$(on_node 'cat $HOME/.cx-stub-hook-stdout 2>/dev/null')" ""
+
+describe "a permission prompt is blocked the moment it appears"
+
+on_node 'tmux set-environment -g CX_STUB_BUSY 1' >/dev/null
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks@perm >/dev/null 2>&1
+on_node 'tmux set-environment -gu CX_STUB_BUSY' >/dev/null
+settle 3
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks@perm "run the migration" >/dev/null 2>&1
+settle 3
+
+perm_json() { cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@perm | jq -r ".sessions[0].$1"; }
+
+it "reads Claude's status as waiting"
+assert_eq "$(perm_json claude.status)" waiting
+
+it "records the PermissionRequest hook"
+assert_eq "$(perm_json event.state)" blocked
+
+it "calls it blocked without waiting out the grace period"
+# The transcript was written a few seconds ago; from the transcript alone this
+# would read `working` for the next two minutes.
+assert_eq "$(perm_json state)" blocked
+
+it "tells the human it needs them"
+assert_contains "$(on_node 'cat $HOME/notified 2>/dev/null')" "hooks@perm|blocked"
+
+it "and nudge declines to type into the prompt"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json nudge cx-test-web1:hooks@perm 'hello' | jq -r '.reason')" \
+  blocked
+
+describe "open --no-hooks"
+
+cx_run "$HOME_DIR" open -d --no-hooks cx-test-web1:hooks@plain >/dev/null 2>&1
+settle 3
+
+it "starts a session with no hooks at all"
+assert_eq "$(agent "observe hooks --session plain --tail 0" | jq -r '.sessions[0].event')" null
+
+it "which still reads Claude's own status"
+assert_eq "$(agent "observe hooks --session plain --tail 0" | jq -r '.sessions[0].claude.status')" idle
+
+it "and is still classified"
+assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@plain | jq -r '.sessions[0].state')" fresh
+
+cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
 
 summary

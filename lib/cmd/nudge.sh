@@ -134,7 +134,7 @@ EOF
 # _nudge_state OBSERVE_JSON — classify the one session observe reported on.
 _nudge_state() {
   local obs="$1" now alive shell uuid present last_role last_stop mtime
-  local quiet=""
+  local cstatus ckind event quiet=""
   now=$(cx_now)
   alive=$(printf '%s' "$obs" | jq -r '.sessions[0].tmux.alive | tostring' 2>/dev/null) || return 1
   [ -n "$alive" ] && [ "$alive" != null ] || return 1
@@ -144,9 +144,15 @@ _nudge_state() {
   last_role=$(printf '%s' "$obs" | jq -r '.sessions[0].last.role // ""')
   last_stop=$(printf '%s' "$obs" | jq -r '.sessions[0].last.stop_reason // ""')
   mtime=$(printf '%s' "$obs" | jq -r '.sessions[0].transcript.mtime // ""')
+  # Absent from an agent older than 0.4.0, which leaves the classifier reading
+  # the transcript exactly as before. Present, they are what stops a nudge from
+  # typing into a permission prompt the transcript cannot see.
+  cstatus=$(printf '%s' "$obs" | jq -r '.sessions[0].claude.status // ""')
+  ckind=$(printf '%s' "$obs" | jq -r '.sessions[0].claude.kind // ""')
+  event=$(printf '%s' "$obs" | jq -r '.sessions[0].event.state // ""')
   [ -n "$mtime" ] && quiet=$((now - mtime))
   cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-    "$last_role" "$last_stop" "$quiet"
+    "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event"
 }
 
 # _nudge_report TARGET SENT REASON STATE

@@ -9,7 +9,7 @@
 . "$CX_HOME/lib/target.sh"
 
 _open_common() {
-  local mode="$1" target="" detach=0
+  local mode="$1" target="" detach=0 nohooks=0
   shift
 
   cx_claude_opts_reset
@@ -39,6 +39,11 @@ _open_common() {
 
     case "$1" in
       -d | --detach) detach=1 ;;
+      # Claude Code hooks are how a session reports its own state; see the
+      # agent's cmd_event. Opting out leaves cx reading transcripts and
+      # Claude's status file, exactly as it does for a session started by an
+      # older cx.
+      --no-hooks) nohooks=1 ;;
       -*)
         err "unknown option: $1"
         hint "to pass it to Claude Code instead: cx $mode <target> -- $1"
@@ -85,6 +90,11 @@ _open_common() {
   if [ "$detach" = 1 ]; then
     cx_agent_observe_ok "$CX_T_HOST" "$ver" || return 1
   fi
+  local hookargs=()
+  if [ "$nohooks" = 1 ]; then
+    cx_agent_supports "$CX_T_HOST" "--no-hooks" 0.4.0 "$ver" || return 1
+    hookargs=(--no-hooks)
+  fi
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -130,6 +140,7 @@ _open_common() {
     local out=""
     out=$(cx_agent "$CX_T_HOST" open "$CX_T_PROJECT" \
       "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" --detach \
+      "${hookargs[@]+"${hookargs[@]}"}" \
       "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
       "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}") || return $?
     if [ "${CX_JSON:-0}" = 1 ]; then
@@ -163,6 +174,7 @@ _open_common() {
   exec ssh -t $opts "$CX_T_HOST" \
     "$CX_AGENT_PATH$(cx_remote_quote open "$CX_T_PROJECT" \
       "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}" --mode "$mode" \
+      "${hookargs[@]+"${hookargs[@]}"}" \
       "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
       "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}")"
 }
@@ -217,6 +229,7 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open <host>:<project>/<worktree>       a worktree of the project
   cx open <host>:<project>/<worktree>@<label>
   cx open -d <target>                       start it, do not attach
+  cx open --no-hooks <target>               without the hooks that report its state
 
 Creates a persistent tmux session on the server and starts Claude Code in it,
 resuming that session's own conversation. If it is already running, this

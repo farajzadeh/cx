@@ -70,6 +70,15 @@ Not in the config file; set these in the environment when you need them.
 | `CX_TMUX_TITLE` | `0` | `1` also renames that window to the target. Off by default: tmux turns off `automatic-rename` for any window given an explicit name, and that is a lasting change to how your tmux behaves. |
 | `CX_GOAL_HOST` | — | Which server holds goals when a command does not name one. Falls back to `CX_DEFAULT_HOST`, then to the only configured server if there is just one. |
 
+## On the server
+
+These live on each server, not on the machine you run cx from.
+
+| Path | What it does |
+|---|---|
+| `~/.config/cx/notify` | An executable run when a session turns `blocked` or `idle`, with `<target> <state> <message>` and `CX_NOTIFY_HOST` set. Runs in the background, is never waited for, and fires only on a change. Absent means no notifications. `CX_NOTIFY` in the server's environment names a different file. |
+| `~/.local/share/cx/state/` | What each session's hooks last reported. A cache: delete it and cx reads conversations instead. |
+
 ## The flags, as environment variables
 
 Every global flag is also read from the environment, and deliberately so:

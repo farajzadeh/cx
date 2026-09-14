@@ -168,6 +168,69 @@ assert_eq "$(cmd_observe --all --slug never-opened --tail 0 | targets)" "never-o
 it "implies --all"
 assert_eq "$(cmd_observe --unit my.app --tail 0 | targets)" "my.app"
 
+describe "observe — what Claude and its hooks report"
+
+export CX_STATE_DIR="$TMP/data/state"
+mkdir -p "$CX_CLAUDE_DIR/sessions" "$CX_STATE_DIR"
+
+# A dead pid: start something, let it finish, keep its number.
+sleep 0 &
+DEAD=$!
+wait "$DEAD" 2>/dev/null
+
+MYSTART=""
+[ -r "/proc/$$/stat" ] && MYSTART=$(sed 's/.*) //' "/proc/$$/stat" | awk '{print $20}')
+
+printf '{"pid":%s,"sessionId":"u-api","procStart":"%s","kind":"interactive","tmux":"cx-api:@1.%%1","status":"busy","statusUpdatedAt":1700000200000}\n' \
+  "$$" "$MYSTART" >"$CX_CLAUDE_DIR/sessions/$$.json"
+printf '{"pid":%s,"sessionId":"u-review","kind":"interactive","status":"idle","statusUpdatedAt":1700000200000}\n' \
+  "$DEAD" >"$CX_CLAUDE_DIR/sessions/$DEAD.json"
+printf '{"pid":%s,"sessionId":"u-myapp","procStart":"1","kind":"interactive","status":"idle"}\n' \
+  "$$" >"$CX_CLAUDE_DIR/sessions/reused.json"
+printf 'not json\n' >"$CX_CLAUDE_DIR/sessions/garbage.json"
+
+OBS=$(cmd_observe --all --tail 0)
+
+it "reports Claude's own status for a session whose process is running"
+assert_eq "$(target api | jq -r .claude.status)" busy
+
+it "reports when that status was last updated, in seconds"
+assert_eq "$(target api | jq -r .claude.at)" 1700000200
+
+it "ignores a status file whose process has exited"
+assert_eq "$(target api@review | jq -r .claude)" null
+
+it "ignores a status file whose pid now belongs to a different process"
+# Seen for real: two status files on one machine passed kill -0 because their
+# pids had been reused. The start time is what tells them apart.
+if [ -n "$MYSTART" ]; then
+  assert_eq "$(target my.app | jq -r .claude)" null
+else
+  skip "no /proc on this system"
+fi
+
+it "survives a status file that is not JSON"
+assert_eq "$(target api | jq -r .target)" api
+
+it "reports what the hooks last said, while the session is up"
+printf 'blocked\t%s\tPermissionRequest\tneeds Bash\n' "$(date +%s)" >"$CX_STATE_DIR/u-api"
+assert_eq "$(cmd_observe --all --tail 0 | jq -r '.sessions[] | select(.target == "api") | .event.state')" blocked
+
+it "names the hook that said it"
+assert_eq "$(cmd_observe --all --tail 0 | jq -r '.sessions[] | select(.target == "api") | .event.via')" PermissionRequest
+
+it "ignores a report older than the tmux session it would describe"
+# The file is keyed by conversation, and a conversation outlives its session:
+# this report was left by whatever held it before tmux started this one.
+printf 'blocked\t1600000000\tPermissionRequest\t\n' >"$CX_STATE_DIR/u-api"
+assert_eq "$(cmd_observe --all --tail 0 | jq -r '.sessions[] | select(.target == "api") | .event')" null
+
+it "ignores a report for a session that is not running"
+printf 'working\t%s\tPreToolUse\t\n' "$(date +%s)" >"$CX_STATE_DIR/u-review"
+assert_eq "$(cmd_observe --all --tail 0 | jq -r '.sessions[] | select(.target == "api@review") | .event')" null
+
+rm -rf "$CX_CLAUDE_DIR/sessions" "$CX_STATE_DIR"
+
 describe "_transcript_messages — the byte window and its escalation"
 
 BIG="$TMP/big.jsonl"

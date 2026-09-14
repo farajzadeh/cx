@@ -328,6 +328,28 @@ Renders entirely from cache, at any age, fetching nothing.
 
 ## Driving sessions
 
+### A session says `blocked` but it is just working
+
+For a session Claude Code reports on — anything started by a current cx, on
+Claude Code 2.1 or later — `blocked` means a permission prompt is on screen,
+and `working` stays `working` through a long, quiet tool call.
+
+For an older session there is no report, and cx reads the conversation instead:
+a turn that has been silent longer than `CX_IDLE_GRACE` (120 s) is called
+`blocked`, because that is usually a prompt. A long build is the exception.
+Restart the session to get exact states: `cx stop <target>`, then `cx open`.
+
+### Notifications never arrive
+
+- **The notifier is on the wrong machine.** It runs on the *server*:
+  `~/.config/cx/notify` there, executable (`chmod +x`).
+- **The session predates the hooks.** Only sessions started by agent 0.4.0 or
+  later, without `--no-hooks`, report. `cx provision <host>`, then restart the
+  session.
+- **It only fires on a change** into `blocked` or `idle` — a session that stays
+  waiting is not news twice. Test the script by hand:
+  `CX_NOTIFY_HOST=test ~/.config/cx/notify api idle "hello"`.
+
 ### `cx peek` says `unknown`
 
 cx could not read that session's conversation. Two harmless causes:

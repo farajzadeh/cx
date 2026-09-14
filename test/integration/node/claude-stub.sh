@@ -32,6 +32,15 @@
 #
 #   CX_STUB_BUSY=1   write a turn that never finishes (stop_reason tool_use)
 #                    so the busy/blocked paths can be exercised.
+#
+# With --settings it also plays the part of Claude Code's hooks: it runs the
+# command configured for each event, with the JSON Claude would send on stdin
+# — SessionStart on start, UserPromptSubmit and Stop around every turn, and a
+# PermissionRequest instead of the Stop when CX_STUB_BUSY=1, which is the event
+# real Claude Code fires for a permission prompt. And it keeps
+# ~/.claude/sessions/<pid>.json the way real Claude does — busy while a turn
+# runs, `waiting` on a permission prompt, idle between turns — so cx's status
+# reader has a live file whose pid and start time really are this process's.
 
 # Run under a distinctly-named copy of sh, so that the pane's foreground
 # process is not called "sh".
@@ -56,6 +65,7 @@ perm=""
 model=""
 effort=""
 dispname=""
+settings=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -80,6 +90,7 @@ Options:
   --model <model>                       Model for the current session
   --effort <level>                      Effort level for the current session
   -n, --name <name>                     Set a display name for this session
+  --settings <file-or-json>             Additional settings
   --add-dir <directories...>            Additional directories
   --output-format <format>              Output format
   --json-schema <schema>                JSON Schema for structured output
@@ -125,6 +136,10 @@ HELP
       shift
       dispname="${1:-}"
       ;;
+    --settings)
+      shift
+      settings="${1:-}"
+      ;;
     -*) ;; # any other flag: ignored
     *) prompt="${prompt:+$prompt }$1" ;;
   esac
@@ -161,6 +176,31 @@ _append() {
   } >>"$_dir/$session.jsonl" 2>/dev/null || true
 }
 
+# _hook EVENT [JSON-FIELDS] — run the command --settings configured for EVENT.
+_hook() {
+  [ -n "$settings" ] && [ -n "$session" ] && command -v jq >/dev/null 2>&1 || return 0
+  _cmd=$(printf '%s' "$settings" | jq -r --arg e "$1" '.hooks[$e][0].hooks[0].command // empty' 2>/dev/null)
+  [ -n "$_cmd" ] || return 0
+  printf '{"session_id":"%s","hook_event_name":"%s","cwd":"%s"%s}' \
+    "$session" "$1" "$(pwd)" "${2:-}" | sh -c "$_cmd" >>"$HOME/.cx-stub-hook-stdout" 2>/dev/null || true
+}
+
+# _status busy|idle — the per-process status file real Claude keeps.
+_status() {
+  [ -n "$session" ] || return 0
+  mkdir -p "$HOME/.claude/sessions" 2>/dev/null || return 0
+  # Worked out once. This runs on every line of input, and three processes a
+  # line made the stub slow enough to fall behind a long pasted prompt.
+  if [ -z "${_start+x}" ]; then
+    _start=$(sed 's/.*) //' "/proc/$$/stat" 2>/dev/null | awk '{print $20}')
+    _tmux=""
+    [ -n "${TMUX:-}" ] && _tmux=$(tmux display-message -p '#{session_name}:@0.%0' 2>/dev/null)
+  fi
+  printf '{"pid":%s,"sessionId":"%s","procStart":"%s","kind":"interactive","tmux":"%s","name":"%s","status":"%s","statusUpdatedAt":%s000}\n' \
+    "$$" "$session" "$_start" "$_tmux" "$dispname" "$1" "$(date +%s)" \
+    >"$HOME/.claude/sessions/$$.json" 2>/dev/null || true
+}
+
 # Record every invocation so a test can inspect the full argv history.
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$(pwd)" "$mode" "$tag" "$session" "$danger" "$perm" "$model" "$effort" \
@@ -193,13 +233,26 @@ esac
 #
 # Then stay alive, one turn per line of stdin. Exiting instead would drop the
 # pane back to a shell, which is exactly how cx detects a dead session.
+_src=startup
+[ "$tag" = resume ] && _src=resume
+_hook SessionStart ",\"source\":\"$_src\""
+_status idle
+
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   echo "STUB: got $line"
+  _status busy
+  _hook UserPromptSubmit
   _append user user null "$line"
   if [ "${CX_STUB_BUSY:-0}" = 1 ]; then
     _append assistant assistant '"tool_use"' "working on it"
+    _hook PermissionRequest ',"tool_name":"Bash"'
+    _status waiting
   else
     _append assistant assistant '"end_turn"' "did: $line"
+    _hook Stop
+    _status idle
   fi
 done
+_hook SessionEnd
+rm -f "$HOME/.claude/sessions/$$.json" 2>/dev/null || true

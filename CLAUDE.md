@@ -34,6 +34,9 @@ bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
 bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux
+bash test/unit/observe.test.sh             # the agent's observe: what it reads, and what it skips
+bash test/unit/event.test.sh               # cx-agent event, the command Claude's hooks run
+bash test/unit/peek.test.sh                # peek's client half, against new and old agents
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -248,6 +251,17 @@ Five commands, and the split between them is invariant 11 made concrete:
   are the same fact; whether that has gone on too long depends on what the
   caller has already sent, which only the caller knows.
 
+  Three sources feed the classifier, in this order of trust: **Claude's own
+  status file** (`idle`/`busy`/`waiting`, where `waiting` is a permission
+  prompt), then **what a hook last reported**, then **the transcript**. The
+  first two are exact and the third is inference; see "Claude's own status,
+  and its hooks" below for why the status file outranks the hook.
+
+  `cx peek <target>` narrows **on the server** with `observe --unit`, falling
+  back to `--all` plus the client-side filter when an older agent rejects the
+  flag with exit 3. The round trip was never the cost; the agent's
+  per-session work was.
+
 - **`cx bar`** — the same states on one line, for a tmux status bar. It shares
   `cx_activity_rows` with peek — which is why that function lives in
   `lib/activity.sh` and not beside either command — and adds only presentation.
@@ -375,8 +389,12 @@ Four properties are relied on, all verified against a real store:
    human, `tool_use` means it is mid-work.
 
 Two practical consequences for anyone touching `_transcript_messages`. The
-scan window has to be far larger than the number of messages wanted (500,
-escalating once to 5000) because sidechains bury the main thread. And every
+scan window has to be far larger than the number of messages wanted, because
+sidechains bury the main thread — **the last 256 KB first, and 5000 lines only
+if that held too few**. Lines are too uneven to budget by: "the last 500 lines"
+measured up to 6.7 MB of JSON on a real server. Observe also **does not parse a
+dead session's transcript unless a tail was asked for**, since its state is
+`dead` whatever the transcript says; that was 23 of 26 sessions. And every
 line must be parsed with `jq -R 'fromjson? // empty'` — **the `?` is
 load-bearing**: the file is append-only and being written while we read it, so
 its last line is routinely a half-written object.
@@ -388,6 +406,45 @@ says `unknown` and exits 0. A future Claude Code change should cost one display
 column or one new conversation, never a broken `cx ls`, a session that will not
 open, or a driver that cannot tell what is happening. Preserve that property —
 `test/fixtures/transcript/` has a fixture for each of these failure modes.
+
+### Claude's own status, and its hooks
+
+Two more sources, both fast paths over the transcript and neither load-bearing:
+
+- **`~/.claude/sessions/<pid>.json`**, which Claude Code 2.1 keeps per process:
+  `sessionId`, the `tmux` pane, `kind` (`interactive` or `bg`) and `status` —
+  `idle`, `busy`, or **`waiting`, which is a permission prompt on screen**,
+  verified against a real session. Observed, not documented. The files outlive
+  their processes and pids get reused, so `_observe_claude` accepts one only if
+  `kill -0` succeeds **and**, where `/proc` exists, `procStart` equals field 22 of
+  `/proc/<pid>/stat`. Two real files on the development server passed `kill -0`
+  for reused pids. A `bg` session has no tmux at all, and cx used to report one
+  as dead while it worked.
+- **Claude Code hooks.** `cmd_open` passes `--settings '{"hooks":…}'` routing
+  SessionStart, UserPromptSubmit, PreToolUse, PostToolUse(Failure),
+  PermissionRequest, Notification, Stop and SessionEnd to `cx-agent event`,
+  which writes `~/.local/share/cx/state/<session_id>`. Per launch, so the
+  user's own `settings.json` is never touched. `cmd_event` is run **by Claude**,
+  and three rules follow from that: **nothing on stdout** (Claude reads it as
+  context, and as a decision for PermissionRequest), **exit 0 always** (a
+  hook's exit status is an instruction; 2 blocks the action), and **return
+  fast** (the notifier is backgrounded). The session id becomes a file name,
+  so it is validated like any other input, and `event` is dispatched ahead of
+  the agent's jq check because that check dies with exit 1.
+
+**The status file outranks the hook.** Pressing Escape at a permission prompt
+fires **no hook at all** — not Stop, nothing — so a hook's `blocked` outlives
+the prompt it described, while the status file is back to `idle` at once.
+Found by driving a real session through a prompt and a denial. A hook's report
+is used only where no status file matched, and observe drops one older than
+the tmux session it would describe: the file is keyed by conversation, and a
+conversation outlives the session that held it.
+
+Neither contradicts invariant 11. A hook is Claude's own event, and
+`cx-agent event` runs once per event and exits. The notifier — the user's
+executable at `~/.config/cx/notify` on the server, run with
+`<target> <state> <message>` — fires only on a transition into `blocked` or
+`idle`, because the hooks fire on every tool call.
 
 ## Keeping this file current
 
