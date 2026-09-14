@@ -23,7 +23,13 @@
 # shellcheck source=../remote.sh
 . "$CX_HOME/lib/remote.sh"
 
-# _tabs_live HOSTS DIR — every live session, as "host:target<TAB>attached".
+# _tabs_live HOSTS DIR — every live session, as
+# "host:target<TAB>attached<TAB>attach_detaches".
+#
+# attach_detaches is the host's answer to "will opening this take it from
+# whoever has it?" — agent 0.4.0 attaches without -d on a tmux that sizes a
+# window to its latest client, and says so. An older agent does not say, and
+# always detaches, so its silence means yes.
 #
 # Failures are collected rather than fatal: one unreachable server must not
 # stop the tabs for the servers that answered.
@@ -40,9 +46,10 @@ _tabs_live() {
     safe=$(cx_sanitize "$h")
     if [ -s "$dir/$safe.json" ] && jq -e . "$dir/$safe.json" >/dev/null 2>&1; then
       jq -r --arg h "$h" '
-        .sessions[]?
+        (if .attach_detaches == false then "false" else "true" end) as $d
+        | .sessions[]?
         | select(.target != null)
-        | "\($h):\(.target)\t\(.attached)"' "$dir/$safe.json" 2>/dev/null
+        | "\($h):\(.target)\t\(.attached)\t\($d)"' "$dir/$safe.json" 2>/dev/null
     else
       printf '%s\n' "$h" >>"$dir/failed"
     fi
@@ -86,7 +93,7 @@ _tabs_open() {
 }
 
 cmd_tabs() {
-  local session="cx" dry=0 attach=1
+  local session="cx" dry=0 attach=1 take=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -105,12 +112,14 @@ session's state — see ${C_BOLD}cx bar --setup${C_RESET} for the tmux lines tha
 Re-running is safe and is how you pick up sessions started since: a session
 that already has a tab is skipped. Tabs are never closed for you.
 
-${C_YELLOW}A tab takes its session.${C_RESET} cx open attaches with ${C_BOLD}tmux attach -d${C_RESET}, which detaches
-whoever was already there — otherwise a dropped SSH leaves a phantom client and
-tmux sizes the window to the smallest one. So opening a tab for a session you
-have up in another terminal takes it, and when that terminal reattaches it
-takes it back and the tab closes. Attach from one place. Sessions this would
-take are marked ${C_YELLOW}!${C_RESET} before anything happens, and ${C_BOLD}-n${C_RESET} shows them without acting.
+${C_BOLD}Sessions open in another terminal.${C_RESET} On a server whose tmux sizes a window
+to its latest client (tmux 3.1 and later, with agent 0.4.0), a tab simply joins
+the session: both places see it and neither is thrown out. On an older one,
+cx open has to attach with ${C_BOLD}tmux attach -d${C_RESET}, which detaches whoever was there —
+so a tab would take the session, and that terminal would take it back. There,
+such sessions are ${C_BOLD}skipped${C_RESET} and listed, and ${C_BOLD}--take${C_RESET} opens them anyway.
+
+  cx tabs --take                open those too, taking them from the other terminal
 
 Related: cx bar --setup (the icons), cx open (one more tab, by hand),
          cx status (what is running, as a table)
@@ -119,6 +128,7 @@ EOF
         ;;
       -n | --dry-run) dry=1 ;;
       --no-attach) attach=0 ;;
+      --take) take=1 ;;
       -s | --session)
         [ $# -ge 2 ] || {
           err "--session needs a name"
@@ -184,8 +194,8 @@ EOF
   cols="$1"
   rows="$2"
 
-  local target attached state added=0 skipped=0
-  while IFS="$(printf '\t')" read -r target attached; do
+  local target attached detaches state added=0 skipped=0 held=0
+  while IFS="$(printf '\t')" read -r target attached detaches; do
     [ -n "$target" ] || continue
 
     if printf '%s\n' "$existing" | grep -qxF "$target"; then
@@ -197,9 +207,21 @@ EOF
     # be cold, and a tab is worth opening either way.
     state=$(cx_state_read "$target" 2>/dev/null) || state=""
 
-    if [ "$attached" = true ]; then
+    if [ "$attached" = true ] && [ "$detaches" != false ]; then
+      # Opening it here would throw the other terminal out, and that terminal
+      # would throw this tab out the moment it reattached. Built by hand, this
+      # layout collapsed exactly that way. Not without being asked.
+      if [ "$take" != 1 ]; then
+        printf '  %s-%s %-30s %-8s %sopen elsewhere — skipped (--take opens it here)%s\n' \
+          "$C_DIM" "$C_RESET" "$target" "$state" "$C_DIM" "$C_RESET"
+        held=$((held + 1))
+        continue
+      fi
       printf '  %s!%s %-30s %-8s %sopen elsewhere — this tab takes it%s\n' \
         "$C_YELLOW" "$C_RESET" "$target" "$state" "$C_DIM" "$C_RESET"
+    elif [ "$attached" = true ]; then
+      printf '  %s+%s %-30s %-8s %salso open elsewhere — both stay attached%s\n' \
+        "$C_GREEN" "$C_RESET" "$target" "$state" "$C_DIM" "$C_RESET"
     else
       printf '  %s+%s %-30s %s\n' "$C_GREEN" "$C_RESET" "$target" "$state"
     fi
@@ -219,10 +241,12 @@ EOF
   if [ "$dry" = 1 ]; then
     say ""
     note "$added to open, $skipped already there — nothing was changed."
+    [ "$held" -gt 0 ] && hint "$held skipped as open elsewhere — cx tabs --take opens them here"
     return 0
   fi
 
   say ""
+  [ "$held" -gt 0 ] && hint "$held skipped as open elsewhere — cx tabs --take opens them here"
   if [ "$added" = 0 ]; then
     note "Nothing new: all $skipped live sessions already have a tab."
   else

@@ -41,7 +41,8 @@ printf 'Host web1\n' >"$CX_SSHD_DIR/web1.conf"
 
 # The agent's `sessions` answer. Stubbed after tabs.sh, which sources
 # lib/remote.sh and would define the real one over the top.
-SESSIONS='{"sessions":[
+# An agent that still attaches with -d, as every agent before 0.4.0 did.
+SESSIONS='{"attach_detaches":true,"sessions":[
   {"target":"api","attached":false},
   {"target":"api@review","attached":true},
   {"target":"api/authfix","attached":false}]}'
@@ -78,12 +79,21 @@ _out=$(run_tabs -n)
 assert_contains "$_out" "web1:api/authfix"
 
 it "flags one that another terminal is already attached to"
-# cx open attaches with `tmux attach -d`, so the tab takes the session. Saying
-# so before it happens is the whole difference between a tool and a surprise.
 assert_contains "$(run_tabs -n)" "open elsewhere"
 
 it "marks only the attached one"
-assert_eq "$(run_tabs -n | grep -c 'open elsewhere')" 1
+assert_eq "$(run_tabs -n | grep -c '^  [-!] ')" 1
+
+it "skips it when opening it here would detach that terminal"
+# A tab and a terminal on one session, with attach -d, throw each other out.
+# Building this layout by hand over already-open sessions collapsed that way.
+assert_contains "$(run_tabs -n)" "skipped"
+
+it "says how to open it anyway"
+assert_contains "$(run_tabs -n 2>&1)" "--take"
+
+it "opens it, warning that it takes the session, with --take"
+assert_contains "$(run_tabs -n --take)" "this tab takes it"
 
 it "opens nothing at all on a dry run"
 run_tabs -n >/dev/null
@@ -105,11 +115,15 @@ assert_contains "$(log)" "-x 200 -y 50"
 
 it "adds the rest as windows"
 HAVE_SESSION=0
-run_tabs --no-attach >/dev/null
+run_tabs --no-attach --take >/dev/null
 assert_eq "$(log | grep -c 'new-window')" 3
 
 it "tags every window it opens"
 assert_eq "$(log | grep -c 'set-option -w -t @9 @cx_target')" 3
+
+it "opens no window for a skipped session"
+run_tabs --no-attach >/dev/null
+assert_eq "$(log | grep -c 'new-window')" 2
 
 it "addresses the tag by window id, never the active window"
 assert_not_contains "$(log)" "set-option -w @cx_target"
@@ -121,7 +135,7 @@ WINDOWS="web1:api
 web1:api@review"
 
 it "skips sessions that already have a tab"
-run_tabs --no-attach >/dev/null
+run_tabs --no-attach --take >/dev/null
 assert_eq "$(log | grep -c 'new-window')" 1
 
 it "opens the one that does not"
@@ -139,6 +153,26 @@ assert_contains "$_out" "Nothing new"
 
 it "and really does nothing"
 assert_not_contains "$(log)" "new-window"
+
+describe "cx tabs — a server where tabs and terminals can share a session"
+
+HAVE_SESSION=1
+WINDOWS=""
+SESSIONS='{"attach_detaches":false,"sessions":[
+  {"target":"api","attached":false},
+  {"target":"api@review","attached":true}]}'
+
+it "opens a session that is open elsewhere, since nobody is thrown out"
+run_tabs --no-attach >/dev/null
+assert_eq "$(log | grep -c 'new-window\|new-session')" 2
+
+it "says both stay attached"
+assert_contains "$(run_tabs -n)" "both stay attached"
+
+it "treats an agent that does not say as one that detaches"
+# Every agent before 0.4.0 attaches with -d and has no field to say so.
+SESSIONS='{"sessions":[{"target":"api@review","attached":true}]}'
+assert_contains "$(run_tabs -n)" "skipped"
 
 describe "cx tabs — the edges"
 

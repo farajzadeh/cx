@@ -570,6 +570,67 @@ assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@plain | jq -r '.s
 cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
+# A session's lifecycle: sharing it, forgetting it
+
+describe "opening a session does not throw out whoever has it"
+# Ubuntu 24.04's tmux is 3.4, which sizes a window to its latest client, so the
+# agent attaches without -d. The clients are real ones on a pseudo-terminal.
+
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks@share >/dev/null 2>&1
+settle 2
+# Each client is `script` on a pseudo-terminal, and two details are load-bearing.
+# TERM, because docker exec supplies none and tmux will not attach without a
+# terminal it can clear. And stdin held open by `sleep`: at end-of-input script
+# sends EOF through the client INTO the pane, which is Ctrl-D to Claude — the
+# stub exited, took the session with it, and the next attach found "no
+# sessions". Found by attaching to a node by hand and reading script's log.
+on_node 'TERM=xterm-256color setsid nohup sh -c "sleep 600 | script -qfc \"tmux attach -t =cx-hooks@share\" /dev/null" >/dev/null 2>&1 &' >/dev/null # portable-ok: inside the Linux test container
+settle 2
+clients() { on_node 'tmux list-clients -t "=cx-hooks@share" 2>/dev/null | grep -c .' | tail -n 1; }
+
+it "has one client to begin with"
+assert_eq "$(clients)" 1
+
+on_node 'TERM=xterm-256color setsid nohup sh -c "sleep 600 | script -qfc \"\$HOME/.local/bin/cx-agent open hooks --session share\" /dev/null" >/dev/null 2>&1 &' >/dev/null # portable-ok: inside the Linux test container
+settle 2
+
+it "gains a second when opened again, rather than swapping one for the other"
+assert_eq "$(clients)" 2
+
+it "and says so, for cx tabs to decide by"
+assert_eq "$(agent sessions | jq -r .attach_detaches)" false
+
+on_node 'tmux kill-session -t "=cx-hooks@share"' >/dev/null 2>&1
+
+describe "cx forget"
+
+it "lists a finished session under --all"
+assert_contains "$(cx_run "$HOME_DIR" peek --all)" "hooks@perm"
+
+it "counts it, but does not list it, without"
+assert_not_contains "$(cx_run "$HOME_DIR" peek)" "hooks@perm"
+
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks@busy >/dev/null 2>&1
+settle 2
+
+it "refuses a session that is running"
+run_rc cx_run "$HOME_DIR" -y forget cx-test-web1:hooks@busy
+assert_eq "$_T_RC" 4
+
+cx_run "$HOME_DIR" stop cx-test-web1:hooks@busy >/dev/null 2>&1
+
+it "forgets a finished one"
+run_rc cx_run "$HOME_DIR" -y forget cx-test-web1:hooks@perm
+assert_eq "$_T_RC" 0
+
+it "which is then gone from observe"
+assert_eq "$(agent "observe --all --tail 0" | jq -r '[.sessions[].target] | index("hooks@perm")')" null
+
+it "says there is nothing to forget the second time"
+run_rc cx_run "$HOME_DIR" -y forget cx-test-web1:hooks@perm
+assert_eq "$_T_RC" 2
+
+# ---------------------------------------------------------------------------
 # Goals: exactly their members, and driving themselves
 
 describe "cx peek --goal"
