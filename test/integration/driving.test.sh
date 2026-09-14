@@ -647,4 +647,36 @@ assert_eq \
   "$(cx_run "$HOME_DIR" --json peek --goal drive | jq -r '.sessions[] | select(.target == "hooks@never") | .state')" \
   dead
 
+describe "a goal that drives itself"
+
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks >/dev/null 2>&1
+settle 3
+cx_run "$HOME_DIR" goal on-stop drive --max 3 >/dev/null 2>&1
+
+it "has the driver's instructions on the server, from provision"
+assert_ok on_node 'test -s $HOME/.local/share/cx/cx-driver.agent.md'
+
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks "next step" >/dev/null 2>&1
+settle 5
+
+onstops() { cx_run "$HOME_DIR" --json goal show drive | jq -r '[.log[] | select(.event == "on-stop")] | length'; }
+
+it "starts a pass when a member finishes a turn"
+assert_eq "$(onstops)" 1
+
+it "and the pass ran Claude in print mode"
+assert_contains "$(on_node 'cat $HOME/.local/share/cx/driving/drive.log 2>/dev/null')" "STUB_ANSWER"
+
+it "releases its lock when it is done"
+assert_fail on_node 'test -e $HOME/.local/share/cx/driving/drive.lock'
+
+cx_run "$HOME_DIR" goal pause drive >/dev/null 2>&1
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks "another step" >/dev/null 2>&1
+settle 5
+
+it "starts nothing once the goal is paused"
+assert_eq "$(onstops)" 1
+
+cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
+
 summary

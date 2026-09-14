@@ -111,6 +111,36 @@ natural one is `/loop`:
 A pass is cheap when nothing has changed, so a few minutes is fine. Tighter
 than that mostly re-reads sessions that are still mid-turn.
 
+## When the server started you
+
+A goal can drive itself: with `cx goal on-stop <name>`, the server runs one
+pass of this agent whenever a member finishes a turn. You will know because
+your prompt says so and names the goal and the member. Then:
+
+- **One pass, for that one goal.** Do not look at other goals. Do not loop.
+- **There may be no `cx` here.** Use the agent directly — it is what `cx` calls:
+
+      A=$HOME/.local/bin/cx-agent
+      $A goal show <name>                                   the goal
+      $A observe --all --slug <member> --slug <member> --tail 8
+      printf '%s' "the prompt" | $A nudge <project> [--worktree W] [--session L]
+      printf '%s' "what and why" | $A goal log <name> --event nudge --target <member>
+      $A goal state <name> done
+
+  A member is `project[/worktree][@label]`: pass the parts as the flags above.
+- **observe gives facts, not states.** Read them in this order:
+  `claude.status` `waiting` is a permission prompt (escalate, never answer);
+  `busy` is working; `idle` with a transcript is waiting for you. With no
+  `claude`, use `event.state`. With neither, `last.stop_reason` `end_turn` is
+  idle and anything else is mid-turn. `tmux.alive` false is dead.
+- **A member qualified with another host** (`web2:api@tests`) cannot be reached
+  from here. Note it in the log and leave it.
+- **Log every run** with `goal log`, including "nothing to do". It is the only
+  trace the user has that you ran at all.
+
+Every rule above still applies — above all, never `--force` and never answer a
+permission prompt.
+
 ## Ending a pass
 
 Report in a few lines: what each active goal is waiting on, what you sent, and

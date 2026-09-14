@@ -68,6 +68,10 @@ _goal_render() {
   else
     note "  No members yet — add one with: cx goal member add <name> <target>"
   fi
+  local onstop
+  onstop=$(printf '%s' "$g" | jq -r '.on_stop.max_per_hour // empty' 2>/dev/null) || onstop=""
+  [ -n "$onstop" ] &&
+    say "  Drives itself when a member finishes a turn, at most $onstop times an hour."
   local revs
   revs=$(printf '%s' "$g" | jq -r '.revisions | length')
   [ "${revs:-0}" -gt 0 ] && note "  $revs revision(s) — see cx goal show <name> --json"
@@ -94,6 +98,7 @@ ${C_BOLD}cx goal${C_RESET} — what a set of sessions is trying to achieve
   cx goal member add|rm <name> <target>
   cx goal pause <name> | resume <name> | done <name>
   cx goal log <name> "what happened" [--event E] [--target T]
+  cx goal on-stop <name> [--max N] [--model M] | --off
   cx goal rm <name>
 
 A goal is a definition of done, plus the sessions working towards it. It is
@@ -119,6 +124,12 @@ driving a goal you have paused.
 cx does not decide when a goal is done — you or your driver does, with
 cx goal done. It stores the intent and reports the facts; see cx peek.
 
+${C_BOLD}cx goal on-stop${C_RESET} makes a goal drive itself. Whenever one of its members
+finishes a turn, the server runs one pass of the cx-driver agent — a
+${C_BOLD}claude -p${C_RESET} call, which spends tokens — and at most N of them an hour (default
+6). Off unless you turn it on, and it stops the moment the goal is paused or
+done. Needs agent 0.4.0 and a session started with cx's hooks.
+
 Related: cx peek (what each session is doing), cx nudge (steer one)
 EOF
         return 0
@@ -136,7 +147,7 @@ EOF
   sub="${1:-}"
   [ -n "$sub" ] || {
     err "no subcommand given"
-    hint "usage: cx goal new|ls|show|dod|member|pause|resume|done|log|rm"
+    hint "usage: cx goal new|ls|show|dod|member|pause|resume|done|log|on-stop|rm"
     return 3
   }
   shift
@@ -293,6 +304,76 @@ EOF
         printf '%s\n' "$out" | jq -c --arg h "$host" '. + {host: $h}'
       else
         _goal_render "$out" "$host"
+      fi
+      ;;
+
+    on-stop)
+      local name="" max="" off=0 model="" out=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --model)
+            [ $# -ge 2 ] || {
+              err "--model needs a name"
+              return 3
+            }
+            model="$2"
+            shift
+            ;;
+          --max)
+            [ $# -ge 2 ] || {
+              err "--max needs a number"
+              return 3
+            }
+            max="$2"
+            shift
+            ;;
+          --off) off=1 ;;
+          -*)
+            err "unknown option: $1"
+            return 3
+            ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || {
+        err "which goal?"
+        hint "usage: cx goal on-stop <name> [--max N] | --off"
+        return 3
+      }
+      case "$max" in
+        '' | *[!0-9]*)
+          [ -z "$max" ] || {
+            err "--max wants a number of runs an hour"
+            return 3
+          }
+          ;;
+      esac
+      if [ "$off" = 1 ] && [ -n "$max" ]; then
+        err "--off and --max do not mix"
+        return 3
+      fi
+      cx_agent_supports "$host" "goals that drive themselves" 0.4.0 || return 1
+
+      local oargs=()
+      if [ "$off" = 1 ]; then
+        oargs=(--off)
+      else
+        [ -n "$max" ] && oargs=(--max "$max")
+        [ -n "$model" ] && oargs=("${oargs[@]+"${oargs[@]}"}" --model "$model")
+      fi
+      out=$(_goal_agent "$host" on-stop "$name" "${oargs[@]+"${oargs[@]}"}") || return $?
+      if [ "${CX_JSON:-0}" = 1 ]; then
+        printf '%s\n' "$out" | jq -c --arg h "$host" '. + {host: $h}'
+        return 0
+      fi
+      if [ "$off" = 1 ]; then
+        say "$name no longer drives itself"
+      else
+        say "$name now drives itself when a member finishes a turn"
+        warn "each run is a claude -p call on $host, and spends tokens"
+        hint "see what it did with: cx goal show $name"
+        hint "stop it with: cx goal on-stop $name --off   (or cx goal pause $name)"
       fi
       ;;
 

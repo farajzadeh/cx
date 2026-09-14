@@ -107,6 +107,20 @@ _provision_one() {
   # successful provision proves the host is reachable.
   cx_cache_invalidate "$alias"
 
+  # The driver's instructions, for goals that drive themselves (cx goal
+  # on-stop). Shipped rather than embedded in the agent: the agent is one file
+  # by design (invariant 6), and a second copy of the driver's rules inside it
+  # would drift from docs/cx-driver.agent.md, which is where they are
+  # maintained. Not fatal — a server without it simply cannot drive itself,
+  # and says so in the goal's log.
+  local driver="$CX_HOME/docs/cx-driver.agent.md"
+  if [ -r "$driver" ]; then
+    if ! cx_ssh "$alias" mkdir -p .local/share/cx >/dev/null 2>&1 ||
+      ! cx_scp "$driver" "$alias" '.local/share/cx/cx-driver.agent.md' 2>/dev/null; then
+      warn "could not copy the driver definition — goals on $alias cannot drive themselves"
+    fi
+  fi
+
   say ""
   printf '%s' "$summary" | jq -r '
     "  agent:   " + .agent_version,
