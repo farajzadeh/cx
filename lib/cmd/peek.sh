@@ -19,18 +19,36 @@
 # shellcheck source=../activity.sh
 . "$CX_HOME/lib/activity.sh"
 
-# _peek_fetch HOSTS TAIL DIR — one observe per host, in parallel, into DIR.
+# _peek_fetch HOSTS TAIL DIR [UNIT] — one observe per host, in parallel, into DIR.
 #
 # The same shape as cx status: background jobs writing files, then a plain
 # `wait`. `wait -n` is bash 4.3 and banned, so results are collected after all
 # of them finish rather than as they arrive.
+#
+# UNIT narrows the question on the server. Filtering here instead "costs one
+# round trip either way", which was the old defence of asking for --all, and it
+# is true — but the round trip is 47 ms and the agent's work is seconds, and a
+# peek at one session paid for every session on its host. An agent older than
+# --unit answers "unknown option" with exit 3; that one case retries with the
+# plain --all it understands, and the client-side filter in cmd_peek keeps the
+# answer right either way.
 _peek_fetch() {
-  local hosts="$1" tail_n="$2" dir="$3" h safe
+  local hosts="$1" tail_n="$2" dir="$3" unit="${4:-}" h safe
   for h in $hosts; do
     safe=$(cx_sanitize "$h")
     (
-      cx_agent "$h" observe --all --tail "$tail_n" >"$dir/$safe.json" 2>/dev/null ||
-        printf '' >"$dir/$safe.fail"
+      rc=0
+      if [ -n "$unit" ]; then
+        cx_agent "$h" observe --all --unit "$unit" --tail "$tail_n" \
+          >"$dir/$safe.json" 2>/dev/null || rc=$?
+        if [ "$rc" = 3 ]; then
+          rc=0
+          cx_agent "$h" observe --all --tail "$tail_n" >"$dir/$safe.json" 2>/dev/null || rc=$?
+        fi
+      else
+        cx_agent "$h" observe --all --tail "$tail_n" >"$dir/$safe.json" 2>/dev/null || rc=$?
+      fi
+      [ "$rc" = 0 ] || printf '' >"$dir/$safe.fail"
     ) &
   done
   wait
@@ -150,10 +168,15 @@ EOF
     fi
   fi
 
+  # The table shows no messages, so it asks for none: a tail is what makes the
+  # agent read the conversations of sessions that are not running.
+  local fetch_tail=0
+  [ "${CX_JSON:-0}" = 1 ] && fetch_tail="$tail_n"
+
   local tmp
   tmp=$(cx_mktempdir)
   cx_spinner_start "reading sessions"
-  _peek_fetch "$hosts" "$tail_n" "$tmp"
+  _peek_fetch "$hosts" "$fetch_tail" "$tmp" "$one_target"
   cx_spinner_stop
 
   local now h safe rows="" failed="" stale=""
@@ -234,51 +257,49 @@ EOF
 
 # _peek_json — the driver's view: the agent's facts with the derived state
 # folded in, so a caller never has to reimplement the ladder.
+#
+# Classified by cx_activity_rows — the same code the table and the status bar
+# use — and joined back onto the agent's objects in one jq per host. This used
+# to extract nine fields with nine jq processes per session, which on a server
+# with two dozen sessions was most of sixteen seconds, and it is the call a
+# driver makes on every pass.
 _peek_json() {
   local hosts="$1" tmp="$2" now="$3" only="${4:-}" h safe
+  local rows host target state attached quiet age steer joined
   {
     for h in $hosts; do
       safe=$(cx_sanitize "$h")
       [ -s "$tmp/$safe.json" ] || continue
       jq -e . "$tmp/$safe.json" >/dev/null 2>&1 || continue
-      jq -c --arg h "$h" --arg only "$only" '
-        .sessions[]?
+
+      joined=""
+      rows=$(cx_activity_rows "$h" "$tmp/$safe.json" "$now")
+      while IFS='	' read -r host target state attached quiet age; do
+        [ -n "$target" ] || continue
+        steer=false
+        cx_activity_is_steerable "$state" && steer=true
+        joined="$joined$target	$state	$steer	$quiet	$age
+"
+      done <<EOF
+$rows
+EOF
+
+      jq -c --arg h "$h" --arg only "$only" --arg rows "$joined" '
+        ($rows
+         | split("\n")
+         | map(select(length > 0) | split("\t"))
+         | map({key: .[0], value: {
+             state:     .[1],
+             steerable: (.[2] == "true"),
+             quiet:     (if .[3] == "-" then null else (.[3] | tonumber) end),
+             age:       (if .[4] == "-" then null else (.[4] | tonumber) end)
+           }})
+         | from_entries) as $r
+        | .sessions[]?
         | select($only == "" or .target == $only or (.target | startswith($only + "@")))
-        | . + {host: $h}' "$tmp/$safe.json" 2>/dev/null
+        | . + {host: $h} + ($r[.target] // {state: "unknown", steerable: false, quiet: null, age: null})
+        ' "$tmp/$safe.json" 2>/dev/null
     done
-  } | while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    _peek_json_one "$line" "$now"
-  done | jq -sc --argjson now "$now" --argjson grace "$CX_IDLE_GRACE" \
+  } | jq -sc --argjson now "$now" --argjson grace "$CX_IDLE_GRACE" \
     '{observed_at: $now, idle_grace: $grace, sessions: .}'
-}
-
-_peek_json_one() {
-  local line="$1" now="$2"
-  local alive shell uuid present last_role last_stop mtime created quiet="" age="" state
-  alive=$(printf '%s' "$line" | jq -r '.tmux.alive | tostring')
-  shell=$(printf '%s' "$line" | jq -r '.tmux.shell | tostring')
-  attached=$(printf '%s' "$line" | jq -r '.tmux.attached | tostring')
-  uuid=$(printf '%s' "$line" | jq -r '.transcript.uuid // ""')
-  present=$(printf '%s' "$line" | jq -r '.transcript.present | tostring')
-  last_role=$(printf '%s' "$line" | jq -r '.last.role // ""')
-  last_stop=$(printf '%s' "$line" | jq -r '.last.stop_reason // ""')
-  mtime=$(printf '%s' "$line" | jq -r '.transcript.mtime // ""')
-  created=$(printf '%s' "$line" | jq -r '.tmux.created // ""')
-
-  [ -n "$mtime" ] && quiet=$((now - mtime))
-  [ -n "$created" ] && age=$((now - created))
-
-  state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-    "$last_role" "$last_stop" "$quiet")
-
-  printf '%s' "$line" | jq -c \
-    --arg state "$state" --arg quiet "$quiet" --arg age "$age" \
-    --argjson steerable "$(cx_activity_is_steerable "$state" && printf true || printf false)" '
-    . + {
-      state:     $state,
-      steerable: $steerable,
-      quiet:     (if $quiet == "" then null else ($quiet | tonumber) end),
-      age:       (if $age   == "" then null else ($age   | tonumber) end)
-    }'
 }

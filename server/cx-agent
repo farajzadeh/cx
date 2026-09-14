@@ -26,10 +26,11 @@ set -eu
 # worktree subcommand. 0.2.1 added --dangerous to open and ask. 0.3.0 added
 # --permission-mode/--model/--effort, `--` passthrough, ask's print-mode
 # options, and recorded perm_mode in place of the `dangerous` boolean; plus
-# observe, nudge, goal and open --detach. The client feature-gates on this: an
+# observe, nudge, goal and open --detach. 0.4.0 added observe --unit and
+# --slug. The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.3.0"
+CX_AGENT_VERSION="0.4.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -1806,10 +1807,25 @@ _observe_resolve() {
 }
 
 cmd_observe() {
-  local name="" wt="" label="" all=0 tail_n=6
+  local name="" wt="" label="" all=0 tail_n=6 units="" picks=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all=1 ;;
+      # Narrow --all on this side of the wire. The expensive part of observe is
+      # the per-session work, so a question about one project, or about the
+      # members of one goal, should pay for those sessions and no others.
+      --unit)
+        shift
+        units="$units${1:-}
+"
+        all=1
+        ;;
+      --slug)
+        shift
+        picks="$picks${1:-}
+"
+        all=1
+        ;;
       --tail)
         shift
         tail_n="${1:-6}"
@@ -1833,7 +1849,7 @@ cmd_observe() {
   esac
 
   [ "$all" = 1 ] || [ -n "$name" ] ||
-    die "usage: cx-agent observe [--all | <name> [--worktree W] [--session L]] [--tail N]" 3
+    die "usage: cx-agent observe [--all [--unit U]... [--slug S]... | <name> [--worktree W] [--session L]] [--tail N]" 3
 
   _registry_ensure
 
@@ -1842,8 +1858,38 @@ cmd_observe() {
   map=$(_project_slug_map)
   _observe_load
 
+  # A --slug is reported whether or not it is running or has ever said
+  # anything, exactly as a session named on the command line is: whoever asked
+  # about it wants to know that it is not there. Kept newline-delimited so a
+  # membership test is a `case`, not a process.
+  local forced=""
+  [ -n "$picks" ] && forced="
+$picks"
+
   if [ "$all" = 1 ]; then
     slugs=$(_observe_candidates "$rows" "$map")
+    if [ -n "$units" ] || [ -n "$picks" ]; then
+      slugs=$(
+        _OBS_UNITS="$units" _OBS_PICKS="$picks" awk '
+        BEGIN {
+          nu = split(ENVIRON["_OBS_UNITS"], U, "\n")
+          np = split(ENVIRON["_OBS_PICKS"], P, "\n")
+          for (i = 1; i <= np; i++) if (P[i] != "") { pick[P[i]] = 1; print P[i] }
+        }
+        {
+          if ($0 in pick) next
+          for (i = 1; i <= nu; i++) {
+            if (U[i] == "") continue
+            # A unit covers its own labelled sessions and nothing else: api
+            # takes api@review, but not api/authfix, which is a different
+            # directory on a different branch.
+            if ($0 == U[i] || index($0, U[i] "@") == 1) { print; next }
+          }
+        }' <<EOF | sort -u
+$slugs
+EOF
+      )
+    fi
   else
     if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
     if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
@@ -1891,7 +1937,12 @@ cmd_observe() {
     # is noise that grows with every session ever opened. An explicitly named
     # session is always reported: the caller asked about that one.
     if [ "$all" = 1 ] && [ "$alive" != true ] && [ "$present" != true ]; then
-      continue
+      case "$forced" in
+        *"
+$s
+"*) ;;
+        *) continue ;;
+      esac
     fi
 
     mtime=""
@@ -2866,6 +2917,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
   sessions                      live cx tmux sessions
   observe [--all | <name> [--worktree W] [--session L]] [--tail N]
                                 per-session facts: tmux, transcript, last turn
+          --unit U              only U and its @labelled sessions (repeatable)
+          --slug S              exactly S, reported even if absent (repeatable)
   nudge <name> [--worktree W] [--session L] [--force]
                                 type a prompt into a live session (stdin)
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]

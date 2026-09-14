@@ -136,6 +136,38 @@ it "reports a project that does not exist rather than failing"
 run_rc cmd_observe no-such-project
 assert_eq "$_T_RC" 0
 
+describe "observe --unit and --slug — narrowing on the server"
+
+targets() { jq -r '[.sessions[].target] | sort | join(",")'; }
+
+it "narrows to a project and its labelled sessions"
+assert_eq "$(cmd_observe --all --unit api --tail 0 | targets)" "api,api@review"
+
+it "narrows to one labelled session"
+assert_eq "$(cmd_observe --all --unit api@review --tail 0 | targets)" "api@review"
+
+it "does not let a unit swallow another project that starts the same way"
+# "api" must not take a project called "apiary" — only "api" and "api@...".
+mkdir -p "$TMP/apiary"
+jq --arg p "$TMP/apiary" '.projects += [{name: "apiary", path: $p}]' "$CX_REGISTRY" >"$TMP/r" && mv "$TMP/r" "$CX_REGISTRY"
+jq '.sessions.apiary = {uuid: "u-apiary"}' "$CX_SESSIONS" >"$TMP/s" && mv "$TMP/s" "$CX_SESSIONS"
+transcript "$TMP/apiary" u-apiary end_turn
+assert_eq "$(cmd_observe --all --unit api --tail 0 | targets)" "api,api@review"
+
+it "picks exact sessions with --slug"
+assert_eq "$(cmd_observe --all --slug api --tail 0 | targets)" "api"
+
+it "takes several --slug at once"
+assert_eq "$(cmd_observe --all --slug api --slug my.app --tail 0 | targets)" "api,my.app"
+
+it "reports a --slug that is neither running nor has a conversation"
+# A goal member nobody has opened yet is still a member; the driver needs to
+# see it is not there rather than have it silently vanish from the answer.
+assert_eq "$(cmd_observe --all --slug never-opened --tail 0 | targets)" "never-opened"
+
+it "implies --all"
+assert_eq "$(cmd_observe --unit my.app --tail 0 | targets)" "my.app"
+
 describe "_transcript_messages — the byte window and its escalation"
 
 BIG="$TMP/big.jsonl"
