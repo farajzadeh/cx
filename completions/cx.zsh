@@ -37,6 +37,7 @@ _cx() {
     'ask:one-shot question'
     'peek:what each session is doing now'
     'nudge:send a prompt to a running session'
+    'bar:one line for a tmux status bar'
     'goal:definitions of done for your sessions'
     'driver:print the cx-driver subagent definition'
     'status:live sessions'
@@ -78,6 +79,9 @@ _cx() {
       ;;
     nudge)
       compadd -- ${(f)"$(_cx_targets)"} --force
+      ;;
+    bar)
+      compadd -- --setup --plain --attached --max --states --label
       ;;
     stop)
       compadd -- ${(f)"$(_cx_targets)"} --all

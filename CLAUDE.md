@@ -227,7 +227,7 @@ re-provision instead of surfacing "unknown option: --worktree".
 
 ## Driving sessions
 
-Three commands, and the split between them is invariant 11 made concrete:
+Four commands, and the split between them is invariant 11 made concrete:
 
 - **`cx peek`** — the agent's `observe` verb reports raw facts per session
   (tmux liveness, the pane's current command, the transcript's mtime and its
@@ -244,6 +244,23 @@ Three commands, and the split between them is invariant 11 made concrete:
   first exchange, so "just started" and "nobody has given it anything to do"
   are the same fact; whether that has gone on too long depends on what the
   caller has already sent, which only the caller knows.
+
+- **`cx bar`** — the same states on one line, for a tmux status bar. It shares
+  `cx_activity_rows` with peek — which is why that function lives in
+  `lib/activity.sh` and not beside either command — and adds only presentation.
+
+  This is the corollary to invariant 11 under load, because a status bar is a
+  polling loop by nature and the loop is **tmux's**: `cx bar` is one shot like
+  every other verb, and `status-interval` sets the pace. Two differences from
+  peek, both because it runs unattended and repeatedly. It **skips a server the
+  negative cache says is down**, and marks one down only on ssh's own exit 255
+  — any other status came back from the far side, so the host is up and
+  something else is wrong, and marking it would make `cx ls` lie about it for
+  the next minute. And it **fails silently, exit 0**: a status line has one
+  line, is redrawn constantly, and whoever glances at it is not in a position
+  to act on an error. The single exception is a server it could not reach,
+  named `!host` — an empty bar has to mean "nothing needs you" rather than "cx
+  could not tell".
 
 - **`cx nudge`** — types into a live session. Declines with **exit 0** and
   `sent: false` when the session is not ready, following `cmd_stop`'s

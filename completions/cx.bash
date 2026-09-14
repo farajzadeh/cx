@@ -24,7 +24,7 @@ _cx() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
-  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge goal driver status stop cache help version"
+  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge bar goal driver status stop cache help version"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     # shellcheck disable=SC2207
@@ -71,6 +71,11 @@ _cx() {
     ls)
       # shellcheck disable=SC2207
       COMPREPLY=($(compgen -W "$(_cx_hosts) --git --json" -- "$cur"))
+      ;;
+    bar)
+      # No targets: the bar is every session or none.
+      # shellcheck disable=SC2207
+      COMPREPLY=($(compgen -W "--setup --plain --attached --max --states --label" -- "$cur"))
       ;;
     wt | worktree)
       if [ "$COMP_CWORD" -eq 2 ]; then
