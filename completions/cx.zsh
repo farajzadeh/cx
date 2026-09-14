@@ -39,10 +39,12 @@ _cx() {
     'nudge:send a prompt to a running session'
     'bar:one line for a tmux status bar'
     'tabs:a tmux tab per live session, here'
+    'jump:go to the tab of the session that needs you'
     'goal:definitions of done for your sessions'
     'driver:print the cx-driver subagent definition'
     'status:live sessions'
     'stop:end a session'
+    'forget:drop a finished session from the lists'
     'cache:inspect or drop cached data'
   )
 
@@ -72,7 +74,7 @@ _cx() {
       if (( CURRENT == 3 )); then
         _values 'subcommand' add ls rm
       else
-        compadd -- ${(f)"$(_cx_targets)"} --branch --from --force
+        compadd -- ${(f)"$(_cx_targets)"} --branch --from --force --merged
       fi
       ;;
     open|resume|ask)
@@ -85,12 +87,15 @@ _cx() {
       compadd -- --setup --plain --attached --window --max --states --label
       ;;
     tabs)
-      compadd -- --dry-run --no-attach --session
+      compadd -- --dry-run --no-attach --session --take
+      ;;
+    jump)
+      compadd -- --states --refresh
       ;;
     stop)
       compadd -- ${(f)"$(_cx_targets)"} --all
       ;;
-    shell|code|peek|rm)
+    shell|code|peek|rm|forget)
       compadd -- ${(f)"$(_cx_targets)"}
       ;;
   esac

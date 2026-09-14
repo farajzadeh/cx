@@ -139,6 +139,7 @@ ${C_BOLD}PARALLEL WORK${C_RESET}
   wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
   wt ls [host[:project]]                  list worktrees
   wt rm <target>/<name> [--force]         remove one (its branch is kept)
+  wt rm <target> --merged                 remove every worktree that is merged
                                           (worktree is the long spelling of wt)
   open <target>@<label>                   a second session on the same files
 
@@ -151,15 +152,18 @@ ${C_BOLD}WORKING${C_RESET}
   ask <target> "prompt"                   one-shot question, prints to stdout
   status                                  live sessions across servers
   stop <target> [--all]                   end a session (--all: the project's)
+  forget <target>                         drop a finished session from the lists
 
 ${C_BOLD}DRIVING${C_RESET}
-  peek [target]                           what each session is doing now
+  peek [target] [--all | --goal G]        what each session is doing now
   nudge <target> "prompt"                 type into a running session
   bar [--setup]                           one line for a tmux status bar
-  tabs [-n]                               a tmux tab per live session, here
+  tabs [-n] [--take]                      a tmux tab per live session, here
+  jump                                    go to the tab of the session that needs you
   goal new <name> "done when..."          a definition of done, and who is on it
   goal ls | show | dod | member | log     inspect and edit one
   goal pause | resume | done <name>       pause stops the driver, not the work
+  goal on-stop <name> [--max N] | --off   drive itself when a member finishes a turn
   driver                                  print the cx-driver subagent
 
 ${C_BOLD}CACHE${C_RESET}

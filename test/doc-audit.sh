@@ -59,7 +59,7 @@ js() {
 
 grp "every command answers --help, exits 0, and names itself"
 for c in host provision login doctor new ls rm wt worktree open resume shell \
-  code ask peek nudge bar tabs goal driver status stop cache; do
+  code ask peek nudge bar tabs jump forget goal driver status stop cache; do
   o=$("$CX" "$c" --help 2>&1)
   r=$?
   if [ "$r" != 0 ]; then
@@ -87,6 +87,7 @@ rc 0 "$CX" doctor
 rc 0 "$CX" peek
 rc 0 "$CX" bar
 rc 0 "$CX" tabs -n
+rc 0 "$CX" peek --all
 rc 0 "$CX" cache status
 rc 0 "$CX" host ls
 rc 0 "$CX" wt ls
@@ -150,6 +151,8 @@ out "$P@t1" "$CX" bar --plain --states blocked,idle,fresh
 out "status-right" "$CX" bar --setup
 rc 3 "$CX" bar "$T"
 rc 3 "$CX" tabs "$T"
+rc 3 "$CX" jump "$T"
+rc 3 "$CX" forget
 
 grp "ask (README) — and the two-writer refusal"
 out "PONG" "$CX" ask "$T" "reply with exactly PONG and nothing else"

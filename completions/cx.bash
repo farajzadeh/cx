@@ -24,7 +24,7 @@ _cx() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
-  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge bar tabs goal driver status stop cache help version"
+  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge bar tabs jump goal driver status stop forget cache help version"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     # shellcheck disable=SC2207
@@ -45,7 +45,7 @@ _cx() {
     goal)
       if [ "$COMP_CWORD" -eq 2 ]; then
         # shellcheck disable=SC2207
-        COMPREPLY=($(compgen -W "new ls show dod member pause resume done log rm" -- "$cur"))
+        COMPREPLY=($(compgen -W "new ls show dod member pause resume done log on-stop rm" -- "$cur"))
       fi
       ;;
     provision | login | doctor)
@@ -79,7 +79,11 @@ _cx() {
       ;;
     tabs)
       # shellcheck disable=SC2207
-      COMPREPLY=($(compgen -W "--dry-run --no-attach --session" -- "$cur"))
+      COMPREPLY=($(compgen -W "--dry-run --no-attach --session --take" -- "$cur"))
+      ;;
+    jump)
+      # shellcheck disable=SC2207
+      COMPREPLY=($(compgen -W "--states --refresh" -- "$cur"))
       ;;
     wt | worktree)
       if [ "$COMP_CWORD" -eq 2 ]; then
@@ -96,13 +100,13 @@ _cx() {
       # project it hangs off is the most that can be offered.
       if [ -r "$wf" ]; then
         # shellcheck disable=SC2207
-        COMPREPLY=($(compgen -W "$(cat "$wf") --branch --from --force" -- "$cur"))
+        COMPREPLY=($(compgen -W "$(cat "$wf") --branch --from --force --merged" -- "$cur"))
       else
         # shellcheck disable=SC2207
         COMPREPLY=($(compgen -W "$(_cx_hosts | sed 's/$/:/')" -- "$cur"))
       fi
       ;;
-    open | resume | shell | code | ask | stop | rm)
+    open | resume | shell | code | ask | stop | rm | forget)
       local f extra=""
       case "${COMP_WORDS[1]}" in
         open | resume | ask) extra=" --dangerously-skip-permissions" ;;
