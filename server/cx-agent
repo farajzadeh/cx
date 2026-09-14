@@ -1517,11 +1517,16 @@ cmd_sessions() {
 #
 # Every one of them degrades to null, and the caller renders that as "unknown".
 
-# How far back to look for the last main-thread message. Sidechains can bury
-# the main thread under hundreds of lines, so the window has to be far larger
-# than the number of messages actually wanted; it escalates once and then gives
-# up rather than reading a 4 MB transcript in full on every poll.
-CX_OBSERVE_SCAN="${CX_OBSERVE_SCAN:-500}"
+# How much of a transcript to read. The last main-thread message is what
+# matters, and sidechains can bury it under hundreds of lines, so the window
+# has to be far larger than the number of messages actually wanted.
+#
+# BYTES FIRST, LINES SECOND. Lines are wildly uneven — one tool result can be a
+# megabyte — so "the last 500 lines" measured 0.7 to 6.7 MB of JSON per session
+# on a real server, parsed on every status-bar redraw, while the last 256 KB of
+# the same files still held dozens of main-thread messages. The line window is
+# kept as the escalation for a file whose last 256 KB is all sidechain.
+CX_OBSERVE_BYTES="${CX_OBSERVE_BYTES:-262144}"
 CX_OBSERVE_SCAN_MAX="${CX_OBSERVE_SCAN_MAX:-5000}"
 
 # _is_shell_cmd CMD — is this pane sitting at a shell, i.e. has Claude exited?
@@ -1544,34 +1549,69 @@ _file_bytes() {
   wc -c <"$1" 2>/dev/null | tr -d ' \n' || printf ''
 }
 
-# _transcript_messages FILE — main-thread messages from the tail of FILE, one
-# compact JSON object per line, oldest first.
+# _transcript_filter — raw transcript lines on stdin, main-thread messages out.
+_transcript_filter() {
+  # `fromjson?` is load-bearing. A transcript is append-only and is being
+  # written while we read it, so its final line is routinely a half-written
+  # object — and the FIRST line of a byte window is cut in half by
+  # construction. Without the `?` every read of a busy session is an error.
+  jq -Rc '
+    fromjson? // empty
+    | select(.isSidechain != true)
+    | select(.type == "assistant" or .type == "user")
+    | {
+        role:        .type,
+        at:          (.timestamp // null),
+        stop_reason: (.message.stop_reason // null),
+        tool_result: (has("toolUseResult")),
+        tools:       [(.message.content // []) | .[]?
+                      | select(type == "object" and .type == "tool_use") | .name],
+        text:        ((.message.content // "")
+                      | if type == "string" then .
+                        else [.[]? | select(type == "object" and .type == "text")
+                                   | .text // ""] | join("\n")
+                        end
+                      | .[0:400])
+      }' 2>/dev/null
+}
+
+# _transcript_messages FILE [WANT] — main-thread messages from the tail of FILE,
+# one compact JSON object per line, oldest first. WANT is how many the caller
+# needs; the default of 1 is "just tell me the last one".
 _transcript_messages() {
-  local f="$1" scan out=""
-  for scan in "$CX_OBSERVE_SCAN" "$CX_OBSERVE_SCAN_MAX"; do
-    # `fromjson?` is load-bearing. A transcript is append-only and is being
-    # written while we read it, so its final line is routinely a half-written
-    # object. Without the `?` every poll of a busy session is a parse error.
-    out=$(tail -n "$scan" "$f" 2>/dev/null | jq -Rc '
-      fromjson? // empty
-      | select(.isSidechain != true)
-      | select(.type == "assistant" or .type == "user")
-      | {
-          role:        .type,
-          at:          (.timestamp // null),
-          stop_reason: (.message.stop_reason // null),
-          tool_result: (has("toolUseResult")),
-          tools:       [(.message.content // []) | .[]?
-                        | select(type == "object" and .type == "tool_use") | .name],
-          text:        ((.message.content // "")
-                        | if type == "string" then .
-                          else [.[]? | select(type == "object" and .type == "text")
-                                     | .text // ""] | join("\n")
-                          end
-                        | .[0:400])
-        }' 2>/dev/null) || out=""
-    [ -n "$out" ] && break
-  done
+  local f="$1" want="${2:-1}" out="" more="" n=0 m=0 bytes=0
+  case "$want" in
+    '' | *[!0-9]*) want=1 ;;
+  esac
+  [ "$want" -ge 1 ] || want=1
+  [ -r "$f" ] || return 0
+
+  out=$(tail -c "$CX_OBSERVE_BYTES" "$f" 2>/dev/null | _transcript_filter) || out=""
+  if [ -n "$out" ]; then
+    # The common case counts nothing: one message was wanted, one was found.
+    if [ "$want" = 1 ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+    n=$(printf '%s\n' "$out" | grep -c . || true)
+    if [ "${n:-0}" -ge "$want" ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+  fi
+
+  # Fewer than wanted. A second read can only help when the file is bigger
+  # than the window just read; otherwise that window already was the file.
+  bytes=$(_file_bytes "$f")
+  if [ "${bytes:-0}" -gt "$CX_OBSERVE_BYTES" ]; then
+    more=$(tail -n "$CX_OBSERVE_SCAN_MAX" "$f" 2>/dev/null | _transcript_filter) || more=""
+    if [ -n "$more" ]; then
+      m=$(printf '%s\n' "$more" | grep -c . || true)
+      if [ "${m:-0}" -gt "${n:-0}" ]; then
+        out="$more"
+      fi
+    fi
+  fi
   printf '%s' "$out"
 }
 
@@ -1603,109 +1643,44 @@ _slug_parse() {
   esac
 }
 
-# _observe_one SLUG ROWS TAIL — one session's facts, as a JSON object.
-_observe_one() {
-  local slug="$1" rows="$2" tail_n="$3"
-  _slug_parse "$slug"
-  local project="$_SP_PROJECT" wt="$_SP_WT" label="$_SP_LABEL"
+# ---------------------------------------------------------------------------
+# One observe run
+# ---------------------------------------------------------------------------
+#
+# Everything observe needs from the registry and the pin file is read ONCE, up
+# front, and every session is then resolved in a single awk pass. The version
+# before this resolved each session on its own — two jq calls for the project
+# path, one for the uuid, a `git worktree list` for every worktree session, and
+# all of it done twice, once to decide which sessions to report and again to
+# report them. On a server with 26 known sessions that was most of four
+# seconds, spent before a single transcript was opened.
 
-  local tname dir="" uuid="" tfile="" msgs=""
-  tname=$(_tmux_name "$slug")
+# Filled by _observe_load. Globals, because a command substitution would load
+# them in a subshell and throw them away.
+_OBS_PATHS="" # project TAB absolute path
+_OBS_PINS=""  # slug TAB pinned conversation uuid
 
-  # A session whose project or worktree has been deleted still reports; the
-  # driver needs to see that it is gone, not have observe abort on it.
-  dir=$(_unit_dir "$project" "$wt" 2>/dev/null) || dir=""
-
-  local trow="" alive=false attached=false created="" activity="" pcmd="" shell=false
-  trow=$(printf '%s\n' "$rows" | awk -F'\t' -v n="$tname" '$1 == n { print; exit }') || trow=""
-  if [ -n "$trow" ]; then
-    alive=true
-    [ "$(printf '%s' "$trow" | cut -f2)" != 0 ] && attached=true
-    created=$(printf '%s' "$trow" | cut -f3)
-    activity=$(printf '%s' "$trow" | cut -f5)
-    pcmd=$(printf '%s' "$trow" | cut -f6)
-    _is_shell_cmd "$pcmd" && shell=true
+_observe_load() {
+  _OBS_PATHS=$(jq -r '.projects[]? | [.name, (.path // "")] | @tsv' \
+    "$CX_REGISTRY" 2>/dev/null) || _OBS_PATHS=""
+  _OBS_PINS=""
+  if [ -e "$CX_SESSIONS" ]; then
+    _OBS_PINS=$(jq -r '(.sessions // {}) | to_entries[]
+      | select(.value.uuid != null) | [.key, .value.uuid] | @tsv' \
+      "$CX_SESSIONS" 2>/dev/null) || _OBS_PINS=""
   fi
-
-  uuid=$(_session_uuid_get "$slug" 2>/dev/null) || uuid=""
-  [ -n "$uuid" ] && [ -n "$dir" ] && tfile="$(_session_dir "$dir")/$uuid.jsonl"
-
-  # Has Claude ever run in this directory? A brand-new session writes no
-  # transcript until its first exchange, so "up and waiting for its first
-  # prompt" and "stuck on the trust prompt" are otherwise indistinguishable.
-  # This does not settle it either, but it says which one is plausible: Claude
-  # only asks about trusting a folder the first time it is run there.
-  local seen_dir=false
-  [ -n "$dir" ] && [ -d "$(_session_dir "$dir")" ] && seen_dir=true
-
-  local present=false mtime="" bytes=""
-  if [ -n "$tfile" ] && [ -f "$tfile" ]; then
-    present=true
-    mtime=$(_mtime "$tfile" 2>/dev/null) || mtime=""
-    bytes=$(_file_bytes "$tfile")
-    msgs=$(_transcript_messages "$tfile")
-  fi
-
-  jq -nc \
-    --arg slug "$slug" --arg project "$project" --arg wt "$wt" --arg label "$label" \
-    --arg dir "$dir" --arg tname "$tname" --arg uuid "$uuid" --arg tfile "$tfile" \
-    --arg created "$created" --arg activity "$activity" --arg pcmd "$pcmd" \
-    --arg mtime "$mtime" --arg bytes "$bytes" --arg msgs "$msgs" \
-    --argjson alive "$alive" --argjson attached "$attached" --argjson shell "$shell" \
-    --argjson present "$present" --argjson seen_dir "$seen_dir" --argjson tail_n "$tail_n" '
-    def cell: if . == "" then null else . end;
-    def num:  if . == "" then null else (tonumber? // null) end;
-
-    ($msgs | split("\n") | map(select(length > 0) | fromjson? // empty)) as $m
-    | {
-        target:   $slug,
-        project:  $project,
-        worktree: ($wt    | cell),
-        label:    ($label | cell),
-        dir:      ($dir   | cell),
-        tmux: {
-          name:     $tname,
-          alive:    $alive,
-          attached: $attached,
-          shell:    $shell,
-          command:  ($pcmd     | cell),
-          created:  ($created  | num),
-          activity: ($activity | num)
-        },
-        transcript: {
-          uuid:      ($uuid  | cell),
-          path:      ($tfile | cell),
-          present:   $present,
-          # false means Claude has never run in this directory, so a first-run
-          # prompt (trust this folder?) is the likely reason nothing is written.
-          dir_seen:  $seen_dir,
-          mtime:     ($mtime | num),
-          bytes:     ($bytes | num)
-        },
-        last: ($m | last),
-        tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
-      }'
 }
 
-# _observe_slugs — every session worth reporting on: the live tmux ones, plus
-# every session cx has ever pinned that still has a transcript.
+# _observe_candidates ROWS MAP — every slug `observe --all` might report: the
+# live tmux sessions, plus every session cx has ever pinned.
 #
 # The second half matters. A session whose Claude exited has no tmux entry at
 # all, and a driver that only saw live sessions would conclude the work had
-# never existed rather than that it needs reviving.
-#
-# The transcript is what makes a dead session worth reporting: it is the last
-# thing that session said, and it is why a driver can decide whether to revive
-# it. A pin with no transcript is a session that was opened, never used, and
-# stopped — there is nothing to say about it, and `cx peek` listing it forever
-# is noise that grows with every session ever opened.
-#
-# That filter was documented here before it was implemented: the comment
-# claimed it and the code did not, so stopped-and-never-used sessions
-# accumulated in every listing. Found by a test whose session counts kept
-# drifting.
-_observe_slugs() {
-  local rows="$1" map="$2" slug dir uuid
+# never existed rather than that it needs reviving. Whether a pinned session is
+# actually worth reporting depends on its transcript, which is decided once the
+# candidates are resolved — see cmd_observe.
+_observe_candidates() {
+  local rows="$1" map="$2"
   {
     printf '%s\n' "$rows" |
       jq -Rr --arg prefix "$CX_TMUX_PREFIX" --arg map "$map" '
@@ -1732,18 +1707,102 @@ _observe_slugs() {
            | if $sl == null then {p: $o.unit, rest: ""}
              else {p: $o.unit[0:$sl], rest: $o.unit[$sl:]} end)
         | (($m[.p] // .p) + .rest + $o.suffix)' 2>/dev/null || printf ''
-    if [ -e "$CX_SESSIONS" ]; then
-      while IFS= read -r slug; do
-        [ -n "$slug" ] || continue
-        _slug_parse "$slug"
-        dir=$(_unit_dir "$_SP_PROJECT" "$_SP_WT" 2>/dev/null) || continue
-        uuid=$(_session_uuid_get "$slug" 2>/dev/null) || continue
-        [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && printf '%s\n' "$slug"
-      done <<EOF
-$(jq -r '.sessions | keys[]' "$CX_SESSIONS" 2>/dev/null)
-EOF
-    fi
+    printf '%s\n' "$_OBS_PINS" | awk -F'\t' '$1 != "" { print $1 }'
   } | sort -u | grep -v '^$' || true
+}
+
+# _observe_worktrees SLUGS — project TAB worktree TAB path, for every project
+# one of SLUGS names a worktree of. One `git worktree list` per such project
+# rather than one per session.
+_observe_worktrees() {
+  local p path
+  printf '%s\n' "$1" |
+    awk '{ u = $0; sub(/@.*$/, "", u); i = index(u, "/"); if (i > 0) print substr(u, 1, i - 1) }' |
+    sort -u |
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      path=$(printf '%s\n' "$_OBS_PATHS" | awk -F'\t' -v n="$p" '$1 == n { print $2; exit }')
+      [ -n "$path" ] || continue
+      _worktrees_tsv "$path" | awk -F'\t' -v p="$p" '{ print p "\t" $1 "\t" $2 }'
+    done
+}
+
+# _observe_resolve SLUGS ROWS WORKTREES — everything knowable about each slug
+# without opening a file, one line each:
+#
+#   slug project worktree label dir uuid tmux_name alive attached created
+#   activity pane_command session_store_dir
+#
+# with "-" for anything empty. The note on IFS in lib/activity.sh applies to
+# every TSV read back with `read`, and this one is: a blank middle column would
+# fold into its neighbour and shift everything after it left.
+#
+# LC_ALL=C because the session-store directory is encoded byte by byte, the
+# way _session_dir_name's `tr` does it. In a UTF-8 locale awk would replace a
+# multi-byte character with one dash instead of one per byte, and a project
+# under a non-ASCII path would silently never find its transcripts.
+_observe_resolve() {
+  _OR_SLUGS="$1" _OR_ROWS="$2" _OR_WTS="$3" \
+    _OR_PATHS="$_OBS_PATHS" _OR_PINS="$_OBS_PINS" \
+    _OR_PREFIX="$CX_TMUX_PREFIX" _OR_CLAUDE="$CX_CLAUDE_DIR" \
+    LC_ALL=C awk '
+    function dash(x) { return x == "" ? "-" : x }
+    function load(name, arr, keys,    n, i, L, f) {
+      n = split(ENVIRON[name], L, "\n")
+      for (i = 1; i <= n; i++) {
+        if (L[i] == "") continue
+        split(L[i], f, "\t")
+        if (keys == 2) arr[f[1] "/" f[2]] = f[3]
+        else if (keys == 0) arr[f[1]] = L[i]
+        else arr[f[1]] = f[2]
+      }
+    }
+    BEGIN {
+      load("_OR_PATHS", path, 1)
+      load("_OR_PINS", uuid, 1)
+      load("_OR_WTS", wt, 2)
+      load("_OR_ROWS", row, 0)
+      pre = ENVIRON["_OR_PREFIX"]
+      cdir = ENVIRON["_OR_CLAUDE"]
+
+      n = split(ENVIRON["_OR_SLUGS"], S, "\n")
+      for (i = 1; i <= n; i++) {
+        s = S[i]
+        if (s == "") continue
+
+        # Neither a project name, a worktree name nor a label may contain "@"
+        # or "/", so the first of each is the separator.
+        label = ""; unit = s
+        at = index(s, "@")
+        if (at > 0) { label = substr(s, at + 1); unit = substr(s, 1, at - 1) }
+        proj = unit; w = ""
+        sl = index(unit, "/")
+        if (sl > 0) { proj = substr(unit, 1, sl - 1); w = substr(unit, sl + 1) }
+
+        d = ""
+        if (proj in path) {
+          if (w == "") d = path[proj]
+          else if ((proj "/" w) in wt) d = wt[proj "/" w]
+        }
+        u = (s in uuid) ? uuid[s] : ""
+
+        t = s; gsub(/\./, "_", t); tname = pre t
+        alive = "false"; att = "false"; cr = ""; ac = ""; pc = ""
+        if (tname in row) {
+          split(row[tname], r, "\t")
+          alive = "true"
+          if (r[2] != "0") att = "true"
+          cr = r[3]; ac = r[5]; pc = r[6]
+        }
+
+        sd = ""
+        if (d != "") { e = d; gsub(/[^A-Za-z0-9-]/, "-", e); sd = cdir "/projects/" e }
+
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+          s, dash(proj), dash(w), dash(label), dash(d), dash(u), tname, \
+          alive, att, dash(cr), dash(ac), dash(pc), dash(sd)
+      }
+    }'
 }
 
 cmd_observe() {
@@ -1778,32 +1837,158 @@ cmd_observe() {
 
   _registry_ensure
 
-  local rows map slugs=""
+  local rows map slugs="" wts="" resolved=""
   rows=$(_tmux_rows)
   map=$(_project_slug_map)
+  _observe_load
 
   if [ "$all" = 1 ]; then
-    slugs=$(_observe_slugs "$rows" "$map")
+    slugs=$(_observe_candidates "$rows" "$map")
   else
     if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
     if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
     slugs=$(_slug "$name" "$wt" "$label")
   fi
+  wts=$(_observe_worktrees "$slugs")
+  resolved=$(_observe_resolve "$slugs" "$rows" "$wts")
 
-  local out="" slug one
-  while IFS= read -r slug; do
-    [ -n "$slug" ] || continue
-    one=$(_observe_one "$slug" "$rows" "$tail_n") || continue
-    out="$out$one
+  local facts="" msgs="" m="" keep line
+  local s proj w lbl dir uuid tname alive att created activity pcmd sdir
+  local tfile present seen shell mtime bytes
+  keep="$tail_n"
+  [ "$keep" -ge 1 ] || keep=1
+
+  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir; do
+    [ -n "$s" ] || continue
+    [ "$proj" = - ] && proj=""
+    [ "$w" = - ] && w=""
+    [ "$lbl" = - ] && lbl=""
+    [ "$dir" = - ] && dir=""
+    [ "$uuid" = - ] && uuid=""
+    [ "$created" = - ] && created=""
+    [ "$activity" = - ] && activity=""
+    [ "$pcmd" = - ] && pcmd=""
+    [ "$sdir" = - ] && sdir=""
+
+    shell=false
+    [ "$alive" = true ] && _is_shell_cmd "$pcmd" && shell=true
+
+    # Has Claude ever run in this directory? A brand-new session writes no
+    # transcript until its first exchange, so "up and waiting for its first
+    # prompt" and "stuck on the trust prompt" are otherwise indistinguishable.
+    # This does not settle it, but it says which is plausible: Claude only
+    # asks about trusting a folder the first time it runs there.
+    seen=false
+    [ -n "$sdir" ] && [ -d "$sdir" ] && seen=true
+
+    tfile=""
+    present=false
+    [ -n "$uuid" ] && [ -n "$sdir" ] && tfile="$sdir/$uuid.jsonl"
+    [ -n "$tfile" ] && [ -f "$tfile" ] && present=true
+
+    # A pinned session with no tmux and no transcript was opened, never used,
+    # and stopped. There is nothing to say about it, and reporting it forever
+    # is noise that grows with every session ever opened. An explicitly named
+    # session is always reported: the caller asked about that one.
+    if [ "$all" = 1 ] && [ "$alive" != true ] && [ "$present" != true ]; then
+      continue
+    fi
+
+    mtime=""
+    bytes=""
+    if [ "$present" = true ]; then
+      mtime=$(_mtime "$tfile" 2>/dev/null) || mtime=""
+      bytes=$(_file_bytes "$tfile")
+
+      # A DEAD session's conversation is read only when a tail was asked for.
+      # Its state is `dead` whatever its last message says — the classifier
+      # decides that before it looks at a single transcript field — so
+      # parsing megabytes of JSON for every dead session on every status-bar
+      # redraw bought nothing. On a real server that was 23 of 26 sessions.
+      # A driver asking for --tail still gets the last thing a dead session
+      # said, which is how it decides whether to revive it; with --tail 0,
+      # `last` is null for a session that is not running.
+      if [ "$alive" = true ] || [ "$tail_n" -gt 0 ]; then
+        m=$(_transcript_messages "$tfile" "$keep")
+        if [ -n "$m" ]; then
+          # Only what the answer uses: the last message, or the tail asked
+          # for. The window can hold hundreds.
+          if [ "$keep" = 1 ]; then
+            m="${m##*
+}"
+          else
+            m=$(printf '%s\n' "$m" | tail -n "$keep")
+          fi
+          while IFS= read -r line; do
+            [ -n "$line" ] && msgs="$msgs$s	$line
+"
+          done <<EOF
+$m
+EOF
+        fi
+      fi
+    fi
+
+    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen
 "
   done <<EOF
-$slugs
+$resolved
 EOF
 
-  printf '%s' "$out" | jq -sc \
+  # One jq for the whole answer. Messages arrive on stdin rather than as an
+  # --arg: a single argument is capped at 128 KB on Linux, and a --tail 8 over
+  # a busy server gets close to that.
+  printf '%s' "$msgs" | jq -Rnc --arg facts "$facts" --argjson tail_n "$tail_n" \
     --arg host "$(hostname 2>/dev/null || printf 'unknown')" \
-    --argjson now "$(date +%s)" \
-    '{host: $host, observed_at: $now, sessions: .}'
+    --argjson now "$(date +%s)" '
+    def cell: if . == "" then null else . end;
+    def num:  if . == "" then null else (tonumber? // null) end;
+
+    ([inputs
+      | select(length > 0)
+      | index("\t") as $i
+      | {s: .[0:$i], m: (.[$i + 1:] | fromjson? // null)}
+      | select(.m != null)]
+     | group_by(.s)
+     | map({key: .[0].s, value: map(.m)})
+     | from_entries) as $M
+
+    | {
+        host: $host,
+        observed_at: $now,
+        sessions: ($facts
+          | split("\n")
+          | map(select(length > 0) | split("\t"))
+          | map(. as $f | ($M[$f[0]] // []) as $m | {
+              target:   $f[0],
+              project:  $f[1],
+              worktree: ($f[2] | cell),
+              label:    ($f[3] | cell),
+              dir:      ($f[4] | cell),
+              tmux: {
+                name:     $f[5],
+                alive:    ($f[13] == "true"),
+                attached: ($f[14] == "true"),
+                shell:    ($f[15] == "true"),
+                command:  ($f[10] | cell),
+                created:  ($f[8] | num),
+                activity: ($f[9] | num)
+              },
+              transcript: {
+                uuid:     ($f[6] | cell),
+                path:     ($f[7] | cell),
+                present:  ($f[16] == "true"),
+                # false means Claude has never run in this directory, so a
+                # first-run prompt (trust this folder?) is the likely reason
+                # nothing is written.
+                dir_seen: ($f[17] == "true"),
+                mtime:    ($f[11] | num),
+                bytes:    ($f[12] | num)
+              },
+              last: ($m | last),
+              tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
+            }))
+      }'
 }
 
 # ---------------------------------------------------------------------------
