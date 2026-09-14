@@ -27,6 +27,9 @@
 # Set from --plain. A global rather than a parameter because every styling
 # helper below would otherwise thread it through unread.
 _CX_BAR_PLAIN=0
+# Set per run from CX_BAR_COLOR / --color and CX_BAR_ICONS / --icons.
+_CX_BAR_COLOR=0
+_CX_BAR_ICONS=unicode
 
 # _bar_fetch HOSTS DIR — one observe per host, in parallel, into DIR.
 #
@@ -54,9 +57,15 @@ _bar_fetch() {
   wait
 }
 
-# _bar_style STATE — the tmux style sequence for a state.
+# _bar_style STATE — the tmux style sequence for a state, or nothing.
+#
+# Colourless unless asked for. The terminal and the tmux theme already own
+# colour, and anything cx picks fights whichever one the user has: a green that
+# reads fine on one background is illegible on the next. The glyph's shape
+# carries the state on its own, so colour was only ever reinforcement.
+# CX_BAR_COLOR=1 or --color brings it back; NO_COLOR and --no-color still win.
 _bar_style() {
-  [ "$_CX_BAR_PLAIN" = 1 ] && return 0
+  [ "$_CX_BAR_COLOR" = 1 ] || return 0
   case "$1" in
     blocked) printf '#[fg=yellow]' ;;
     idle | fresh) printf '#[fg=green]' ;;
@@ -66,25 +75,44 @@ _bar_style() {
   esac
 }
 
-# _bar_icon STATE — one glyph for a tab title.
+# _bar_icon STATE — one glyph for a tab title, from the chosen set.
 #
-# Shape carries the meaning and colour only reinforces it: a status bar is
-# read at a glance and out of the corner of an eye, and plenty of people
-# cannot tell the green one from the yellow one. Geometric shapes rather than
-# a Nerd Font, so this works in whatever terminal you already have.
+# Every state must look different with no colour at all. Two sets:
+#
+#   unicode  geometric shapes nearly every font has. The default, because a
+#            Nerd Font glyph in a font without one is an empty box.
+#   nerd     Font Awesome glyphs as patched into Nerd Fonts (CX_BAR_ICONS=nerd).
+#            From the FA 4.7 block, which kept its codepoints across Nerd
+#            Fonts v2 and v3.
+#
+# Octal escapes, not literal characters: the Nerd Font glyphs are Private Use
+# Area codepoints that render as nothing in an editor or a diff without the
+# font, so a literal would be unreviewable. Octal rather than \x because it is
+# the form POSIX printf guarantees.
 _bar_icon() {
+  if [ "$_CX_BAR_ICONS" = nerd ]; then
+    case "$1" in
+      idle) printf '\357\201\230' ;;    # U+F058 check-circle: finished, your turn
+      working) printf '\357\204\220' ;; # U+F110 spinner
+      blocked) printf '\357\201\261' ;; # U+F071 exclamation-triangle
+      fresh) printf '\357\204\214' ;;   # U+F10C circle-o: nothing asked of it yet
+      dead) printf '\357\201\227' ;;    # U+F057 times-circle
+      *) printf '\357\201\231' ;;       # U+F059 question-circle
+    esac
+    return 0
+  fi
   case "$1" in
-    idle) printf '\xe2\x97\x8f' ;;    # ● solid: finished, waiting for you
-    working) printf '\xe2\x97\x90' ;; # ◐ half:  mid-turn
-    blocked) printf '\xe2\x96\xb2' ;; # ▲ warn:  needs an answer only you have
-    fresh) printf '\xe2\x97\x8b' ;;   # ○ open:  up, nothing asked of it yet
-    dead) printf '\xe2\x9c\x97' ;;    # ✗
+    idle) printf '\342\227\217' ;;    # U+25CF ● finished, waiting for you
+    working) printf '\342\227\220' ;; # U+25D0 ◐ mid-turn
+    blocked) printf '\342\226\262' ;; # U+25B2 ▲ needs an answer only you have
+    fresh) printf '\342\227\213' ;;   # U+25CB ○ up, nothing asked of it yet
+    dead) printf '\342\234\227' ;;    # U+2717 ✗
     *) printf '?' ;;
   esac
 }
 
 _bar_reset() {
-  [ "$_CX_BAR_PLAIN" = 1 ] && return 0
+  [ "$_CX_BAR_COLOR" = 1 ] || return 0
   printf '#[default]'
 }
 
@@ -130,7 +158,10 @@ _bar_window() {
   [ -n "$target" ] || return 0
   state=$(cx_state_read "$target" 2>/dev/null) || return 0
   [ -n "$state" ] || return 0
-  printf '%s%s%s' "$(_bar_style "$state")" "$(_bar_icon "$state")" "$(_bar_reset)"
+  # The space after the icon belongs here rather than in the tmux format: it is
+  # printed only when there is an icon, so a tab that is not a cx tab gets no
+  # stray gap in front of its name.
+  printf '%s%s%s ' "$(_bar_style "$state")" "$(_bar_icon "$state")" "$(_bar_reset)"
 }
 
 _bar_setup() {
@@ -161,6 +192,9 @@ setw -g window-status-current-format "#[bold] #I #($self bar --window '#{@cx_tar
 #     aggregate job refreshes a state cache, the per-tab lookups read it and
 #     touch no network at all. Drop the status-right line and the tabs lose
 #     their icons, because nothing is refreshing that cache any more.
+#   * Icons are drawn in your status bar's own colours. With a Nerd Font, put
+#     CX_BAR_ICONS=nerd in ~/.config/cx/config for Font Awesome glyphs, and
+#     CX_BAR_COLOR=1 there if you want the states coloured.
 EOF
 }
 
@@ -169,6 +203,15 @@ cmd_bar() {
   local window="" window_mode=0
 
   _CX_BAR_PLAIN=0
+  _CX_BAR_COLOR="${CX_BAR_COLOR:-0}"
+  _CX_BAR_ICONS="${CX_BAR_ICONS:-unicode}"
+  # A set this version does not know falls back instead of drawing nothing:
+  # the value comes from a config file, and a status line has no way to say
+  # the file is wrong.
+  case "$_CX_BAR_ICONS" in
+    unicode | nerd) ;;
+    *) _CX_BAR_ICONS=unicode ;;
+  esac
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -196,6 +239,8 @@ type into one: you are already looking at it. ${C_BOLD}--attached${C_RESET} incl
 
 ${C_BOLD}OPTIONS${C_RESET}
   --attached      include sessions you already have open
+  --icons SET     unicode (default), or nerd for a Nerd Font
+  --color         colour the states (default: your terminal's own colours)
   --max N         how many to name before "+N" (default 3; 0 counts only)
   --states LIST   which states count as waiting, in priority order
                   (default blocked,idle; also fresh, working, dead, unknown)
@@ -216,6 +261,22 @@ EOF
         ;;
       --plain) _CX_BAR_PLAIN=1 ;;
       --attached) attached_too=1 ;;
+      --color) _CX_BAR_COLOR=1 ;;
+      --icons)
+        [ $# -ge 2 ] || {
+          err "--icons needs a set: unicode or nerd"
+          return 3
+        }
+        case "$2" in
+          unicode | nerd) _CX_BAR_ICONS="$2" ;;
+          *)
+            err "unknown icon set: $2"
+            hint "one of: unicode, nerd (needs a Nerd Font in the terminal)"
+            return 3
+            ;;
+        esac
+        shift
+        ;;
       --window)
         # The value may legitimately be empty: tmux expands #{@cx_target} to
         # nothing for a window that is not a cx session, and the right answer
@@ -264,6 +325,13 @@ EOF
     esac
     shift
   done
+
+  # --plain means "not for tmux at all", so no #[...] of any kind; and the
+  # no-colour conventions beat a request for colour, as they do everywhere else
+  # in cx.
+  if [ "$_CX_BAR_PLAIN" = 1 ] || [ -n "${NO_COLOR:-}" ] || [ "${CX_NO_COLOR:-0}" = 1 ]; then
+    _CX_BAR_COLOR=0
+  fi
 
   # One tab's icon, read from the cache. Nothing below this point runs: no
   # hosts are contacted, no states are validated, nothing is fetched.
