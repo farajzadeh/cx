@@ -18,6 +18,8 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/cx-bar.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 export CX_CACHE_DIR="$TMP/cache"
+# Colour assertions below depend on no inherited no-colour convention.
+unset NO_COLOR
 export CX_SSHD_DIR="$TMP/ssh.d"
 export CX_CONFIG_FILE="$TMP/no-such-config"
 mkdir -p "$CX_SSHD_DIR"
@@ -167,11 +169,11 @@ assert_eq "$(cmd_bar --plain --states working)" "cx 1: api/wt"
 it "does not qualify names with the host when there is only one server"
 assert_not_contains "$(cmd_bar --plain)" "web1:"
 
-it "styles blocked and idle differently for tmux"
-assert_contains "$(cmd_bar)" "#[fg=yellow]api@review#[default]"
+it "styles blocked and idle differently for tmux, when asked for colour"
+assert_contains "$(cmd_bar --color)" "#[fg=yellow]api@review#[default]"
 
 it "leads with the colour of the most urgent state"
-assert_contains "$(cmd_bar)" "#[fg=yellow]cx 2:"
+assert_contains "$(cmd_bar --color)" "#[fg=yellow]cx 2:"
 
 it "names at most --max of them, and counts the rest"
 assert_eq "$(cmd_bar --plain --max 1)" "cx 2: api@review +1"
@@ -260,24 +262,25 @@ it "records every session, not just the ones the bar named"
 assert_eq "$(cx_state_read web2:dash)" working
 
 it "gives a waiting session a solid mark"
-assert_eq "$(cmd_bar --plain --window web1:api)" "●"
+assert_eq "$(cmd_bar --plain --window web1:api)" "● "
 
 it "gives one that needs an answer a warning mark"
-assert_eq "$(cmd_bar --plain --window web1:api@review)" "▲"
+assert_eq "$(cmd_bar --plain --window web1:api@review)" "▲ "
 
 it "distinguishes the states by shape, not only by colour"
 # Read at a glance, out of the corner of an eye, by people who cannot all tell
 # green from yellow. Colour reinforces the shape; it never carries the meaning.
 _marks=$(for _t in web1:api web1:api@review web2:dash web1:gone; do
   cmd_bar --plain --window "$_t"
-done | sort -u | tr -d '\n')
-assert_eq "${#_marks}" 4
+  echo
+done | LC_ALL=C sort -u | grep -c .)
+assert_eq "$_marks" 4
 
-it "colours it for tmux when not --plain"
-assert_eq "$(cmd_bar --window web1:api)" "#[fg=green]●#[default]"
+it "colours it for tmux with --color"
+assert_eq "$(cmd_bar --color --window web1:api)" "#[fg=green]●#[default] "
 
 it "resolves a target that names no host, when that is unambiguous"
-assert_eq "$(cmd_bar --plain --window dash)" "◐"
+assert_eq "$(cmd_bar --plain --window dash)" "◐ "
 
 it "prints nothing for a window that is not a cx session"
 # tmux expands #{@cx_target} to nothing there, and a tab that is not a cx tab
@@ -310,6 +313,58 @@ it "still refuses a bare target, which would mean the aggregate line"
 # `cx bar #{@cx_target}` in a window format would quietly print the whole
 # status line into every tab that has no target. --window is how you ask.
 assert_exit 3 cmd_bar web1:api
+
+describe "cx bar — colour and icon sets"
+
+reset_hosts
+host web1
+payload web1 "$(session api idle)" "$(session api@review blocked)" \
+  "$(session api/wt working)" "$(session gone dead)"
+cmd_bar --plain >/dev/null
+
+it "uses the terminal's own colours by default"
+# The theme owns colour. Anything cx picks is illegible on somebody's
+# background, and the shape already carries the state.
+assert_not_contains "$(cmd_bar)" "#[fg="
+
+it "leaves tab icons uncoloured by default too"
+assert_eq "$(cmd_bar --window web1:api)" "● "
+
+it "turns colour on from the config file"
+assert_contains "$(CX_BAR_COLOR=1 cmd_bar --window web1:api)" "#[fg=green]"
+
+it "lets NO_COLOR beat a request for colour"
+assert_not_contains "$(NO_COLOR=1 cmd_bar --color --window web1:api)" "#[fg="
+
+it "draws Font Awesome glyphs for a Nerd Font"
+assert_eq "$(cmd_bar --icons nerd --window web1:api)" "$(printf '\357\201\230') "
+
+it "uses the warning triangle for a session that needs an answer"
+assert_eq "$(cmd_bar --icons nerd --window web1:api@review)" "$(printf '\357\201\261') "
+
+it "takes the icon set from the config file"
+assert_eq "$(CX_BAR_ICONS=nerd cmd_bar --window web1:api/wt)" "$(printf '\357\204\220') "
+
+it "keeps every state distinct in the Nerd Font set as well"
+# LC_ALL=C on the sort above is load-bearing: in a UTF-8 locale sort collates,
+# and Private Use Area glyphs have no collation weight, so every Nerd Font icon
+# compares equal and `sort -u` folds five different glyphs into one line.
+_marks=$(for _t in web1:api web1:api@review web1:api/wt web1:gone; do
+  cmd_bar --icons nerd --window "$_t"
+  echo
+done | LC_ALL=C sort -u | grep -c .)
+assert_eq "$_marks" 4
+
+it "falls back to plain shapes for an icon set it does not know"
+# The value comes from a config file, and a tab title has no way to say the
+# file is wrong — so draw something rather than nothing.
+assert_eq "$(CX_BAR_ICONS=emoji cmd_bar --window web1:api)" "● "
+
+it "rejects an unknown set given as a flag, where it can say so"
+assert_exit 3 cmd_bar --icons emoji --window web1:api
+
+it "prints no stray space for a tab with no icon"
+assert_eq "$(cmd_bar --icons nerd --window '')" ""
 
 describe "cx bar — arguments"
 
