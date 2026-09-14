@@ -59,6 +59,7 @@ complete -c cx -s y -l yes -d 'assume yes'
 complete -c cx -n '__fish_seen_subcommand_from bar' -l setup -d 'print tmux configuration'
 complete -c cx -n '__fish_seen_subcommand_from bar' -l plain -d 'no tmux styling'
 complete -c cx -n '__fish_seen_subcommand_from bar' -l attached -d 'include sessions you have open'
+complete -c cx -n '__fish_seen_subcommand_from bar' -l window -d "one tab's state icon"
 complete -c cx -n '__fish_seen_subcommand_from bar' -l max -d 'how many to name'
 complete -c cx -n '__fish_seen_subcommand_from bar' -l states -d 'which states count as waiting'
 complete -c cx -n '__fish_seen_subcommand_from bar' -l label -d 'the prefix'

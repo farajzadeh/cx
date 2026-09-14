@@ -81,7 +81,7 @@ _cx() {
       compadd -- ${(f)"$(_cx_targets)"} --force
       ;;
     bar)
-      compadd -- --setup --plain --attached --max --states --label
+      compadd -- --setup --plain --attached --window --max --states --label
       ;;
     stop)
       compadd -- ${(f)"$(_cx_targets)"} --all

@@ -75,7 +75,7 @@ _cx() {
     bar)
       # No targets: the bar is every session or none.
       # shellcheck disable=SC2207
-      COMPREPLY=($(compgen -W "--setup --plain --attached --max --states --label" -- "$cur"))
+      COMPREPLY=($(compgen -W "--setup --plain --attached --window --max --states --label" -- "$cur"))
       ;;
     wt | worktree)
       if [ "$COMP_CWORD" -eq 2 ]; then

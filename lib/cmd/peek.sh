@@ -175,6 +175,15 @@ EOF
     fi
   done
 
+  # Keep the tab icons fresh too. peek and `cx bar` ask the servers exactly
+  # the same question, so an interactive peek is a free refresh of the cache
+  # the per-window lookups read — but only when every host was asked, since a
+  # narrowed run knows nothing about the sessions it did not look at and
+  # writing it would erase them.
+  if [ -z "$target" ]; then
+    printf '%s' "$rows" | cx_state_write
+  fi
+
   # Narrowing to one target happens here rather than in the query: the agent's
   # observe already accepts a single slug, but asking for --all and filtering
   # costs one round trip either way and keeps this path identical to the

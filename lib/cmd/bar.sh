@@ -66,6 +66,23 @@ _bar_style() {
   esac
 }
 
+# _bar_icon STATE — one glyph for a tab title.
+#
+# Shape carries the meaning and colour only reinforces it: a status bar is
+# read at a glance and out of the corner of an eye, and plenty of people
+# cannot tell the green one from the yellow one. Geometric shapes rather than
+# a Nerd Font, so this works in whatever terminal you already have.
+_bar_icon() {
+  case "$1" in
+    idle) printf '\xe2\x97\x8f' ;;    # ● solid: finished, waiting for you
+    working) printf '\xe2\x97\x90' ;; # ◐ half:  mid-turn
+    blocked) printf '\xe2\x96\xb2' ;; # ▲ warn:  needs an answer only you have
+    fresh) printf '\xe2\x97\x8b' ;;   # ○ open:  up, nothing asked of it yet
+    dead) printf '\xe2\x9c\x97' ;;    # ✗
+    *) printf '?' ;;
+  esac
+}
+
 _bar_reset() {
   [ "$_CX_BAR_PLAIN" = 1 ] && return 0
   printf '#[default]'
@@ -98,6 +115,24 @@ _bar_name() {
   fi
 }
 
+# _bar_window TARGET — one tab's icon, from the cache and nothing else.
+#
+# Run once per tmux window on every status redraw, so it touches no network:
+# it reads the state cache that the aggregate `cx bar` refreshes. See
+# lib/cache.sh.
+#
+# Prints NOTHING when the cache cannot answer — no target (a window that is
+# not a cx session), no file, too old, or a session it has never seen. A tab
+# that is not a cx tab should look exactly like it always did, and an icon
+# asserted from a stale file is worse than no icon.
+_bar_window() {
+  local target="$1" state=""
+  [ -n "$target" ] || return 0
+  state=$(cx_state_read "$target" 2>/dev/null) || return 0
+  [ -n "$state" ] || return 0
+  printf '%s%s%s' "$(_bar_style "$state")" "$(_bar_icon "$state")" "$(_bar_reset)"
+}
+
 _bar_setup() {
   local self="$CX_HOME/bin/cx"
   cat <<EOF
@@ -108,6 +143,12 @@ set -g status-interval 30
 set -g status-right-length 100
 set -g status-right "#($self bar) #[default]%H:%M"
 
+# Per-tab state. Every window cx open was run in carries an @cx_target, and
+# these two lines turn it into an icon in the tab title. Windows without one
+# are untouched and look exactly as they did.
+setw -g window-status-format         " #I #($self bar --window '#{@cx_target}')#W "
+setw -g window-status-current-format "#[bold] #I #($self bar --window '#{@cx_target}')#W "
+
 # Notes
 #   * The absolute path is deliberate: tmux runs status commands under the
 #     environment its server started with, which usually has no ~/.local/bin.
@@ -116,11 +157,16 @@ set -g status-right "#($self bar) #[default]%H:%M"
 #   * If your SSH key needs an agent, the tmux server needs to see it:
 #     add SSH_AUTH_SOCK to update-environment, or run cx from a terminal
 #     first — the shared connection cx opens is reused for a while.
+#   * The tab icons come from the same fetch as the line on the right: the
+#     aggregate job refreshes a state cache, the per-tab lookups read it and
+#     touch no network at all. Drop the status-right line and the tabs lose
+#     their icons, because nothing is refreshing that cache any more.
 EOF
 }
 
 cmd_bar() {
   local max=3 states="blocked,idle" label="cx" attached_too=0
+  local window="" window_mode=0
 
   _CX_BAR_PLAIN=0
 
@@ -170,6 +216,18 @@ EOF
         ;;
       --plain) _CX_BAR_PLAIN=1 ;;
       --attached) attached_too=1 ;;
+      --window)
+        # The value may legitimately be empty: tmux expands #{@cx_target} to
+        # nothing for a window that is not a cx session, and the right answer
+        # there is to print nothing rather than to complain.
+        [ $# -ge 2 ] || {
+          err "--window needs a target"
+          return 3
+        }
+        window_mode=1
+        window="$2"
+        shift
+        ;;
       --max)
         [ $# -ge 2 ] || {
           err "--max needs a number"
@@ -206,6 +264,13 @@ EOF
     esac
     shift
   done
+
+  # One tab's icon, read from the cache. Nothing below this point runs: no
+  # hosts are contacted, no states are validated, nothing is fetched.
+  if [ "$window_mode" = 1 ]; then
+    _bar_window "$window"
+    return 0
+  fi
 
   case "$max" in
     '' | *[!0-9]*)
@@ -261,6 +326,12 @@ EOF
     fi
   done
   rm -rf "$tmp"
+
+  # The per-tab lookups must not touch the network, so they read a cache, and
+  # this is the fetch that fills it — the same arrangement shell completion
+  # has with cx_cache_write_targets. Written from the unfiltered rows, before
+  # anything below narrows them to the states being watched for.
+  printf '%s' "$rows" | cx_state_write
 
   # Selected in the order --states named them, so the list doubles as the
   # priority: what is written first is what you see when the bar is truncated.
