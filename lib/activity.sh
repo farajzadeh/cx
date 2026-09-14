@@ -145,3 +145,71 @@ cx_activity_color() {
     *) printf '%s%s%s' "$C_DIM" "$1" "$C_RESET" ;;
   esac
 }
+
+# ---------------------------------------------------------------------------
+# Reading an observe payload
+# ---------------------------------------------------------------------------
+
+# cx_activity_rows HOST FILE NOW — classify every session in one host's
+# `observe` output. Prints one tab-separated row per session:
+#
+#   HOST \t TARGET \t STATE \t ATTACHED \t QUIET \t AGE
+#
+# ATTACHED is "true" or "false". QUIET is seconds since the transcript was
+# last written and AGE seconds since the tmux session was created, each "-"
+# when the fact is missing.
+#
+# This lives here rather than beside one command because two read it — cx peek
+# and cx bar — and because the placeholder convention below is exactly the kind
+# of detail that gets "simplified" back into a bug when it is written twice.
+cx_activity_rows() {
+  local host="$1" file="$2" now="$3"
+  local target alive shell attached uuid present last_role last_stop mtime created
+  local quiet age state
+
+  # Every field is emitted with a "-" placeholder when it is absent, and the
+  # placeholder is not decoration. TAB IS IFS WHITESPACE: with IFS set to it,
+  # `read` folds runs of tabs into one delimiter and drops empty fields, so a
+  # row whose middle columns are blank silently shifts every later column left.
+  # A session with no transcript has four blank columns in a row, which read
+  # as one — and its creation time arrives in the variable meant for the last
+  # message's role, so the session was classified from the wrong facts
+  # entirely. Found by cx peek and cx nudge disagreeing about one session.
+  #
+  # The rows printed below keep the same convention for the same reason: their
+  # last two columns are routinely empty.
+  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created; do
+    [ -n "$target" ] || continue
+
+    [ "$uuid" = - ] && uuid=""
+    [ "$last_role" = - ] && last_role=""
+    [ "$last_stop" = - ] && last_stop=""
+
+    quiet=""
+    age=""
+    [ "$mtime" != - ] && quiet=$((now - mtime))
+    [ "$created" != - ] && age=$((now - created))
+
+    state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
+      "$last_role" "$last_stop" "$quiet")
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$host" "$target" "$state" "$attached" "${quiet:--}" "${age:--}"
+  done <<EOF
+$(jq -r '
+    # "-" rather than "" for anything absent: see the note on IFS above.
+    def f: if . == null or . == "" then "-" else tostring end;
+    .sessions[]?
+    | [ .target,
+        (.tmux.alive         | tostring),
+        (.tmux.shell         | tostring),
+        (.tmux.attached      | tostring),
+        (.transcript.uuid    | f),
+        (.transcript.present | tostring),
+        (.last.role          | f),
+        (.last.stop_reason   | f),
+        (.transcript.mtime   | f),
+        (.tmux.created       | f)
+      ] | @tsv' "$file" 2>/dev/null)
+EOF
+}

@@ -36,60 +36,28 @@ _peek_fetch() {
   wait
 }
 
-# _peek_rows HOST FILE NOW — classified rows for one host's payload.
+# _peek_rows HOST FILE NOW — one display row per session in a host's payload.
 #
-# The agent reported facts; the state is decided here, by lib/activity.sh,
-# because the grace period is the user's setting and because a pure function is
-# the only part of this that a unit test can pin.
+# The classification itself is cx_activity_rows in lib/activity.sh, shared with
+# cx bar; what is left here is only how peek renders it. The agent reported
+# facts and the state is decided on the client, because the grace period is the
+# user's setting and because a pure function is the only part of this that a
+# unit test can pin.
 _peek_rows() {
-  local host="$1" file="$2" now="$3"
-  local line target alive shell uuid present last_role last_stop mtime created
-  local quiet age state attached
+  local host="$1" file="$2" now="$3" h target state attached quiet age
 
-  # Every field is emitted with a "-" placeholder when it is absent, and the
-  # placeholder is not decoration. TAB IS IFS WHITESPACE: with IFS set to it,
-  # `read` folds runs of tabs into one delimiter and drops empty fields, so a
-  # row whose middle columns are blank silently shifts every later column left.
-  # A session with no transcript has four blank columns in a row, which read
-  # as one — and its creation time arrives in the variable meant for the last
-  # message's role, so the session was classified from the wrong facts
-  # entirely. Found by cx peek and cx nudge disagreeing about one session.
-  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created; do
-    [ -n "$target" ] || continue
+  cx_activity_rows "$host" "$file" "$now" |
+    while IFS='	' read -r h target state attached quiet age; do
+      # cx_activity_rows writes "-" for an absent number rather than an empty
+      # column, so that a blank field cannot shift every later one left.
+      [ "$quiet" = - ] && quiet=""
+      [ "$age" = - ] && age=""
 
-    [ "$uuid" = - ] && uuid=""
-    [ "$last_role" = - ] && last_role=""
-    [ "$last_stop" = - ] && last_stop=""
-
-    quiet=""
-    age=""
-    [ "$mtime" != - ] && quiet=$((now - mtime))
-    [ "$created" != - ] && age=$((now - created))
-
-    state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-      "$last_role" "$last_stop" "$quiet")
-
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-      "$host" "$target" "$state" \
-      "$([ "$attached" = true ] && printf 'you' || printf '—')" \
-      "$(_peek_age "$quiet" "$age" "$state")"
-  done <<EOF
-$(jq -r '
-    # "-" rather than "" for anything absent: see the note on IFS above.
-    def f: if . == null or . == "" then "-" else tostring end;
-    .sessions[]?
-    | [ .target,
-        (.tmux.alive         | tostring),
-        (.tmux.shell         | tostring),
-        (.tmux.attached      | tostring),
-        (.transcript.uuid    | f),
-        (.transcript.present | tostring),
-        (.last.role          | f),
-        (.last.stop_reason   | f),
-        (.transcript.mtime   | f),
-        (.tmux.created       | f)
-      ] | @tsv' "$file" 2>/dev/null)
-EOF
+      printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$h" "$target" "$state" \
+        "$([ "$attached" = true ] && printf 'you' || printf '—')" \
+        "$(_peek_age "$quiet" "$age" "$state")"
+    done
 }
 
 # _peek_age QUIET AGE STATE — the "for how long" column.
