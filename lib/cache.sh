@@ -250,3 +250,16 @@ cx_state_read() {
     END { exit !found }
   ' "$f"
 }
+
+# cx_state_rows — every cached "host:target TAB state" line, or nothing when
+# the cache is missing or older than CX_STATE_TTL. For callers that need the
+# whole picture rather than one session: `cx jump` choosing where to go.
+cx_state_rows() {
+  local f age ttl
+  f=$(cx_state_file)
+  [ -s "$f" ] || return 1
+  ttl="${CX_STATE_TTL:-180}"
+  age=$(cx_age "$f" 2>/dev/null || printf 99999)
+  [ "${age:-99999}" -lt "$ttl" ] || return 1
+  cat "$f"
+}

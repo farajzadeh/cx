@@ -180,6 +180,9 @@ set -g status-right "#($self bar) #[default]%H:%M"
 setw -g window-status-format         " #I #($self bar --window '#{@cx_target}')#W "
 setw -g window-status-current-format "#[bold] #I #($self bar --window '#{@cx_target}')#W "
 
+# prefix + j: go to the tab of the session most in need of you; again for the next.
+bind-key j run-shell -b "$self jump"
+
 # Notes
 #   * The absolute path is deliberate: tmux runs status commands under the
 #     environment its server started with, which usually has no ~/.local/bin.
