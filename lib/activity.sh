@@ -120,12 +120,15 @@ cx_activity_state() {
       return 0
       ;;
     idle)
-      # Waiting for input. With no transcript yet, that input is the first
-      # prompt: `fresh`, for the reasons given below.
-      if [ "$present" = true ]; then
-        printf 'idle'
-      else
+      # Waiting for input. It is `fresh` only when cx can SEE that the pinned
+      # conversation has not started. With no pin, cx simply cannot find the
+      # transcript, which says nothing about it — found on a real server, where
+      # a 26-day-old session with no pin was reported as never having been
+      # asked anything.
+      if [ "$present" != true ] && [ -n "$uuid" ]; then
         printf 'fresh'
+      else
+        printf 'idle'
       fi
       return 0
       ;;

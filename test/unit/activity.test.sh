@@ -176,6 +176,11 @@ assert_eq "$(state true false uuid false '' '' '' busy interactive '')" working
 it "keeps idle with no transcript fresh"
 assert_eq "$(state true false uuid false '' '' '' idle interactive '')" fresh
 
+it "keeps idle idle for a session with no pin, whose transcript cx cannot look for"
+# Not finding a transcript is only evidence of a fresh conversation when cx knew
+# which conversation to look for. Seen for real: a 26-day-old session.
+assert_eq "$(state true false '' false '' '' '' idle interactive '')" idle
+
 it "sees a background session that has no tmux at all"
 # cx used to report these as dead while they worked.
 assert_eq "$(state false false uuid true '' '' '' busy bg '')" working
