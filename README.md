@@ -133,6 +133,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 |---|---|
 | `cx peek [target]` | what each session is doing: idle, working, blocked, dead |
 | `cx nudge web1:api "..."` | send a prompt to a session that's already running |
+| `cx bar` | the sessions waiting for you, on one line — for a tmux status bar |
 | `cx goal new ship "..."` | a definition of done, and who's working on it |
 | `cx goal ls` / `show` / `pause` / `resume` / `done` | manage them |
 | `cx driver` | print the cx-driver subagent, to install in Claude Code |
@@ -222,6 +223,37 @@ cx nudge web1:api/authfix@tests "the retry test is still failing — fix it"
 
 It declines, rather than making a mess, if the session is mid-turn, waiting on
 a prompt, or open in front of you. `--force` overrides that.
+
+### In the status bar
+
+`cx bar` is the same answer on one line, for tmux to keep in front of you:
+
+```sh
+cx bar --setup >> ~/.tmux.conf   # or copy the lines it prints
+tmux source-file ~/.tmux.conf
+```
+
+```
+                                       cx 2: api@review web2:dash    14:32
+```
+
+Blocked first, then idle, and **nothing at all** when nothing is waiting — the
+bar collapses rather than holding space for a message about there being no
+message. A session you have attached is left out, since you are already
+looking at it, and a server that did not answer is named `!web2` rather than
+passed over: an empty bar has to mean "nothing needs you", not "cx could not
+tell".
+
+```sh
+cx bar --max 5              # name more of them before "+N"
+cx bar --states blocked     # only the ones that need an answer from you
+cx bar --plain              # no tmux styling, for a shell prompt or another bar
+```
+
+tmux is the loop — and it is the only loop, because cx still has none. `cx bar`
+runs once and returns; `status-interval` decides how often that happens, the
+same way a person or a driver agent decides how often to run `cx peek`. Each
+redraw is one SSH round trip per server, so 30 seconds is a sensible floor.
 
 ### Definitions of done
 

@@ -162,7 +162,7 @@ that reason. Do not factor it into `lib/`.
 
 ## Driving sessions
 
-Three commands, and the split between them is invariant 7 made concrete.
+Four commands, and the split between them is invariant 7 made concrete.
 
 **`cx peek`** — the agent's `observe` verb reports raw facts per session: tmux
 liveness, whether the pane's foreground process is a shell, the transcript's
@@ -186,6 +186,32 @@ And `fresh` never expires, because Claude writes no transcript until its first
 exchange, so "just started" and "nobody has given it anything to do" are the
 same fact; whether that has gone on too long depends on what the caller has
 already sent, which only the caller knows.
+
+**`cx bar`** — the same classification, rendered as one line for a tmux status
+bar: which sessions are waiting for a human, blocked before idle, and nothing
+at all when the answer is none. It shares `cx_activity_rows` with peek and adds
+only presentation, which is the reason that function lives in `lib/activity.sh`
+rather than beside either command.
+
+It is where the corollary to invariant 7 gets its real test, because a status
+bar is a polling loop by nature. The loop is tmux's: `cx bar` runs once and
+returns, and `status-interval` decides how often, exactly as a person or a
+driver agent decides how often to run `cx peek`. Two things it does differently
+from peek, both because it is called unattended and repeatedly:
+
+- **A server that just failed to connect is skipped rather than waited on.**
+  The negative cache is read, and written when — and only when — ssh itself
+  exits 255, so a powered-off laptop costs one `ConnectTimeout` a minute
+  instead of one per redraw. Any other exit status came back from the far side,
+  which means the host is up and something else is wrong; marking that down
+  would make `cx ls` lie about it. Speed only, per invariant 4: every redraw
+  that does reach a server reads it live.
+- **Failure is silent and exit 0**, with one exception. A status line is not a
+  place to report an error: it has one line, it is redrawn every few seconds,
+  and whoever glances at it is not in a position to act. The exception is a
+  server that could not be reached, which is named `!host` — an empty bar has
+  to mean "nothing needs you", and a bar that empties out when the VPN drops
+  would be saying something false.
 
 **`cx nudge`** — types into a live session. It declines with **exit 0** and
 `sent: false` when the session is not ready, following the precedent that

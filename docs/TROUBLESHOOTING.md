@@ -408,6 +408,56 @@ processes appending to one transcript with no merge, and one of them loses its
 turns silently. cx refuses instead. Use `cx nudge` to talk to a live session,
 or `cx ask` without the label for a one-shot with no shared history.
 
+### The tmux status bar stays empty
+
+`cx bar` prints nothing when nothing is waiting — that is the design, so the
+bar collapses instead of holding space. Check what it would say:
+
+```sh
+cx bar --plain          # what tmux is being given
+cx peek                 # every session, whatever state it is in
+```
+
+If `cx bar` prints something in your terminal and tmux still shows nothing:
+
+- **tmux cannot find cx.** Status commands run under the environment the tmux
+  server started with, which usually has no `~/.local/bin`. Use the absolute
+  path — `cx bar --setup` prints it for you.
+- **`status-interval` is 0**, which disables timed redraws entirely.
+- **`status-right-length`** is too short and the line is being cut off.
+
+### The status bar shows `!host`
+
+That server did not give a usable answer, and the bar says so rather than
+passing over it — an empty bar has to mean "nothing needs you", not "cx could
+not tell". One line cannot say why, so ask:
+
+```sh
+cx host test <host>       # is it reachable at all?
+cx peek                   # peek has room to explain, and does
+```
+
+Two causes. Either it is **unreachable**, which cx remembers for a minute so
+the bar does not wait on it again — the marker clears itself as soon as the
+server answers — or its **agent is too old to observe** (0.3.0 or newer),
+which `cx peek` says in words and `cx provision <host>` fixes.
+
+Seen from inside tmux only, this is usually SSH keys rather than the server:
+if your key needs an agent, the tmux server has to see `SSH_AUTH_SOCK`. Add it
+to `update-environment`, or run any cx command from a terminal first — the
+shared connection cx opens is reused for the next while.
+
+### The status bar is costing too many connections
+
+Each redraw is one SSH round trip per server. Raise the interval:
+
+```tmux
+set -g status-interval 60
+```
+
+There is no cx-side interval to change, deliberately: cx has no loop anywhere,
+and whatever calls it owns the pacing.
+
 ### The driver will not stop
 
 `cx goal pause <name>`. Nothing in cx loops, so there is no process to kill —
@@ -418,7 +468,7 @@ Pausing touches no session: everything stays exactly where it was.
 
 ### `the cx agent on <host> is too old for observing and steering`
 
-`cx peek`, `cx nudge` and `cx goal` need agent 0.3.0 or newer.
+`cx peek`, `cx bar`, `cx nudge` and `cx goal` need agent 0.3.0 or newer.
 
 ```sh
 cx provision <host>
