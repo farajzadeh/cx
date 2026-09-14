@@ -447,6 +447,42 @@ if your key needs an agent, the tmux server has to see `SSH_AUTH_SOCK`. Add it
 to `update-environment`, or run any cx command from a terminal first — the
 shared connection cx opens is reused for the next while.
 
+### The tabs have no icons
+
+The per-tab lookup reads a cache and never fetches, so an empty tab means the
+cache cannot answer. In order of likelihood:
+
+```sh
+cx bar --plain                       # does the aggregate line work at all?
+cat ~/.cache/cx/state                # what the tabs are reading
+tmux list-windows -F '#I #W [#{@cx_target}]'   # is the window tagged?
+```
+
+- **No `status-right` line.** The tabs read the cache; the line on the right is
+  what refreshes it. Without it nothing does, and after `CX_STATE_TTL` the icons
+  stop. Keep both halves of `cx bar --setup`.
+- **The window is not tagged.** Only a window `cx open` was actually run in
+  carries `@cx_target`. A tab where you ran `ssh` yourself, or attached to tmux
+  by hand, has nothing to look up. Tag it with
+  `tmux set -w @cx_target <host>:<target>`.
+- **`CX_TMUX_TAG=0`** in your config turns the tagging off entirely.
+
+### A tab and another terminal keep stealing a session from each other
+
+Working as intended, and unavoidable. `cx open` attaches with `tmux attach -d`,
+which detaches any other client — otherwise a dropped SSH leaves a phantom
+client attached and tmux sizes the window to the smallest one, which is how a
+session ends up stuck at 80x24.
+
+So a session belongs to whichever place attached to it last. Open a tab for a
+session you already have up in another terminal and the tab takes it; when that
+terminal reattaches it takes it back, and the tab's `cx open` exits — closing
+the tab with it. Pick one place to attach from.
+
+Building a tab-per-session layout over sessions you already have open is the
+usual way to meet this: every tab steals one, and the terminals you left
+attached elsewhere fight back.
+
 ### The status bar is costing too many connections
 
 Each redraw is one SSH round trip per server. Raise the interval:

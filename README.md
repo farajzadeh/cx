@@ -250,6 +250,50 @@ cx bar --states blocked     # only the ones that need an answer from you
 cx bar --plain              # no tmux styling, for a shell prompt or another bar
 ```
 
+### A tab per session
+
+The same states, one per tmux tab. `cx open` records its target on the local
+tmux window it was launched in, so a tab you open labels itself:
+
+```sh
+tmux new -s cx
+cx open local:api          # this tab is now  ● api
+# C-b c
+cx open local:api@review   # and this one     ▲ api@review
+```
+
+```
+ ● prop   ○ event   ▲ ipd@start   ◐ api/authfix           cx 2: prop ipd@start   14:32
+```
+
+| | |
+|---|---|
+| `●` | idle — the turn finished, it is waiting for you |
+| `◐` | working |
+| `▲` | blocked — it needs an answer only you can give |
+| `○` | fresh — up, nothing asked of it yet |
+| `✗` | dead |
+
+The shape carries the meaning and the colour only reinforces it, because a tab
+title is read out of the corner of your eye.
+
+The tab lookups do **no** network work at all — nine tabs redrawing every
+interval would be nine round trips otherwise. They read a state cache that the
+one aggregate job on the right refreshes, the same arrangement shell completion
+has. Drop the `status-right` line and the tabs lose their icons, because
+nothing is refreshing that cache any more.
+
+Two things worth knowing before you build this layout:
+
+- **A tab owns its session.** `cx open` attaches with `tmux attach -d`, which
+  detaches whoever was already there. That is deliberate — a dropped SSH leaves
+  a phantom client and tmux sizes the window to the smallest one — but it means
+  a tab and a separate terminal on the same session will take it from each
+  other, repeatedly. Pick one place to attach from.
+- **The tag outlives the session.** cx execs ssh, so there is no "afterwards" in
+  which to clean up. A tab keeps its target until something else claims it;
+  what it shows then is that session's real state, `✗` included.
+
 tmux is the loop — and it is the only loop, because cx still has none. `cx bar`
 runs once and returns; `status-interval` decides how often that happens, the
 same way a person or a driver agent decides how often to run `cx peek`. Each

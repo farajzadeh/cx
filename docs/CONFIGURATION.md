@@ -63,6 +63,9 @@ Not in the config file; set these in the environment when you need them.
 |---|---|---|
 | `CX_IDLE_GRACE` | `120` | How long a session may go quiet mid-turn before `cx peek` and `cx bar` call it `blocked` rather than `working`. Claude routinely spends a minute inside one tool call, so this is deliberately generous — a false `blocked` costs a pointless nudge, a false `working` costs a driver that waits forever. |
 | `CX_PEEK_TAIL` | `6` | How many of a session's last messages `cx peek --json` includes. |
+| `CX_STATE_TTL` | `180` | How old the session-state cache may be before `cx bar --window` stops putting an icon on a tab. Refreshed by every `cx bar` and every unnarrowed `cx peek`. |
+| `CX_TMUX_TAG` | `1` | Whether `cx open` records its target on the local tmux window it was launched in, which is what puts a state icon in the tab title. Invisible otherwise. `0` disables it. |
+| `CX_TMUX_TITLE` | `0` | `1` also renames that window to the target. Off by default: tmux turns off `automatic-rename` for any window given an explicit name, and that is a lasting change to how your tmux behaves. |
 | `CX_GOAL_HOST` | — | Which server holds goals when a command does not name one. Falls back to `CX_DEFAULT_HOST`, then to the only configured server if there is just one. |
 
 ## The flags, as environment variables

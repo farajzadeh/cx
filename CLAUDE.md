@@ -32,6 +32,7 @@ bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
+bash test/unit/open.test.sh                # what cx open does to your tmux
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -262,6 +263,27 @@ Four commands, and the split between them is invariant 11 made concrete:
   to act on an error. The single exception is a server it could not reach,
   named `!host` — an empty bar has to mean "nothing needs you" rather than "cx
   could not tell".
+
+- **`cx bar --window <target>`** — one tmux tab's state as a glyph, for
+  `window-status-format`. Runs once per window per redraw, so it does **no**
+  network work: it reads `~/.cache/cx/state`, rewritten as a side effect by
+  every `cx bar` and every unnarrowed `cx peek` — the same arrangement
+  completion has with the `targets` file. Prints nothing for anything it cannot
+  answer (no target, no cache, older than `CX_STATE_TTL`, unknown session),
+  because an icon asserted from a stale file is worse than no icon.
+
+  The window learns its target from `cx open`, which records it as a tmux
+  window option before handing over the terminal. **Addressed by `$TMUX_PANE`,
+  never "the current window"** — current is the session's *active* window, so a
+  tab opening in the background tags a different one. Nine tabs opened at once
+  all tagged the last one created and the other eight silently got nothing.
+  Renaming is opt-in (`CX_TMUX_TITLE`) because tmux disables `automatic-rename`
+  for any window given an explicit name, which is a lasting change to the
+  user's own tmux; setting a user option is invisible and so is the default.
+
+  A consequence worth knowing before building a tab per session: the agent
+  attaches with `tmux attach -d`, so **a tab takes its session from whoever
+  else is attached** — and they take it back. Two places on one session fight.
 
 - **`cx nudge`** — types into a live session. Declines with **exit 0** and
   `sent: false` when the session is not ready, following `cmd_stop`'s

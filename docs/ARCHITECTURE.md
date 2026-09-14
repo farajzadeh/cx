@@ -213,6 +213,29 @@ from peek, both because it is called unattended and repeatedly:
   to mean "nothing needs you", and a bar that empties out when the VPN drops
   would be saying something false.
 
+**`cx bar --window <target>`** — one tmux tab's state, as a single glyph. Run
+once per window on every status redraw, so it does no network work whatsoever:
+it reads `~/.cache/cx/state`, which every `cx bar` and every unnarrowed
+`cx peek` rewrites as a side effect. Exactly the arrangement shell completion
+has with the `targets` file, for exactly the same reason — a status line that
+blocks is worse than one that is thirty seconds old.
+
+It prints **nothing** for anything it cannot answer: no target, no cache, a
+cache older than `CX_STATE_TTL`, or a session it has never seen. A tab that is
+not a cx tab has to look exactly as it always did, and an icon asserted from a
+stale file is worse than no icon.
+
+The window learns its target from `cx open`, which records it as a tmux window
+user option before handing over the terminal. Addressed by `$TMUX_PANE` rather
+than "the current window": current means the session's *active* window, so a
+tab opening in the background tags somebody else's — nine tabs opened at once
+all tagged the last one created and the other eight silently got nothing.
+
+One consequence of `tmux attach -d`, which the agent uses so a dropped SSH
+cannot leave a phantom client sizing the window: a tab takes its session from
+whoever else is attached. Two places attached to one session will keep taking
+it from each other.
+
 **`cx nudge`** — types into a live session. It declines with **exit 0** and
 `sent: false` when the session is not ready, following the precedent that
 stopping an already-stopped project is not an error: a driver in a loop has to
