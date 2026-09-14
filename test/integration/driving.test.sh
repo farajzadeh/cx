@@ -569,4 +569,21 @@ assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@plain | jq -r '.s
 
 cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
 
+# ---------------------------------------------------------------------------
+# Goals: exactly their members, and driving themselves
+
+describe "cx peek --goal"
+
+cx_run "$HOME_DIR" goal new drive 'the patch lands' --member hooks --member hooks@never >/dev/null 2>&1
+
+it "answers with exactly the goal's members"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json peek --goal drive | jq -r '[.sessions[].target] | sort | join(",")')" \
+  "hooks,hooks@never"
+
+it "reports a member nobody has opened, as dead"
+assert_eq \
+  "$(cx_run "$HOME_DIR" --json peek --goal drive | jq -r '.sessions[] | select(.target == "hooks@never") | .state')" \
+  dead
+
 summary

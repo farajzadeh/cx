@@ -27,18 +27,23 @@ Skip every goal whose `state` is not `active`. A paused goal is a stop
 instruction: do not peek at its members, do not nudge them, do not comment on
 them. Say "N goals paused" and move on.
 
-**2. Look at the members.** `cx peek --json --tail 8`
+**2. Look at the members.** `cx peek --goal <name> --json --tail 8`
 
-One call covers every session on every server. Each entry carries `state`,
-`steerable`, `quiet` (seconds since the conversation last moved), and `tail`
-— the last few messages of the session's own conversation.
+One call per active goal, covering exactly that goal's members on every
+server they are on — and nothing else, so you pay for the sessions you are
+driving rather than every session anyone ever opened. A member that is not
+running at all is still reported, as `dead`, rather than silently missing.
+Each entry carries `state`, `steerable`, `quiet` (seconds since the
+conversation last moved), and `tail` — the last few messages of the session's
+own conversation. (An older cx without `--goal`: `cx peek --json --tail 8`,
+and pick the members out yourself.)
 
 | state | what it means | what you do |
 |---|---|---|
 | `idle` | the last turn finished; waiting for input | judge, then nudge or finish |
 | `fresh` | up, but this conversation has not started | send the opening prompt |
 | `working` | mid-turn right now | nothing. Leave it alone |
-| `blocked` | mid-turn but quiet — usually a permission prompt | escalate to the user |
+| `blocked` | stopped on a permission prompt — exact when Claude reported it, a guess after long silence otherwise | escalate to the user |
 | `dead` | Claude exited | revive with `cx open -d <target>` |
 | `unknown` | nothing readable | report it; do not guess |
 
@@ -55,6 +60,9 @@ When the evidence is not in the transcript, the answer is not "done", it is
 **4. Act.** At most one nudge per member per pass.
 
 - Not started → `cx nudge <target> "<the goal's dod, plus what to do first>"`
+  and ask for evidence you can read cheaply: "finish by running the tests and
+  quoting the command and its last five lines". Your next pass then judges
+  from the tail instead of re-running anything.
 - Progressing → nudge only if it is genuinely stalled or has gone off course.
   A session that finished a turn and is waiting for the obvious next step is
   the normal case for a nudge; one that is working through a plan is not.
@@ -93,6 +101,16 @@ user wants driven. Creating a goal is their call, not yours.
 **Do not touch what you were not given.** Sessions with no goal are somebody's
 work in progress. Report them if they look stuck; never nudge them.
 
+## How often
+
+cx has no loop and never will; the interval is yours. In Claude Code the
+natural one is `/loop`:
+
+    /loop 3m drive my cx goals
+
+A pass is cheap when nothing has changed, so a few minutes is fine. Tighter
+than that mostly re-reads sessions that are still mid-turn.
+
 ## Ending a pass
 
 Report in a few lines: what each active goal is waiting on, what you sent, and
@@ -109,7 +127,8 @@ If nothing changed, say that plainly. A quiet pass is a real result.
     cx goal done <name>                   the definition of done is met
     cx goal log <name> --event E --target T "text"
 
-    cx peek --json --tail 8               every session's state and last turns
+    cx peek --goal <name> --json --tail 8 one goal's members, state and last turns
+    cx peek --json --tail 8               every session on every server
     cx peek <target> --json               just one
     cx nudge <target> "prompt"            send it the next thing to do
     cx open -d <target>                   start (or restart) without attaching

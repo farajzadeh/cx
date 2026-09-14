@@ -18,6 +18,8 @@
 . "$CX_HOME/lib/target.sh"
 # shellcheck source=../activity.sh
 . "$CX_HOME/lib/activity.sh"
+# shellcheck source=goal.sh
+. "$CX_HOME/lib/cmd/goal.sh"
 
 # _peek_fetch HOSTS TAIL DIR [UNIT] — one observe per host, in parallel, into DIR.
 #
@@ -52,6 +54,54 @@ _peek_fetch() {
     ) &
   done
   wait
+}
+
+# _peek_goal_fetch GOAL TAIL DIR — observe exactly a goal's members, into DIR.
+#
+# Prints the hosts involved, one per line. A member is stored as written: bare
+# means the goal's own server, host:target another. Each host is asked only
+# for its members, with --slug, so a driver pass costs the sessions it drives
+# rather than every session anyone ever opened — and a member that is not
+# running at all still comes back, as dead, instead of silently missing. An
+# agent older than --slug gets --all, and the answer is cut down to the exact
+# members here instead.
+_peek_goal_fetch() {
+  local name="$1" tail_n="$2" dir="$3" ghost gout members h m safe
+  ghost=$(_goal_host) || return $?
+  gout=$(_goal_agent "$ghost" show "$name") || return $?
+  members=$(printf '%s' "$gout" | jq -r --arg g "$ghost" \
+    '.members[]? | if test(":") then . else $g + ":" + . end' 2>/dev/null) || members=""
+
+  local hosts
+  hosts=$(printf '%s\n' "$members" | awk -F: 'NF > 1 { print $1 }' | sort -u)
+  for h in $hosts; do
+    safe=$(cx_sanitize "$h")
+    (
+      rc=0
+      args=(observe --all)
+      while IFS= read -r m; do
+        [ -n "$m" ] && args=("${args[@]+"${args[@]}"}" --slug "$m")
+      done <<EOF
+$(printf '%s\n' "$members" | awk -F: -v h="$h" '$1 == h { sub(/^[^:]*:/, ""); print }')
+EOF
+      want=$(printf '%s\n' "$members" | awk -F: -v h="$h" '$1 == h { sub(/^[^:]*:/, ""); print }' | jq -Rsc 'split("\n") | map(select(length > 0))')
+      cx_agent "$h" "${args[@]+"${args[@]}"}" --tail "$tail_n" >"$dir/$safe.raw" 2>/dev/null || rc=$?
+      if [ "$rc" = 3 ]; then
+        rc=0
+        cx_agent "$h" observe --all --tail "$tail_n" >"$dir/$safe.raw" 2>/dev/null || rc=$?
+      fi
+      if [ "$rc" = 0 ]; then
+        jq -c --argjson want "$want" \
+          '.sessions |= map(select(.target as $t | $want | index($t)))' \
+          "$dir/$safe.raw" >"$dir/$safe.json" 2>/dev/null || printf '' >"$dir/$safe.fail"
+      else
+        printf '' >"$dir/$safe.fail"
+      fi
+      rm -f "$dir/$safe.raw"
+    ) &
+  done
+  wait
+  printf '%s\n' "$hosts"
 }
 
 # _peek_rows HOST FILE NOW — one display row per session in a host's payload.
@@ -99,7 +149,7 @@ _peek_age() {
 }
 
 cmd_peek() {
-  local target="" tail_n="$CX_PEEK_TAIL"
+  local target="" tail_n="$CX_PEEK_TAIL" show_all=0 goal=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -111,6 +161,8 @@ ${C_BOLD}cx peek${C_RESET} — what each Claude session is doing right now
   cx peek <host>:<project>[/<worktree>][@<label>]
   cx peek --json                the same, for a script or a driver agent
   cx peek --tail N              include the last N messages in --json
+  cx peek --all                 list finished sessions too
+  cx peek --goal <name>         just that goal's members, wherever they are
 
 Reads each session's own conversation and reports one of:
 
@@ -137,6 +189,15 @@ EOF
         shift
         tail_n="${1:-$CX_PEEK_TAIL}"
         ;;
+      --all) show_all=1 ;;
+      --goal)
+        [ $# -ge 2 ] || {
+          err "--goal needs a goal name"
+          return 3
+        }
+        goal="$2"
+        shift
+        ;;
       -*)
         err "unknown option: $1"
         return 3
@@ -153,9 +214,17 @@ EOF
       ;;
   esac
 
+  if [ -n "$goal" ] && [ -n "$target" ]; then
+    err "--goal and a target do not mix"
+    hint "a goal names its own sessions: cx peek --goal $goal"
+    return 3
+  fi
+
   # A target narrows to one host; otherwise ask everyone.
   local hosts="" one_target=""
-  if [ -n "$target" ]; then
+  if [ -n "$goal" ]; then
+    : # hosts come from the goal's members, below
+  elif [ -n "$target" ]; then
     cx_target_resolve "$target" || return $?
     hosts="$CX_T_HOST"
     one_target=$(cx_target_unit_str)
@@ -176,7 +245,19 @@ EOF
   local tmp
   tmp=$(cx_mktempdir)
   cx_spinner_start "reading sessions"
-  _peek_fetch "$hosts" "$fetch_tail" "$tmp" "$one_target"
+  if [ -n "$goal" ]; then
+    hosts=$(_peek_goal_fetch "$goal" "$fetch_tail" "$tmp") || {
+      local grc=$?
+      cx_spinner_stop
+      rm -rf "$tmp"
+      return "$grc"
+    }
+    # Every member is shown whatever its state: they are exactly what was
+    # asked about, and a finished one is the thing a driver acts on.
+    show_all=1
+  else
+    _peek_fetch "$hosts" "$fetch_tail" "$tmp" "$one_target"
+  fi
   cx_spinner_stop
 
   local now h safe rows="" failed="" stale=""
@@ -203,7 +284,7 @@ EOF
   # the per-window lookups read — but only when every host was asked, since a
   # narrowed run knows nothing about the sessions it did not look at and
   # writing it would erase them.
-  if [ -z "$target" ]; then
+  if [ -z "$target" ] && [ -z "$goal" ]; then
     printf '%s' "$rows" | cx_state_write
   fi
 
@@ -231,6 +312,19 @@ EOF
 
   rows=$(printf '%s' "$rows" | grep -v '^$' || true)
 
+  # Finished sessions are counted, not listed, unless asked for. cx reports
+  # every session it ever pinned that still has a conversation, because a
+  # finished session is how a driver knows work needs reviving — and after a
+  # few weeks that is most of the list: 23 of 26 on the server this was
+  # written against, burying the three that were doing something. --json is
+  # untouched, since a driver needs them, and naming a target shows everything
+  # about it, since that is exactly what was asked for.
+  local ndead=0
+  if [ -z "$one_target" ] && [ "$show_all" != 1 ] && [ -n "$rows" ]; then
+    ndead=$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "dead"' | grep -c . || true)
+    rows=$(printf '%s\n' "$rows" | awk -F'\t' '$3 != "dead"' | grep -v '^$' || true)
+  fi
+
   if [ -n "$rows" ]; then
     {
       printf 'HOST\tSESSION\tSTATE\tWHO\tQUIET\n'
@@ -240,7 +334,13 @@ EOF
         done
     } | cx_table
     say ""
+    if [ "${ndead:-0}" -gt 0 ]; then
+      note "$ndead finished — list them with: cx peek --all"
+    fi
     hint "send one a prompt with: cx nudge <target> \"...\""
+  elif [ "${ndead:-0}" -gt 0 ]; then
+    note "Nothing running. $ndead finished — list them with: cx peek --all"
+    hint "revive one with: cx open -d <target>"
   else
     note "No sessions to report."
     hint "start one with: cx open -d <host>:<project>"

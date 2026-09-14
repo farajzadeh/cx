@@ -61,11 +61,23 @@ EOF
 OLD_AGENT=0
 # Stubbed after peek.sh, which pulls in lib/remote.sh and would otherwise
 # define the real cx_agent over the top. Every call is logged, one per line.
+GOAL='{"name":"ship","state":"active","members":["api@review","api/authfix","web2:dash"]}'
 cx_agent() {
+  local host="$1"
   shift
   printf '%s\n' "$*" >>"$TMP/agent.log"
+  printf '%s %s\n' "$host" "$*" >>"$TMP/agent-hosts.log"
   case " $* " in
-    *" --unit "*)
+    " version ")
+      printf '0.4.0\n'
+      return 0
+      ;;
+    *" goal show ship "*)
+      printf '%s' "$GOAL"
+      return 0
+      ;;
+    *" goal show "*) return 2 ;;
+    *" --unit "* | *" --slug "*)
       [ "$OLD_AGENT" = 1 ] && return 3
       ;;
   esac
@@ -148,5 +160,59 @@ cmd_peek >/dev/null 2>&1
 it "asks for no tail, because the table shows no messages"
 # A tail is what makes the agent read the conversations of dead sessions.
 assert_contains "$(cat "$TMP/agent.log")" "--tail 0"
+
+TABLE=$(cmd_peek 2>&1)
+
+it "lists the sessions that are doing something"
+assert_contains "$TABLE" "api@review"
+
+it "counts finished sessions instead of listing them"
+assert_not_contains "$TABLE" "api/authfix"
+
+it "says how many it left out, and how to see them"
+assert_contains "$TABLE" "1 finished"
+
+it "lists them with --all"
+assert_contains "$(cmd_peek --all 2>&1)" "api/authfix"
+
+it "shows everything about a target it was asked about, finished or not"
+assert_contains "$(cmd_peek web1:api/authfix 2>&1)" "dead"
+
+it "leaves --json complete, because a driver revives finished sessions"
+assert_eq "$(CX_JSON=1 cmd_peek 2>/dev/null | jq '[.sessions[] | select(.state == "dead")] | length')" 1
+
+describe "cx peek --goal — one goal's members"
+
+printf 'Host web2\n' >"$CX_SSHD_DIR/web2.conf"
+export CX_GOAL_HOST=web1
+rm -f "$TMP/agent.log" "$TMP/agent-hosts.log"
+OUT=$(CX_JSON=1 cmd_peek --goal ship 2>/dev/null)
+
+it "asks the goal's own server for its bare members, by exact name"
+assert_contains "$(cat "$TMP/agent-hosts.log")" "web1 observe --all --slug api@review --slug api/authfix"
+
+it "asks another server for the members qualified with it"
+assert_contains "$(cat "$TMP/agent-hosts.log")" "web2 observe --all --slug dash"
+
+it "answers with exactly the members, and no other session"
+assert_eq "$(jq -r '[.sessions[] | "\(.host):\(.target)"] | sort | join(",")' <<<"$OUT")" \
+  "web1:api/authfix,web1:api@review"
+
+it "keeps a finished member, because that is what a driver revives"
+assert_contains "$(cmd_peek --goal ship 2>&1)" "api/authfix"
+
+it "falls back for an agent that predates --slug, still exactly the members"
+OLD_AGENT=1
+assert_eq "$(CX_JSON=1 cmd_peek --goal ship 2>/dev/null | jq -r '[.sessions[].target] | sort | join(",")')" \
+  "api/authfix,api@review"
+OLD_AGENT=0
+
+it "says so for a goal that does not exist"
+run_rc cmd_peek --goal nosuch
+assert_eq "$_T_RC" 2
+
+it "refuses a goal and a target together"
+run_rc cmd_peek --goal ship web1:api
+assert_eq "$_T_RC" 3
 
 summary
