@@ -408,6 +408,15 @@ cx_run "$HOME_DIR" goal pause ship >/dev/null 2>&1
 assert_eq "$(cx_run "$HOME_DIR" --json goal show ship | jq -r '.state')" paused
 
 it "pausing kills nothing"
+# The member has to be RUNNING for this to mean anything. The block above ended
+# it on purpose — the pane execs Claude, so sending it C-d ends the tmux
+# session too — and asserting "still there" about a session that was already
+# gone is how this test came to fail on every run without anything being
+# wrong. So bring it back first, then pause, then look.
+cx_run "$HOME_DIR" goal resume ship >/dev/null 2>&1
+cx_run "$HOME_DIR" open -d cx-test-web1:api@impl >/dev/null 2>&1
+settle 2
+cx_run "$HOME_DIR" goal pause ship >/dev/null 2>&1
 assert_ok on_node 'tmux has-session -t "=cx-api@impl"'
 
 it "resumes"
