@@ -24,7 +24,7 @@ _cx() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
-  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge bar goal driver status stop cache help version"
+  cmds="host provision login doctor new ls rm wt worktree open resume shell code ask peek nudge bar tabs goal driver status stop cache help version"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     # shellcheck disable=SC2207
@@ -76,6 +76,10 @@ _cx() {
       # No targets: the bar is every session or none.
       # shellcheck disable=SC2207
       COMPREPLY=($(compgen -W "--setup --plain --attached --window --max --states --label" -- "$cur"))
+      ;;
+    tabs)
+      # shellcheck disable=SC2207
+      COMPREPLY=($(compgen -W "--dry-run --no-attach --session" -- "$cur"))
       ;;
     wt | worktree)
       if [ "$COMP_CWORD" -eq 2 ]; then

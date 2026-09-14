@@ -156,6 +156,7 @@ ${C_BOLD}DRIVING${C_RESET}
   peek [target]                           what each session is doing now
   nudge <target> "prompt"                 type into a running session
   bar [--setup]                           one line for a tmux status bar
+  tabs [-n]                               a tmux tab per live session, here
   goal new <name> "done when..."          a definition of done, and who is on it
   goal ls | show | dod | member | log     inspect and edit one
   goal pause | resume | done <name>       pause stops the driver, not the work
