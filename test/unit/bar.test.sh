@@ -54,11 +54,14 @@ fi
 # It answers from $TMP/<host>.json, and fails with 255 — ssh's own "could not
 # connect" — when there is no such file, which is how an unreachable server is
 # simulated.
-cx_agent() {
-  local h="$1"
-  [ -f "$TMP/$h.json" ] || return 255
-  cat "$TMP/$h.json"
+stub_agent() {
+  cx_agent() {
+    local h="$1"
+    [ -f "$TMP/$h.json" ] || return 255
+    cat "$TMP/$h.json"
+  }
 }
+stub_agent
 
 host() {
   printf 'Host %s\n' "$1" >"$CX_SSHD_DIR/$1.conf"
@@ -97,6 +100,10 @@ payload() {
 reset_hosts() {
   rm -f "$CX_SSHD_DIR"/*.conf "$TMP"/*.json 2>/dev/null || true
   cx_cache_invalidate
+  rm -f "$(cx_state_file)" 2>/dev/null || true
+  # A test that swapped the stub out to simulate a failure must not leak it
+  # into the next group. This cost seven confidently wrong assertions once.
+  stub_agent
 }
 
 # ---------------------------------------------------------------------------
@@ -234,6 +241,75 @@ run_rc cmd_bar --plain
 assert_fail cx_cache_is_down web3
 
 # ---------------------------------------------------------------------------
+
+describe "cx bar --window — one tab's icon, from cache only"
+
+reset_hosts
+host web1
+host web2
+payload web1 "$(session api idle)" "$(session api@review blocked)" "$(session gone dead)"
+payload web2 "$(session dash working)"
+cmd_bar --plain >/dev/null
+
+it "the fan-out leaves a state cache behind for the tabs to read"
+assert_eq "$(cx_state_read web1:api)" idle
+
+it "records every session, not just the ones the bar named"
+# The bar only prints blocked and idle; a tab exists for whatever the window
+# holds, so the cache has to carry the states the line did not show.
+assert_eq "$(cx_state_read web2:dash)" working
+
+it "gives a waiting session a solid mark"
+assert_eq "$(cmd_bar --plain --window web1:api)" "●"
+
+it "gives one that needs an answer a warning mark"
+assert_eq "$(cmd_bar --plain --window web1:api@review)" "▲"
+
+it "distinguishes the states by shape, not only by colour"
+# Read at a glance, out of the corner of an eye, by people who cannot all tell
+# green from yellow. Colour reinforces the shape; it never carries the meaning.
+_marks=$(for _t in web1:api web1:api@review web2:dash web1:gone; do
+  cmd_bar --plain --window "$_t"
+done | sort -u | tr -d '\n')
+assert_eq "${#_marks}" 4
+
+it "colours it for tmux when not --plain"
+assert_eq "$(cmd_bar --window web1:api)" "#[fg=green]●#[default]"
+
+it "resolves a target that names no host, when that is unambiguous"
+assert_eq "$(cmd_bar --plain --window dash)" "◐"
+
+it "prints nothing for a window that is not a cx session"
+# tmux expands #{@cx_target} to nothing there, and a tab that is not a cx tab
+# has to look exactly as it always did.
+assert_eq "$(cmd_bar --plain --window '')" ""
+
+it "prints nothing for a session the cache has never heard of"
+assert_eq "$(cmd_bar --plain --window web1:no-such)" ""
+
+it "prints nothing rather than asserting a state from a stale file"
+assert_eq "$(CX_STATE_TTL=0 cmd_bar --plain --window web1:api)" ""
+
+it "prints nothing when there is no cache at all"
+rm -f "$(cx_state_file)"
+assert_eq "$(cmd_bar --plain --window web1:api)" ""
+
+it "does not touch the network to answer"
+# The whole point: nine tabs redrawing every interval must cost nothing. If
+# this ever starts fetching, the stub below turns it into a visible failure.
+cx_agent() {
+  printf 'FETCHED' >"$TMP/fetched"
+  return 255
+}
+cmd_bar --plain >/dev/null 2>&1 || true
+rm -f "$TMP/fetched"
+cmd_bar --plain --window web1:api >/dev/null 2>&1
+assert_fail test -e "$TMP/fetched"
+
+it "still refuses a bare target, which would mean the aggregate line"
+# `cx bar #{@cx_target}` in a window format would quietly print the whole
+# status line into every tab that has no target. --window is how you ask.
+assert_exit 3 cmd_bar web1:api
 
 describe "cx bar — arguments"
 
