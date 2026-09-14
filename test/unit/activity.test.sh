@@ -194,6 +194,11 @@ assert_eq "$(state false false uuid true '' '' '' busy interactive '')" dead
 it "lets Claude's status speak for a session with no pinned conversation"
 assert_eq "$(state true false '' false '' '' '' busy interactive '')" working
 
+it "ignores a status it does not know, and reads the transcript instead"
+# `shell` was seen on a real server, and nothing says what it means. An unknown
+# value must cost exactness, never correctness: here the transcript decides.
+assert_eq "$(state true false uuid true assistant end_turn 5 shell interactive '')" idle
+
 it "still says unknown for no pin and no status"
 assert_eq "$(state true false '' false '' '' '' '' '' '')" unknown
 
