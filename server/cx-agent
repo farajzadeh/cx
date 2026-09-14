@@ -28,7 +28,10 @@ set -eu
 # options, and recorded perm_mode in place of the `dangerous` boolean; plus
 # observe, nudge, goal and open --detach. 0.4.0 added observe --unit and
 # --slug, the claude and event facts in observe, the event verb and the hooks
-# open installs to feed it, and open --no-hooks. The client feature-gates on
+# open installs to feed it, open --no-hooks, forget, and attach_detaches in
+# sessions (open no longer detaches other clients on tmux 3.1+), goal on-stop
+# with the driver pass a member's Stop hook starts, and the merged fact in list
+# and worktree list with worktree rm --merged. The client feature-gates on
 # this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
@@ -286,6 +289,26 @@ _worktrees_tsv() {
     /^branch /    { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
     END           { flush() }
   '
+}
+
+# _worktree_merged PROJECT_PATH BRANCH MAIN_COMMIT — "true" when BRANCH holds
+# nothing that MAIN_COMMIT does not, so removing its worktree loses no commit.
+#
+# Derived from git every time and never stored (invariant 5). A branch with no
+# commits of its own counts as merged, and that is the honest answer: there is
+# nothing on it to lose. A detached worktree has no branch to ask about and is
+# never merged, because its commits are reachable from nothing else.
+_worktree_merged() {
+  local ppath="$1" branch="$2" main="$3"
+  if [ -z "$branch" ] || [ -z "$main" ]; then
+    printf 'false'
+    return 0
+  fi
+  if git -C "$ppath" merge-base --is-ancestor "refs/heads/$branch" "$main" 2>/dev/null; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
 }
 
 # _worktree_path PROJECT_PATH NAME — resolve a worktree by name, or empty.
@@ -731,7 +754,7 @@ cmd_list() {
   [ -d "$CX_CLAUDE_DIR/projects" ] && _STORE_PRESENT=true
 
   # Derived facts as TSV, merged by a single jq invocation below.
-  local derived="" wt_derived="" name path nlive wname wpath wline
+  local derived="" wt_derived="" name path nlive wname wpath wline wbranch mainref
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     path=$(_project_path "$name")
@@ -743,16 +766,17 @@ cmd_list() {
     # Worktrees, straight from git. One extra subprocess per project, and it
     # only reads .git/worktrees rather than touching the working tree.
     [ -n "$path" ] || continue
-    while IFS="$(printf '\t')" read -r wname wpath; do
+    mainref=$(git -C "$path" rev-parse --verify -q HEAD 2>/dev/null) || mainref=""
+    while IFS="$(printf '\t')" read -r wname wpath wbranch; do
       [ -n "$wname" ] || continue
       nlive=$(_live_count "$(_tmux_slug "$name/$wname")")
       # _derive_dir recomputes the branch rather than trusting the porcelain
       # one, because it is the path that also handles a detached HEAD.
       wline=$(_derive_dir "$wpath" "$want_git")
-      wt_derived="$wt_derived$name	$wname	$wpath	$wline	$nlive
+      wt_derived="$wt_derived$name	$wname	$wpath	$wline	$nlive	$(_worktree_merged "$path" "$wbranch" "$mainref")
 "
     done <<EOF
-$(_worktrees_tsv "$path" | cut -f1,2)
+$(_worktrees_tsv "$path")
 EOF
   done <<EOF
 $(jq -r '.projects[].name' "$CX_REGISTRY" 2>/dev/null)
@@ -794,7 +818,8 @@ EOF
            sessions:    (if .[5] == "" then null else (.[5] | tonumber) end),
            last_active: (.[6] | num),
            tmux_count:  (.[7] | tonumber),
-           tmux_live:   ((.[7] | tonumber) > 0)
+           tmux_live:   ((.[7] | tonumber) > 0),
+           merged:      (.[8] == "true")
          }
        })
      | group_by(.project)
@@ -1069,9 +1094,13 @@ EOF
 #   * The claude command is sent ONLY on creation. Re-opening an existing
 #     session must reattach to whatever is there, not stack a second Claude on
 #     top of the first.
-#   * `attach -d` detaches other clients. A hard SSH drop leaves a phantom
-#     client attached, and tmux sizes the window to the smallest one — so
-#     without -d, reconnecting gives you a squashed display.
+#   * Other clients are detached ONLY where they have to be. A hard SSH drop
+#     leaves a phantom client attached, and a tmux that sizes a window to its
+#     smallest client squashes the display to it — `attach -d` was the fix.
+#     But -d also throws out every real client, so a tab and a terminal on one
+#     session took it from each other endlessly. tmux 3.1 can size a window to
+#     the client used most recently, which a phantom never is; there cx sets
+#     that and attaches alongside whoever is already there.
 #   * Every -t target is the exact-match `=name` form. tmux resolves a bare
 #     target as a prefix, so once cx-api@review exists, `-t cx-api` finds it —
 #     and `cx open api` would silently attach to the review session.
@@ -1353,7 +1382,36 @@ cmd_open() {
     return 0
   fi
 
-  exec tmux attach -d -t "=$tname"
+  if _attach_must_detach; then
+    exec tmux attach -d -t "=$tname"
+  fi
+  tmux set-option -w -t "=$tname:" window-size latest 2>/dev/null || true
+  exec tmux attach -t "=$tname"
+}
+
+# _attach_must_detach — true when attaching has to detach everyone else.
+#
+# Only a tmux that can size a window to its latest client (3.1 and later) is
+# safe to share: an older one sizes to the smallest, and a phantom client left
+# by a dropped SSH connection pins the window small. Anything unparseable —
+# "tmux master", no tmux at all — keeps the old, safe behaviour.
+_attach_must_detach() {
+  local v major minor
+  v=$(tmux -V 2>/dev/null) || return 0
+  v="${v#tmux }"
+  v="${v#next-}"
+  major="${v%%.*}"
+  minor="${v#*.}"
+  minor="${minor%%[!0-9]*}"
+  case "$major" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  case "$minor" in
+    '' | *[!0-9]*) minor=0 ;;
+  esac
+  [ "$major" -gt 3 ] && return 1
+  [ "$major" -eq 3 ] && [ "$minor" -ge 1 ] && return 1
+  return 0
 }
 
 cmd_stop() {
@@ -1461,9 +1519,14 @@ cmd_sessions() {
       pins='{"sessions":{}}'
   fi
 
+  # Whether opening one of these would detach whoever has it. The client
+  # decides whether to open a tab over a session held elsewhere from this.
+  local detaches=true
+  _attach_must_detach || detaches=false
+
   printf '%s\n' "$raw" |
     jq -Rs --arg prefix "$CX_TMUX_PREFIX" --arg map "$map" \
-      --argjson pins "$pins" \
+      --argjson pins "$pins" --argjson detaches "$detaches" \
       --arg host "$(hostname 2>/dev/null || printf 'unknown')" '
       ($map
        | split("\n")
@@ -1510,7 +1573,7 @@ cmd_sessions() {
               dangerous: (($pins.sessions[$target] as $e
                            | $e.perm_mode == "bypassPermissions" or $e.dangerous == true) // false)
             })
-      | {host: $host, sessions: .}'
+      | {host: $host, attach_detaches: $detaches, sessions: .}'
 }
 
 # ---------------------------------------------------------------------------
@@ -2180,6 +2243,62 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# forget
+# ---------------------------------------------------------------------------
+
+# cmd_forget NAME [--worktree W] [--session L] — drop one session's pin.
+#
+# observe reports every pinned session that still has a conversation, because
+# a finished session is how a driver knows there is work to revive. This is how
+# a user says a finished one is done with. Exactly that session: not its unit's
+# other sessions, which _session_forget would take too. The conversation file is
+# not touched — it is Claude Code's, and `cx resume` can still reach it.
+#
+# A running session is refused. Its pin is how the next `cx open` resumes the
+# conversation that is live right now, and dropping it would start a second
+# conversation on top of the one in the pane.
+cmd_forget() {
+  local name="" wt="" label=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+  [ -n "$name" ] || die "usage: cx-agent forget <name> [--worktree W] [--session L]" 3
+  if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
+  if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
+
+  local slug uuid
+  slug=$(_slug "$name" "$wt" "$label")
+  _tmux_has "$(_tmux_name "$slug")" && die "$slug is running — stop it first" 4
+  uuid=$(_session_uuid_get "$slug" 2>/dev/null) || die "cx has nothing recorded for $slug" 2
+
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg s "$slug" 'del(.sessions[$s])' "$CX_SESSIONS" >"$CX_SESSIONS.new" || {
+    _unlock
+    die "could not write $CX_SESSIONS" 1
+  }
+  mv -f "$CX_SESSIONS.new" "$CX_SESSIONS"
+  _unlock
+  trap - EXIT INT TERM
+
+  rm -f "$CX_STATE_DIR/$uuid" 2>/dev/null || true
+  jq -nc --arg t "$slug" --arg u "$uuid" '{target: $t, forgotten: true, uuid: $u}'
+}
+
+# ---------------------------------------------------------------------------
 # event — what a Claude Code hook just reported
 # ---------------------------------------------------------------------------
 #
@@ -2304,7 +2423,154 @@ EOF
       blocked | idle) _event_notify "$sid" "$st" "$detail" ;;
     esac
   fi
+
+  # A finished turn is the moment a goal that drives itself takes its next
+  # step. Only Stop: an idle_prompt is the same turn, already handled.
+  if [ "$ev" = Stop ]; then
+    _event_drive "$sid" || true
+  fi
   return 0
+}
+
+# _event_slug SESSION_ID — the cx session holding a conversation, or nothing.
+_event_slug() {
+  [ -e "$CX_SESSIONS" ] || return 0
+  jq -r --arg u "$1" \
+    '(.sessions // {}) | to_entries[] | select(.value.uuid == $u) | .key' \
+    "$CX_SESSIONS" 2>/dev/null | head -n 1
+}
+
+# _event_drive SESSION_ID — run one driver pass for every active goal that
+# drives itself and counts this session as a member.
+#
+# THIS IS THE ONE PLACE cx STARTS CLAUDE ON ITS OWN, and invariant 11 is why it
+# looks the way it does. It is not a loop: Claude fires the hook, one pass runs,
+# and the pass exits. It has no daemon and no pinned conversation — a fresh
+# `claude -p` each time, whose memory is the goal log. What it does have is a
+# feedback edge: the pass nudges a member, the member finishes, and its Stop
+# starts another pass. So it is bounded three ways, each checked before
+# anything is launched:
+#
+#   * opt-in per goal (`goal on-stop`), and only while the goal is active —
+#     pausing it stops the next pass without touching anything running;
+#   * at most max_per_hour passes an hour per goal, counted from the goal log;
+#   * one pass per goal at a time, held by a lock with the pass's pid in it.
+#
+# The judgment stays in the driver's own instructions, shipped by `cx provision`
+# rather than copied into this file.
+_event_drive() {
+  [ -e "$CX_GOALS" ] || return 0
+  local slug
+  slug=$(_event_slug "$1")
+  [ -n "$slug" ] || return 0
+
+  local goals
+  goals=$(jq -r --arg s "$slug" '
+    .goals[]?
+    | select(.state == "active" and .on_stop != null)
+    | select((.members // []) | index($s))
+    | [ .name,
+        ((.on_stop.max_per_hour // 6) | tostring),
+        (if (.on_stop.model // "") == "" then "-" else .on_stop.model end),
+        ([.log[]? | select(.event == "on-stop")
+                  | select(((.at // "") | fromdateiso8601? // 0) > (now - 3600))]
+         | length | tostring)
+      ] | @tsv' "$CX_GOALS" 2>/dev/null) || return 0
+  [ -n "$goals" ] || return 0
+
+  local name max model ran
+  while IFS='	' read -r name max model ran; do
+    [ -n "$name" ] || continue
+    [ "$model" = - ] && model=""
+    _event_drive_one "$name" "$slug" "$max" "$model" "$ran" || true
+  done <<EOF
+$goals
+EOF
+}
+
+_event_drive_one() {
+  local name="$1" slug="$2" max="$3" model="$4" ran="$5"
+  local dir="$CX_DATA_DIR/driving" lock doc bin agent_bin
+
+  if [ "${ran:-0}" -ge "${max:-6}" ]; then
+    _event_drive_note "$name" "$slug" on-stop-capped \
+      "not driving: $ran passes in the last hour already, the most this goal allows"
+    return 0
+  fi
+
+  doc="$CX_DATA_DIR/cx-driver.agent.md"
+  if [ ! -r "$doc" ]; then
+    _event_drive_note "$name" "$slug" on-stop-failed \
+      "not driving: this server has no driver definition — run cx provision"
+    return 0
+  fi
+  bin=$(_find_claude 2>/dev/null) || bin=""
+  if [ -z "$bin" ]; then
+    _event_drive_note "$name" "$slug" on-stop-failed "not driving: Claude Code is not installed here"
+    return 0
+  fi
+
+  mkdir -p "$dir" 2>/dev/null || return 0
+  lock="$dir/$name.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    # Held. By a pass that is still running, leave it; by one that died
+    # without cleaning up, take it over.
+    local holder
+    holder=$(cat "$lock/pid" 2>/dev/null) || holder=""
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      return 0
+    fi
+    rm -rf "$lock" 2>/dev/null || true
+    mkdir "$lock" 2>/dev/null || return 0
+  fi
+
+  agent_bin="$0"
+  case "$agent_bin" in
+    /*) ;;
+    *) agent_bin="$HOME/.local/bin/cx-agent" ;;
+  esac
+
+  _goal_apply "$name" '
+    .log = ((.log // []) + [{at: $_t, event: "on-stop", target: $tg,
+      text: ("started a driver pass after " + $tg + " finished a turn")}])' \
+    --arg tg "$slug" >/dev/null 2>&1 || true
+
+  local prompt
+  prompt="You are cx's driver, started on the server by cx goal on-stop.
+Goal: $name
+Member that just finished a turn: $slug
+Follow \"When the server started you\" in your instructions: one pass, for this goal only, using $agent_bin. Record what you did with goal log, even if it was nothing."
+
+  local args=()
+  args=(-p "$prompt" --append-system-prompt "$(cat "$doc")"
+  --allowedTools "Bash($agent_bin *)" "Bash(printf *)" Read
+  --permission-mode dontAsk)
+  [ -n "$model" ] && args=("${args[@]+"${args[@]}"}" --model "$model")
+
+  # Every descriptor redirected and the process let go of: a hook's caller
+  # waits for the hook's output to close, and a pass takes minutes. The pass
+  # releases the lock itself when it ends.
+  (
+    cd "$HOME" 2>/dev/null || true
+    nohup sh -c 'lock=$1; shift; printf "%s" "$$" >"$lock/pid"; "$@"; rm -rf "$lock"' \
+      cx-driver "$lock" "$bin" "${args[@]+"${args[@]}"}" \
+      >>"$dir/$name.log" 2>&1 </dev/null &
+  ) >/dev/null 2>&1 </dev/null
+  return 0
+}
+
+# _event_drive_note GOAL SLUG EVENT TEXT — why a pass did not start, at most
+# once an hour per reason, so a busy member cannot fill the log with it.
+_event_drive_note() {
+  local seen
+  seen=$(jq -r --arg n "$1" --arg e "$3" '
+    [.goals[$n].log[]? | select(.event == $e)
+     | select(((.at // "") | fromdateiso8601? // 0) > (now - 3600))] | length' \
+    "$CX_GOALS" 2>/dev/null) || seen=0
+  [ "${seen:-0}" = 0 ] || return 0
+  _goal_apply "$1" '
+    .log = ((.log // []) + [{at: $_t, event: $e, target: $tg, text: $x}])' \
+    --arg e "$3" --arg tg "$2" --arg x "$4" >/dev/null 2>&1 || true
 }
 
 # _event_notify SESSION_ID STATE DETAIL — run the user's notifier, if any.
@@ -2443,22 +2709,83 @@ _wt_list() {
   path=$(_project_path "$name")
   [ -n "$path" ] || die "no such project: $name" 2
 
-  local tsv
-  tsv=$(_worktrees_tsv "$path")
+  local tsv="" mainref wn wp wb
+  mainref=$(git -C "$path" rev-parse --verify -q HEAD 2>/dev/null) || mainref=""
+  while IFS='	' read -r wn wp wb; do
+    [ -n "$wn" ] || continue
+    tsv="$tsv$wn	$wp	$wb	$(_worktree_merged "$path" "$wb" "$mainref")
+"
+  done <<EOF
+$(_worktrees_tsv "$path")
+EOF
   jq -nc --arg project "$name" --arg path "$path" --arg tsv "$tsv" '
     {project: $project, path: $path,
      worktrees: ($tsv
        | split("\n")
        | map(select(length > 0) | split("\t"))
        | map({name: .[0], path: .[1],
-              branch: (if .[2] == "" then null else .[2] end)}))}'
+              branch: (if .[2] == "" then null else .[2] end),
+              merged: (.[3] == "true")}))}'
+}
+
+# _wt_rm_merged PROJECT — remove every worktree that is safe to lose.
+#
+# Safe means all three, checked per worktree before anything is touched: its
+# branch is merged (nothing on it that the project lacks), nothing in it is
+# uncommitted, and no session is running in it. Anything that fails a check is
+# kept and named with the reason, because "why is that one still here" is the
+# first question after a bulk removal. Branches are kept, as with any rm.
+_wt_rm_merged() {
+  local name="$1" path mainref main removed="" kept="" wn wp wb reason
+  _registry_ensure
+  path=$(_project_path "$name")
+  [ -n "$path" ] || die "no such project: $name" 2
+  mainref=$(git -C "$path" rev-parse --verify -q HEAD 2>/dev/null) || mainref=""
+  main=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null) || main=HEAD
+
+  while IFS='	' read -r wn wp wb; do
+    [ -n "$wn" ] || continue
+    reason=""
+    if [ "$(_worktree_merged "$path" "$wb" "$mainref")" != true ]; then
+      if [ -z "$wb" ]; then
+        reason="is not on a branch"
+      else
+        reason="has commits that are not in $main"
+      fi
+    elif [ -n "$(git -C "$wp" status --porcelain 2>/dev/null | head -n 1)" ]; then
+      reason="has uncommitted changes"
+    elif [ -n "$(_unit_sessions "$name/$wn" 0)" ]; then
+      reason="has a running session"
+    elif _worktree_remove "$path" "$wp" 0 2>/dev/null; then
+      _session_forget "$name/$wn" || true
+      _goal_forget "$name/$wn" || true
+      removed="$removed$wn
+"
+    else
+      reason="git would not remove it"
+    fi
+    if [ -n "$reason" ]; then
+      kept="$kept$wn	$reason
+"
+    fi
+  done <<EOF
+$(_worktrees_tsv "$path")
+EOF
+
+  rmdir "$(_worktree_base "$path")" 2>/dev/null || true
+  jq -nc --arg p "$name" --arg r "$removed" --arg k "$kept" '{
+    project: $p,
+    removed: ($r | split("\n") | map(select(length > 0))),
+    kept:    ($k | split("\n") | map(select(length > 0) | split("\t") | {name: .[0], reason: .[1]}))
+  }'
 }
 
 _wt_rm() {
-  local name="" wt="" force=0
+  local name="" wt="" force=0 merged=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
+      --merged) merged=1 ;;
       -*) die "unknown option: $1" 3 ;;
       *)
         if [ -z "$name" ]; then
@@ -2468,6 +2795,13 @@ _wt_rm() {
     esac
     shift
   done
+
+  if [ "$merged" = 1 ]; then
+    [ -n "$name" ] && [ -z "$wt" ] || die "usage: cx-agent worktree rm <project> --merged" 3
+    [ "$force" = 1 ] && die "--merged only removes what is safe to; it does not take --force" 3
+    _wt_rm_merged "$name"
+    return $?
+  fi
 
   [ -n "$name" ] && [ -n "$wt" ] || die "usage: cx-agent worktree rm <project> <name> [--force]" 3
   _registry_ensure
@@ -2747,6 +3081,50 @@ EOF
       _goal_apply "$name" '
         .log = ((.log // []) + [{at: $_t, event: $e, target: (if $tg == "" then null else $tg end), text: $x}])' \
         --arg e "$event" --arg tg "$target" --arg x "$text" || die "could not write the goal" 1
+      _goal_print "$name"
+      ;;
+
+    on-stop)
+      local name="" max="" off=0 model=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --max)
+            shift
+            max="${1:-}"
+            ;;
+          --model)
+            shift
+            model="${1:-}"
+            ;;
+          --off) off=1 ;;
+          -*) die "unknown option: $1" 3 ;;
+          *) [ -z "$name" ] && name="$1" ;;
+        esac
+        shift
+      done
+      [ -n "$name" ] || die "usage: cx-agent goal on-stop <name> [--max N] [--model M] | --off" 3
+      _goals_ensure
+      _goal_get "$name" >/dev/null || die "no such goal: $name" 2
+      if [ "$off" = 1 ]; then
+        _goal_apply "$name" '
+          .revisions = ((.revisions // []) + [{at: $_t, field: "on_stop", from: .on_stop, to: null}])
+          | del(.on_stop)' || die "could not write the goal" 1
+      else
+        [ -n "$max" ] || max=6
+        case "$max" in
+          '' | *[!0-9]*) die "--max wants a number of runs an hour" 3 ;;
+        esac
+        # Bounded both ways. Zero is not "off" (that is --off), and past one a
+        # minute the cap has stopped meaning anything.
+        [ "$max" -ge 1 ] && [ "$max" -le 60 ] || die "--max must be between 1 and 60" 3
+        case "$model" in
+          *[!A-Za-z0-9._:-]*) die "not a model name: $model" 3 ;;
+        esac
+        _goal_apply "$name" '
+          ({max_per_hour: ($m | tonumber)} + (if $model == "" then {} else {model: $model} end)) as $new
+          | .revisions = ((.revisions // []) + [{at: $_t, field: "on_stop", from: .on_stop, to: $new}])
+          | .on_stop = $new' --arg m "$max" --arg model "$model" || die "could not write the goal" 1
+      fi
       _goal_print "$name"
       ;;
 
@@ -3212,6 +3590,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
           --slug S              exactly S, reported even if absent (repeatable)
   nudge <name> [--worktree W] [--session L] [--force]
                                 type a prompt into a live session (stdin)
+  forget <name> [--worktree W] [--session L]
+                                drop a finished session's pin
   event                         record a Claude Code hook's report (stdin);
                                 installed by open, run by Claude
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
@@ -3223,6 +3603,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
   goal member add|rm <name> <target>
   goal state <name> active|paused|done
   goal log <name> [--event E] [--target T]  record what a driver did (stdin)
+  goal on-stop <name> [--max N] [--model M] | --off
+                                            drive the goal when a member stops
 
 Claude options apply when a session is CREATED; reattaching cannot change
 them. The permission mode is recorded so cx status can show it. --dangerous is
@@ -3231,6 +3613,7 @@ is passed to Claude Code verbatim.
   worktree add <project> <name> [--branch B] [--from REF]
   worktree list <project>
   worktree rm <project> <name> [--force]
+  worktree rm <project> --merged            every merged, clean, idle worktree
 
 A unit is <project> or <project>/<worktree>; a session is <unit>[@<label>].
 
@@ -3277,6 +3660,7 @@ main() {
     sessions) cmd_sessions "$@" ;;
     observe) cmd_observe "$@" ;;
     nudge) cmd_nudge "$@" ;;
+    forget) cmd_forget "$@" ;;
     goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;
