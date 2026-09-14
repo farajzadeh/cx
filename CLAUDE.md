@@ -273,6 +273,13 @@ Five commands, and the split between them is invariant 11 made concrete:
   answer (no target, no cache, older than `CX_STATE_TTL`, unknown session),
   because an icon asserted from a stale file is worse than no icon.
 
+  **No colour and plain shapes, by default.** The terminal and the tmux theme
+  own colour, and any colour cx picks is illegible against someone's
+  background; the glyph's shape carries the state on its own. The Nerd Font set
+  is opt-in (`CX_BAR_ICONS=nerd`) because in a font without it every icon is an
+  empty box. Glyphs are written as octal escapes, never literals — the Nerd Font
+  ones are Private Use Area codepoints that render as nothing in a diff.
+
   The window learns its target from `cx open`, which records it as a tmux
   window option before handing over the terminal. **Addressed by `$TMUX_PANE`,
   never "the current window"** — current is the session's *active* window, so a

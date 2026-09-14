@@ -467,6 +467,17 @@ tmux list-windows -F '#I #W [#{@cx_target}]'   # is the window tagged?
   `tmux set -w @cx_target <host>:<target>`.
 - **`CX_TMUX_TAG=0`** in your config turns the tagging off entirely.
 
+### The tab icons are empty boxes
+
+Your font does not have those glyphs. The default set is plain geometric shapes
+nearly every font carries; `CX_BAR_ICONS=nerd` switches to Font Awesome glyphs
+that only a Nerd Font has. Remove that line from `~/.config/cx/config`, or set
+the terminal to a Nerd Font such as MesloLGS NF.
+
+If the boxes appear only inside tmux, the client is probably not in UTF-8 mode:
+`tmux list-clients -F '#{client_utf8}'` should print `1`. tmux decides from
+`LANG` / `LC_ALL` when the client starts.
+
 ### A tab and another terminal keep stealing a session from each other
 
 Working as intended, and unavoidable. `cx open` attaches with `tmux attach -d`,

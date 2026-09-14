@@ -280,16 +280,23 @@ cx open local:api@review   # this tab is now  ▲ api@review
  ● prop   ○ event   ▲ ipd@start   ◐ api/authfix           cx 2: prop ipd@start   14:32
 ```
 
-| | |
-|---|---|
-| `●` | idle — the turn finished, it is waiting for you |
-| `◐` | working |
-| `▲` | blocked — it needs an answer only you can give |
-| `○` | fresh — up, nothing asked of it yet |
-| `✗` | dead |
+| default | `CX_BAR_ICONS=nerd` | |
+|---|---|---|
+| `●` | check-circle | idle — the turn finished, it is waiting for you |
+| `◐` | spinner | working |
+| `▲` | warning triangle | blocked — it needs an answer only you can give |
+| `○` | empty circle | fresh — up, nothing asked of it yet |
+| `✗` | times-circle | dead |
 
-The shape carries the meaning and the colour only reinforces it, because a tab
-title is read out of the corner of your eye.
+Icons are drawn in your status bar's own colours: the shape carries the state,
+and your theme already owns colour. The Nerd Font set needs a Nerd Font in the
+terminal (MesloLGS NF, for instance) and draws empty boxes without one.
+`CX_BAR_COLOR=1` colours the states if you want that.
+
+```sh
+# ~/.config/cx/config
+CX_BAR_ICONS=nerd
+```
 
 The tab lookups do **no** network work at all — nine tabs redrawing every
 interval would be nine round trips otherwise. They read a state cache that the
