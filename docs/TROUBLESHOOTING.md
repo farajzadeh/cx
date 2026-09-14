@@ -502,19 +502,41 @@ If the boxes appear only inside tmux, the client is probably not in UTF-8 mode:
 
 ### A tab and another terminal keep stealing a session from each other
 
-Working as intended, and unavoidable. `cx open` attaches with `tmux attach -d`,
-which detaches any other client — otherwise a dropped SSH leaves a phantom
-client attached and tmux sizes the window to the smallest one, which is how a
-session ends up stuck at 80x24.
+That happens only where attaching has to detach everyone else: a server whose
+tmux is older than 3.1, or whose agent is older than 0.4.0. There, a dropped
+SSH connection leaves a phantom client that would pin the window to its size,
+and `tmux attach -d` is the fix — at the cost that a tab and a terminal throw
+each other out. Check with `cx provision <host>`; on tmux 3.1+ both stay
+attached. Until then `cx tabs` skips sessions held elsewhere unless `--take`.
 
-So a session belongs to whichever place attached to it last. Open a tab for a
-session you already have up in another terminal and the tab takes it; when that
-terminal reattaches it takes it back, and the tab's `cx open` exits — closing
-the tab with it. Pick one place to attach from.
+### `cx jump` says nothing is waiting, or that there is no recent state
 
-Building a tab-per-session layout over sessions you already have open is the
-usual way to meet this: every tab steals one, and the terminals you left
-attached elsewhere fight back.
+It reads the same cache as the tab icons. "No recent session state" means the
+status line that refreshes it is not running — keep the `status-right` line
+from `cx bar --setup`, or use `cx jump -r` to fetch first. "Has no tab" means the
+waiting session is not open in a tab: `cx open` it in one.
+
+### A goal with `on-stop` never drives itself
+
+`cx goal show <name>` says why, in its log: `on-stop-failed` (no driver on the
+server — run `cx provision`; or no Claude Code there) or `on-stop-capped` (it
+already ran its hourly maximum). No entry at all means no member finished a
+turn with hooks: the member must be started by agent 0.4.0 without
+`--no-hooks`, and named in the goal exactly as its session is
+(`cx goal show` lists them). A pass's own output is in
+`~/.local/share/cx/driving/<goal>.log` on the server.
+
+### `cx wt rm --merged` kept a worktree
+
+It says why for each one. "Has commits that are not in main" — the branch has
+work the project does not; merge it first. "Has uncommitted changes" — commit or
+discard them. "Has a running session" — `cx stop` it. Nothing is removed on a
+guess.
+
+### `cx forget` refuses: "is running"
+
+Its pin is what the next `cx open` resumes, so forgetting a live session would
+start a second conversation on top of the running one. `cx stop` it first.
 
 ### The status bar is costing too many connections
 

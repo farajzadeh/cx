@@ -63,7 +63,7 @@ Not in the config file; set these in the environment when you need them.
 |---|---|---|
 | `CX_IDLE_GRACE` | `120` | How long a session may go quiet mid-turn before `cx peek` and `cx bar` call it `blocked` rather than `working`. Claude routinely spends a minute inside one tool call, so this is deliberately generous — a false `blocked` costs a pointless nudge, a false `working` costs a driver that waits forever. |
 | `CX_PEEK_TAIL` | `6` | How many of a session's last messages `cx peek --json` includes. |
-| `CX_STATE_TTL` | `180` | How old the session-state cache may be before `cx bar --window` stops putting an icon on a tab. Refreshed by every `cx bar` and every unnarrowed `cx peek`. |
+| `CX_STATE_TTL` | `180` | How old the session-state cache may be before `cx bar --window` stops putting an icon on a tab, and `cx jump` stops trusting it. Refreshed by every `cx bar` and every unnarrowed `cx peek`. |
 | `CX_BAR_ICONS` | `unicode` | Which glyphs `cx bar --window` puts on tabs. `unicode` is geometric shapes nearly every font has; `nerd` is Font Awesome glyphs from a Nerd Font, which draw as empty boxes without one. |
 | `CX_BAR_COLOR` | `0` | `1` colours the status bar and the tab icons by state. Off by default so your terminal theme's colours are used; `NO_COLOR` and `--no-color` override it. |
 | `CX_TMUX_TAG` | `1` | Whether `cx open` records its target on the local tmux window it was launched in, which is what puts a state icon in the tab title. Invisible otherwise. `0` disables it. |
@@ -78,6 +78,8 @@ These live on each server, not on the machine you run cx from.
 |---|---|
 | `~/.config/cx/notify` | An executable run when a session turns `blocked` or `idle`, with `<target> <state> <message>` and `CX_NOTIFY_HOST` set. Runs in the background, is never waited for, and fires only on a change. Absent means no notifications. `CX_NOTIFY` in the server's environment names a different file. |
 | `~/.local/share/cx/state/` | What each session's hooks last reported. A cache: delete it and cx reads conversations instead. |
+| `~/.local/share/cx/cx-driver.agent.md` | The driver's instructions, copied by `cx provision`. Goals with `on-stop` cannot drive themselves without it. |
+| `~/.local/share/cx/driving/<goal>.log` | What each self-driving pass printed. |
 
 ## The flags, as environment variables
 

@@ -134,6 +134,9 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx peek [target]` | what each session is doing: idle, working, blocked, dead |
 | `cx nudge web1:api "..."` | send a prompt to a session that's already running |
 | `cx bar` | the sessions waiting for you, on one line — for a tmux status bar |
+| `cx tabs` | a tmux tab per live session, each showing its state |
+| `cx jump` | go to the tab of the session that needs you (`prefix + j`) |
+| `cx forget web1:api@old` | drop a finished session from the lists |
 | `cx goal new ship "..."` | a definition of done, and who's working on it |
 | `cx goal ls` / `show` / `pause` / `resume` / `done` | manage them |
 | `cx driver` | print the cx-driver subagent, to install in Claude Code |
@@ -146,6 +149,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx wt add web1:api/authfix` | a worktree: its own **branch and directory** |
 | `cx wt ls [host[:project]]` | list worktrees |
 | `cx wt rm web1:api/authfix [--force]` | remove one (the branch is kept) |
+| `cx wt rm web1:api --merged` | remove every worktree that is merged, clean and idle |
 
 Targets are `host:project[/worktree][@session]`. A bare `project` resolves
 against `CX_DEFAULT_HOST`, or across every server when the name is unique —
@@ -212,8 +216,9 @@ web2   web                dead     —    —
 ```
 
 `idle` means the last turn finished and it is waiting for you. `blocked` means
-it stopped mid-turn and went quiet — nearly always a permission prompt only
-you can answer. `dead` means Claude exited.
+it is stopped on a permission prompt only you can answer. `dead` means Claude
+exited. Finished sessions are counted rather than listed — `cx peek --all`
+shows them, and `cx forget <target>` drops one you are done with.
 
 `cx nudge` sends the next instruction to one that's ready, without attaching:
 
@@ -328,13 +333,13 @@ nothing is refreshing that cache any more.
 
 Two things worth knowing before you build this layout:
 
-- **A tab owns its session.** `cx open` attaches with `tmux attach -d`, which
-  detaches whoever was already there. That is deliberate — a dropped SSH leaves
-  a phantom client and tmux sizes the window to the smallest one — but it means
-  a tab and a separate terminal on the same session will take it from each
-  other, repeatedly. Pick one place to attach from. `cx tabs` marks the
-  sessions this applies to with `!` before it opens anything, and `-n` shows
-  them without acting.
+- **A tab and a terminal can share a session** on a server with tmux 3.1 or
+  later: both stay attached, and the window follows whichever you used last.
+  On an older tmux, opening a session still detaches whoever has it, so
+  `cx tabs` skips sessions held elsewhere and says so; `--take` opens them
+  anyway.
+- **`prefix + j` jumps** to the tab of the session most in need of you, and
+  again to the next. It reads the same state the icons show, so it is instant.
 - **The tag outlives the session.** cx execs ssh, so there is no "afterwards" in
   which to clean up. A tab keeps its target until something else claims it;
   what it shows then is that session's real state, `✗` included.
@@ -342,7 +347,8 @@ Two things worth knowing before you build this layout:
 tmux is the loop — and it is the only loop, because cx still has none. `cx bar`
 runs once and returns; `status-interval` decides how often that happens, the
 same way a person or a driver agent decides how often to run `cx peek`. Each
-redraw is one SSH round trip per server, so 30 seconds is a sensible floor.
+redraw is one SSH round trip per server, well under a second even with a couple
+of dozen sessions, so `cx bar --setup` uses 10 seconds.
 
 ### Definitions of done
 
@@ -379,6 +385,27 @@ for you, and it never forces a nudge — those are yours.
 
 Because nothing in cx loops, `cx goal pause` really does stop it: there is no
 process to signal, only a driver that re-reads the goal each time round.
+
+---
+
+### Goals that drive themselves
+
+A driver you run by hand sees the sessions when you run it. A goal can instead
+be driven the moment a member finishes a turn:
+
+```sh
+cx goal on-stop ship --max 6        # at most six driver passes an hour
+cx goal on-stop ship --off
+```
+
+Each pass is one `claude -p` run of the cx-driver agent on the server, so it
+spends tokens. It is off unless you turn it on, it stops as soon as the goal is
+paused or done, only one pass per goal runs at a time, and everything it did is
+in `cx goal show ship`. It needs `cx provision` to have copied the driver to the
+server, and members started with cx's hooks.
+
+Run by hand, `cx peek --goal ship --json` is what the driver reads: exactly
+that goal's members, wherever they are.
 
 ---
 

@@ -37,6 +37,10 @@ bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux
 bash test/unit/observe.test.sh             # the agent's observe: what it reads, and what it skips
 bash test/unit/event.test.sh               # cx-agent event, the command Claude's hooks run
 bash test/unit/peek.test.sh                # peek's client half, against new and old agents
+bash test/unit/sessions.test.sh            # attach sharing, and cx-agent forget
+bash test/unit/onstop.test.sh              # goals that drive themselves, and what they refuse
+bash test/unit/worktree.test.sh            # merged worktrees, against real git
+bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -105,7 +109,10 @@ merges, never stores. Only non-derivable fields are recorded (`name`, `path`,
 `list`. Worktrees in particular come from `git worktree list --porcelain` and
 are never written down — a second copy of a fact git maintains is a copy that
 drifts, and deriving means a worktree made by hand over SSH shows up in cx and
-one deleted by hand disappears.
+one deleted by hand disappears. The same goes for a worktree's **`merged`**:
+`git merge-base --is-ancestor` against the project's HEAD, on every list.
+`worktree rm --merged` removes only what is merged, clean and idle, and names
+the reason for everything it keeps.
 
 **6. `server/cx-agent` is deliberately monolithic.** It is `scp`'d to servers
 as a single file and cannot source anything. It duplicates a little of
@@ -171,6 +178,22 @@ interval comes from whatever is calling cx.
 
 This is also why `cx goal pause` works without touching anything: there is no
 process to signal, only a driver that re-reads the goal each pass and stops.
+
+**The one place cx starts Claude by itself** is `cx goal on-stop`: a member's
+Stop hook runs one `claude -p` driver pass. It does not break this invariant,
+and the reasons are the design. There is no daemon: Claude fires the hook,
+`cx-agent event` runs once, and the pass exits. There is no pinned
+conversation: every pass is a fresh `-p`, whose memory is the goal log. So it
+is not the driver-with-its-own-session recursion described above. What it does
+have is a feedback edge — the pass nudges a member, the member finishes, its
+Stop starts another pass — so it is bounded three ways, each checked before
+anything launches. It is opt-in per goal and only while the goal is active;
+at most `max_per_hour` passes are counted from the goal log; and one pass per
+goal at a time is held by a lock with the pass's pid in it. The pass gets
+`--permission-mode dontAsk` and `--allowedTools "Bash(<agent> *)"`, because a
+permission prompt in a process nobody is watching would wait forever. Its
+instructions are `docs/cx-driver.agent.md`, which `cx provision` copies to
+`~/.local/share/cx/`, rather than a copy inside the agent that would drift.
 And it is why `cx nudge` declines a busy session rather than queueing — cx has
 nowhere to keep a queue that is not state it owns, and draining one would need
 the daemon it does not have.
@@ -260,7 +283,17 @@ Five commands, and the split between them is invariant 11 made concrete:
   `cx peek <target>` narrows **on the server** with `observe --unit`, falling
   back to `--all` plus the client-side filter when an older agent rejects the
   flag with exit 3. The round trip was never the cost; the agent's
-  per-session work was.
+  per-session work was. `cx peek --goal <name>` asks each host for exactly that
+  goal's members with `observe --slug`, which reports a slug even when it is
+  neither running nor has a conversation: a member nobody opened is still a
+  member.
+
+  The table counts finished sessions instead of listing them (`--all` lists
+  them); `--json` and a named target always show everything. **`cx forget`**
+  drops one finished session's pin — exactly that slug, never its unit's
+  other sessions — and refuses a running one with exit 4, because that pin is
+  what the next `cx open` resumes. Never automatic: what it drops is which
+  conversation a name holds.
 
 - **`cx bar`** — the same states on one line, for a tmux status bar. It shares
   `cx_activity_rows` with peek — which is why that function lives in
@@ -303,9 +336,17 @@ Five commands, and the split between them is invariant 11 made concrete:
   for any window given an explicit name, which is a lasting change to the
   user's own tmux; setting a user option is invisible and so is the default.
 
-  A consequence worth knowing before building a tab per session: the agent
-  attaches with `tmux attach -d`, so **a tab takes its session from whoever
-  else is attached** — and they take it back. Two places on one session fight.
+  `cx open` seeds the cache with `fresh` for the session it is opening, **only
+  if the cache has never seen it** and **keeping the file's age**. An observation
+  always beats a guess, and touching the file would make every other tab's
+  ten-minute-old state look current.
+
+  Two places attached to one session used to fight. The agent attached with
+  `tmux attach -d` because a phantom client left by a dropped SSH connection
+  sizes a window to the smallest client; `-d` also threw out every real one.
+  **On tmux 3.1+ it now sets `window-size latest` and attaches without `-d`**,
+  since a phantom is never the latest client. `sessions` reports
+  `attach_detaches`, and an older agent's silence means `true`.
 
 - **`cx tabs`** — a tab per live session in the *local* tmux. The only command
   that touches tmux on the client, and the reason that is allowed: cx still
@@ -317,6 +358,16 @@ Five commands, and the split between them is invariant 11 made concrete:
   One shot like everything else: it builds windows and hands over the terminal,
   never watching for new sessions or closing tabs whose session ended.
   Re-running is the mechanism, so a session that already has a tab is skipped.
+  Where attaching would still detach someone (`attach_detaches`), a session
+  held by another terminal is skipped unless `--take`.
+
+- **`cx jump`** — go to the tab of the session most in need of you: blocked
+  first, then idle, and the next one on each press. Cache-only like
+  `--window`, since a key press must never wait on a server; `-r` fetches
+  first. Cycling is not state: "next" is whatever follows the tab you are on.
+  Bound as `run-shell -b` in `cx bar --setup`, and answers through
+  `display-message`, because a key binding's stdout lands in a pane that has to
+  be dismissed.
 
 - **`cx nudge`** — types into a live session. Declines with **exit 0** and
   `sent: false` when the session is not ready, following `cmd_stop`'s
@@ -414,7 +465,9 @@ Two more sources, both fast paths over the transcript and neither load-bearing:
 - **`~/.claude/sessions/<pid>.json`**, which Claude Code 2.1 keeps per process:
   `sessionId`, the `tmux` pane, `kind` (`interactive` or `bg`) and `status` —
   `idle`, `busy`, or **`waiting`, which is a permission prompt on screen**,
-  verified against a real session. Observed, not documented. The files outlive
+  verified against a real session. Other values exist (`shell` has been seen)
+  and are treated as no status at all, so an unknown one costs exactness and
+  never correctness. Observed, not documented. The files outlive
   their processes and pids get reused, so `_observe_claude` accepts one only if
   `kill -0` succeeds **and**, where `/proc` exists, `procStart` equals field 22 of
   `/proc/<pid>/stat`. Two real files on the development server passed `kill -0`
@@ -479,7 +532,8 @@ Run it when the docs change.
   to users. `test/` and `issues/` stay repo-only. The driver subagent lives in
   `docs/cx-driver.agent.md` so that it ships; `.claude/agents/cx-driver.md` is
   a symlink to it for this repo's own use, and `cx driver` prints it so a user
-  can put it wherever they keep subagents.
+  can put it wherever they keep subagents. `cx provision` also copies it to
+  each server's `~/.local/share/cx/`, for goals that drive themselves.
 - `install.sh` is standalone by necessity — it runs before the repo exists and
   cannot source `lib/compat.sh`. Its duplicated `version_ge` is covered by a
   test asserting the two implementations agree.

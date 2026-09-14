@@ -260,6 +260,18 @@ One shot, like everything else: it builds windows and hands over the terminal.
 It does not watch for new sessions or close tabs whose session ended. Re-running
 is the mechanism, which is why a session that already has a tab is skipped.
 
+**`cx jump`** — reads the state cache, picks the first blocked then idle
+session that has a tab, and selects it; "next" is whatever follows the tab you
+are on, so cycling needs no state. Cache-only, like `--window`.
+
+**`cx forget`** — drops exactly one finished session's pin, refusing a running
+one: that pin is what the next `cx open` resumes.
+
+**`cx goal on-stop`** — the one place cx starts Claude by itself. A member's
+Stop hook runs one `claude -p` driver pass, bounded by opt-in, an hourly cap
+counted from the goal log, and a per-goal lock; see invariant 11 in CLAUDE.md
+for why that is not a loop.
+
 **`cx nudge`** — types into a live session. It declines with **exit 0** and
 `sent: false` when the session is not ready, following the precedent that
 stopping an already-stopped project is not an error: a driver in a loop has to
