@@ -149,7 +149,11 @@ EOF
         # qualified rather than being abbreviated to the leaf, so a row can be
         # copied straight back onto the command line as a target.
           ( $p.worktrees[]?
-            | [ "", ("  " + $p.name + "/" + .name), (.branch // "—") ]
+            # "merged": nothing on its branch that is not already in the
+            # branch of the project itself, so removing it loses no commits.
+            # From agent 0.4.0; an older listing has no such field.
+            | [ "", ("  " + $p.name + "/" + .name),
+                ((.branch // "—") + (if .merged == true then " (merged)" else "" end)) ]
               + (if $git then [ (.dirty | dirt) ] else [] end)
               + [ (if .sessions == null then "?" else (.sessions | tostring) end),
                   (.last_active | ago),

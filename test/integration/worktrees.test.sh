@@ -260,4 +260,50 @@ assert_not_contains "$(on_node 'ls ~/projects')" 'api'
 it "and stops every session it had"
 assert_eq "$(on_node 'tmux list-sessions -F "#{session_name}" 2>/dev/null | grep -c "^cx-api" || true' | tr -d ' \r')" '0'
 
+# ---------------------------------------------------------------------------
+
+describe "merged worktrees"
+# A project of its own, so nothing above — which removes api entirely — can
+# change what is merged here.
+
+cx_run "$HOME_DIR" new cx-test-web1:lands >/dev/null 2>&1
+on_node 'cd ~/projects/lands && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init' >/dev/null 2>&1
+cx_run "$HOME_DIR" wt add cx-test-web1:lands/landed >/dev/null 2>&1
+cx_run "$HOME_DIR" wt add cx-test-web1:lands/pending >/dev/null 2>&1
+on_node 'cd ~/projects/.worktrees/lands/landed && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m landed && cd ~/projects/lands && git merge -q --ff-only landed' >/dev/null 2>&1
+on_node 'cd ~/projects/.worktrees/lands/pending && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m pending' >/dev/null 2>&1
+
+_out=$(cx_run "$HOME_DIR" -r ls cx-test-web1)
+
+it "marks a worktree whose branch the project has taken in"
+assert_contains "$_out" 'landed (merged)'
+
+it "does not mark one with commits of its own"
+assert_not_contains "$_out" 'pending (merged)'
+
+it "refuses --merged with a single worktree named"
+run_rc cx_run "$HOME_DIR" -y wt rm cx-test-web1:lands/pending --merged
+assert_eq "$_T_RC" 3
+
+it "refuses --merged with --force"
+run_rc cx_run "$HOME_DIR" -y wt rm cx-test-web1:lands --merged --force
+assert_eq "$_T_RC" 3
+
+_out=$(cx_run "$HOME_DIR" -y wt rm cx-test-web1:lands --merged)
+
+it "removes the merged one"
+assert_contains "$_out" 'removed cx-test-web1:lands/landed'
+
+it "keeps the other, and says why"
+assert_contains "$_out" 'kept lands/pending — has commits'
+
+it "really removed its directory"
+assert_fail on_node 'test -d ~/projects/.worktrees/lands/landed'
+
+it "left the unmerged one in place"
+assert_ok on_node 'test -d ~/projects/.worktrees/lands/pending'
+
+it "kept the removed worktree's branch"
+assert_ok on_node 'cd ~/projects/lands && git show-ref --verify --quiet refs/heads/landed'
+
 summary

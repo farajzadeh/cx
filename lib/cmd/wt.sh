@@ -20,6 +20,7 @@ ${C_BOLD}cx wt${C_RESET} — git worktrees, for working on several tasks at once
   cx wt add <host>:<project>/<name> [--branch B] [--from REF]
   cx wt ls  [<host>[:<project>]]
   cx wt rm  <host>:<project>/<name> [--force]
+  cx wt rm  <host>:<project> --merged
 
 A worktree is a separate checkout of the same repository on its own branch.
 Each one gets its own directory, so parallel Claude sessions never touch each
@@ -37,6 +38,9 @@ OPTIONS
                 An existing branch is checked out rather than recreated.
   --from REF    what to branch from (default: HEAD)
   --force       for rm: discard uncommitted changes in the worktree
+  --merged      for rm: every worktree whose branch has nothing that is not
+                already in the project's branch, and that has no uncommitted
+                changes and no running session. Nothing unmerged is touched.
 
 Removing a worktree never deletes its branch, so nothing committed is lost.
 Use plain git on the server if you want the branch gone too.
@@ -244,12 +248,67 @@ _wt_ls() {
   } | cx_table
 }
 
+# _wt_rm_merged TARGET — remove every worktree of a project that git says is
+# safe to lose. The agent decides, per worktree, from facts it can check:
+# the branch has no commits the project's branch lacks, nothing is uncommitted,
+# and no session is running in it. Anything failing a check is kept and named.
+_wt_rm_merged() {
+  local target="$1"
+
+  cx_target_resolve "$target" || return $?
+  if [ -n "$CX_T_WORKTREE" ] || [ -n "$CX_T_SESSION" ]; then
+    err "--merged works on a whole project: $CX_T_HOST:$CX_T_PROJECT"
+    hint "to remove one named worktree: cx wt rm $(cx_target_str)"
+    return 3
+  fi
+  cx_agent_supports "$CX_T_HOST" "cx wt rm --merged" 0.4.0 || return 1
+
+  note "This removes every worktree of $CX_T_HOST:$CX_T_PROJECT whose branch is already"
+  note "  merged, has no uncommitted changes, and has no session running in it."
+  note "  Branches are kept. Anything else is left exactly as it is."
+  say ""
+  cx_confirm "Continue?" || {
+    say "cancelled"
+    return 0
+  }
+
+  local out rc=0
+  out=$(cx_agent "$CX_T_HOST" worktree rm "$CX_T_PROJECT" --merged) || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+
+  cx_cache_invalidate "$CX_T_HOST"
+
+  if [ "${CX_JSON:-0}" = 1 ]; then
+    printf '%s' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host:$h}'
+    return 0
+  fi
+
+  local removed kept
+  removed=$(printf '%s' "$out" | jq -r '.removed[]?' 2>/dev/null) || removed=""
+  kept=$(printf '%s' "$out" | jq -r '.kept[]? | "\(.name)\t\(.reason)"' 2>/dev/null) || kept=""
+
+  if [ -z "$removed" ]; then
+    note "Nothing to remove."
+  else
+    printf '%s\n' "$removed" | while IFS= read -r n; do
+      [ -n "$n" ] && say "  $(ok_mark) removed $CX_T_HOST:$CX_T_PROJECT/$n"
+    done
+  fi
+  if [ -n "$kept" ]; then
+    printf '%s\n' "$kept" | while IFS="$(printf '\t')" read -r n why; do
+      [ -n "$n" ] && note "    kept $CX_T_PROJECT/$n — $why"
+    done
+  fi
+  return 0
+}
+
 _wt_rm() {
-  local target="" force=0
+  local target="" force=0 merged=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
+      --merged) merged=1 ;;
       -h | --help)
         _wt_usage
         return 0
@@ -266,8 +325,18 @@ _wt_rm() {
   [ -n "$target" ] || {
     err "no target given"
     hint "usage: cx wt rm <host>:<project>/<name> [--force]"
+    hint "   or: cx wt rm <host>:<project> --merged"
     return 3
   }
+
+  if [ "$merged" = 1 ]; then
+    [ "$force" = 1 ] && {
+      err "--merged and --force do not mix: --merged only ever removes what is safe to"
+      return 3
+    }
+    _wt_rm_merged "$target"
+    return $?
+  fi
 
   _wt_target "$target" rm || return $?
 
