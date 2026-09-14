@@ -725,6 +725,13 @@ assert_eq "$(new_json state)" fresh
 it "and then takes a prompt"
 assert_eq "$(cx_run "$HOME_DIR" --json nudge cx-test-web1:hooks@new 'hello' | jq -r '.sent')" true
 
+settle 2
+
+it "and takes one given as an argument, as a driver pass on the server sends it"
+# A pass inside claude -p may run the agent and nothing else, so it cannot pipe
+# a prompt in; --text is how it nudges at all.
+assert_eq "$(on_node '$HOME/.local/bin/cx-agent nudge hooks --session new --text again' | jq -r '.sent')" true
+
 cx_run "$HOME_DIR" stop cx-test-web1:hooks@new >/dev/null 2>&1
 on_node 'tmux kill-session -t =holder' >/dev/null 2>&1
 

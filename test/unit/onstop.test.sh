@@ -105,6 +105,23 @@ it "refuses a model name that is not one"
 (cmd_goal on-stop ship --model 'haiku; rm -rf /') >/dev/null 2>&1
 assert_eq "$?" 3
 
+describe "what a driver pass can run"
+
+it "logs text given as an argument, since a pass may not pipe into the agent"
+# Found on a real server: a pass allowed to run the agent and nothing else had
+# its `printf ... | cx-agent goal log` refused as a pipeline, and could not
+# record what it did.
+(cmd_goal log ship --event note --text "logged by argument" </dev/null) >/dev/null 2>&1
+assert_eq "$(goal '.log[-1].text')" "logged by argument"
+
+it "still reads the text from stdin without --text"
+(printf 'logged from stdin' | cmd_goal log ship --event note) >/dev/null 2>&1
+assert_eq "$(goal '.log[-1].text')" "logged from stdin"
+
+it "tells the pass to run single commands with --text"
+_prompt=$(sed -n '/^  prompt="You are cx/,/Record what you did/p' "$ROOT/server/cx-agent")
+assert_contains "$_prompt" "no pipes"
+
 describe "a member finishing a turn starts one pass"
 
 rm -f "$FAKE_LOG"

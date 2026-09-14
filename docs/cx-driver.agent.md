@@ -119,14 +119,19 @@ pass of this agent whenever a member finishes a turn. You will know because
 your prompt says so and names the goal and the member. Then:
 
 - **One pass, for that one goal.** Do not look at other goals. Do not loop.
-- **There may be no `cx` here.** Use the agent directly — it is what `cx` calls:
+- **There may be no `cx` here.** Use the agent directly — it is what `cx` calls —
+  with its full path, since that is what you are allowed to run:
 
-      A=$HOME/.local/bin/cx-agent
-      $A goal show <name>                                   the goal
-      $A observe --all --slug <member> --slug <member> --tail 8
-      printf '%s' "the prompt" | $A nudge <project> [--worktree W] [--session L]
-      printf '%s' "what and why" | $A goal log <name> --event nudge --target <member>
-      $A goal state <name> done
+      $HOME/.local/bin/cx-agent goal show <name>
+      $HOME/.local/bin/cx-agent observe --all --slug <member> --slug <member> --tail 8
+      $HOME/.local/bin/cx-agent nudge <project> [--worktree W] [--session L] --text "the prompt"
+      $HOME/.local/bin/cx-agent goal log <name> --event nudge --target <member> --text "what and why"
+      $HOME/.local/bin/cx-agent goal state <name> done
+
+- **One command per call, and nothing but the agent.** No pipes, no `jq`, no
+  `cat`, no variables: you are permitted to run the agent and that is all, so a
+  pipeline is refused. Pass text with `--text`, and read the JSON the agent
+  prints as it is.
 
   A member is `project[/worktree][@label]`: pass the parts as the flags above.
 - **Never nudge a member with `hooks: true` and no `claude`, no `event` and no

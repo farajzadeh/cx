@@ -2599,7 +2599,7 @@ _event_drive_one() {
   prompt="You are cx's driver, started on the server by cx goal on-stop.
 Goal: $name
 Member that just finished a turn: $slug
-Follow \"When the server started you\" in your instructions: one pass, for this goal only, using $agent_bin. Record what you did with goal log, even if it was nothing."
+Follow \"When the server started you\" in your instructions: one pass, for this goal only, using $agent_bin. Run it as single commands with --text for any text: no pipes, no jq, nothing else. Record what you did with goal log, even if it was nothing."
 
   local args=()
   args=(-p "$prompt" --append-system-prompt "$(cat "$doc")"
@@ -3117,7 +3117,7 @@ EOF
       ;;
 
     log)
-      local name="" event="note" target=""
+      local name="" event="note" target="" text="" given=0
       while [ $# -gt 0 ]; do
         case "$1" in
           --event)
@@ -3128,16 +3128,22 @@ EOF
             shift
             target="${1:-}"
             ;;
+          # The text as an argument, for a driver pass inside claude -p: it may
+          # run the agent and nothing else, so it cannot pipe text into it.
+          --text)
+            shift
+            text="${1:-}"
+            given=1
+            ;;
           -*) die "unknown option: $1" 3 ;;
           *) [ -z "$name" ] && name="$1" ;;
         esac
         shift
       done
-      [ -n "$name" ] || die "usage: cx-agent goal log <name> [--event E] [--target T]  (text on stdin)" 3
+      [ -n "$name" ] || die "usage: cx-agent goal log <name> [--event E] [--target T]  (text on stdin, or --text)" 3
       _goals_ensure
       _goal_get "$name" >/dev/null || die "no such goal: $name" 2
-      local text
-      text=$(cat)
+      [ "$given" = 1 ] || text=$(cat)
       _goal_apply "$name" '
         .log = ((.log // []) + [{at: $_t, event: $e, target: (if $tg == "" then null else $tg end), text: $x}])' \
         --arg e "$event" --arg tg "$target" --arg x "$text" || die "could not write the goal" 1
@@ -3335,10 +3341,19 @@ _nudge_declined() {
 }
 
 cmd_nudge() {
-  local name="" wt="" label="" force=0
+  local name="" wt="" label="" force=0 prompt="" given=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
+      # The prompt as an argument, for a driver pass inside claude -p, which may
+      # run the agent and nothing else and so cannot pipe into it. Nothing
+      # crosses a wire this way: the client still sends prompts on stdin, which
+      # is what keeps them off command lines on either side of SSH.
+      --text)
+        shift
+        prompt="${1:-}"
+        given=1
+        ;;
       --worktree)
         shift
         wt="${1:-}"
@@ -3353,7 +3368,7 @@ cmd_nudge() {
     shift
   done
 
-  [ -n "$name" ] || die "usage: cx-agent nudge <name> [--worktree W] [--session L] [--force]  (prompt on stdin)" 3
+  [ -n "$name" ] || die "usage: cx-agent nudge <name> [--worktree W] [--session L] [--force]  (prompt on stdin, or --text)" 3
   have tmux || die "tmux is not installed on this server" 1
   if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
   if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
@@ -3365,8 +3380,7 @@ cmd_nudge() {
   tname=$(_tmux_name "$slug")
   pane="=$tname:"
 
-  local prompt
-  prompt=$(cat)
+  [ "$given" = 1 ] || prompt=$(cat)
   [ -n "$prompt" ] || die "empty prompt" 3
 
   if ! _tmux_has "$tname"; then
@@ -3680,7 +3694,7 @@ cx-agent — server-side helper for cx (not intended for direct use)
                                 per-session facts: tmux, transcript, last turn
           --unit U              only U and its @labelled sessions (repeatable)
           --slug S              exactly S, reported even if absent (repeatable)
-  nudge <name> [--worktree W] [--session L] [--force]
+  nudge <name> [--worktree W] [--session L] [--force] [--text T]
                                 type a prompt into a live session (stdin)
   forget <name> [--worktree W] [--session L]
                                 drop a finished session's pin
@@ -3694,7 +3708,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
   goal dod <name>                           replace it (stdin), keeping history
   goal member add|rm <name> <target>
   goal state <name> active|paused|done
-  goal log <name> [--event E] [--target T]  record what a driver did (stdin)
+  goal log <name> [--event E] [--target T] [--text T]
+                                            record what a driver did (stdin)
   goal on-stop <name> [--max N] [--model M] | --off
                                             drive the goal when a member stops
 
