@@ -1284,11 +1284,8 @@ cmd_open() {
     # whose PATH is whatever the pane inherited.
     if [ "$hooks" = 1 ] && [ "$mode" != shell ] &&
       _claude_supports "$claude_bin" --settings; then
-      local agent_bin="$0" settings=""
-      case "$agent_bin" in
-        /*) ;;
-        *) agent_bin="$HOME/.local/bin/cx-agent" ;;
-      esac
+      local agent_bin settings=""
+      agent_bin=$(_agent_self)
       settings=$(_hook_settings "$agent_bin" 2>/dev/null) || settings=""
       if [ -n "$settings" ]; then
         opts="$opts --settings $(cx_q "$settings")"
@@ -2373,6 +2370,24 @@ cmd_forget() {
 # nothing is decided about the work. And no loop: Claude's process fires the
 # hook, this runs once and exits.
 
+# _agent_self — this agent's absolute path, for anything that runs it again
+# later: the hooks Claude runs, and a driver pass replaying a turn it missed.
+#
+# $0 when that is absolute, which is how the client always invokes it; the
+# installed path otherwise. CX_AGENT_BIN overrides both, which is what lets a
+# test point those later runs at a copy of the agent instead of the installed
+# one — whose own Claude would otherwise be started by a test.
+_agent_self() {
+  if [ -n "${CX_AGENT_BIN:-}" ]; then
+    printf '%s' "$CX_AGENT_BIN"
+    return 0
+  fi
+  case "$0" in
+    /*) printf '%s' "$0" ;;
+    *) printf '%s' "$HOME/.local/bin/cx-agent" ;;
+  esac
+}
+
 # _hook_settings AGENT — the --settings JSON that routes Claude's hooks here.
 #
 # Passed per launch rather than written into ~/.claude/settings.json, so the
@@ -2542,15 +2557,15 @@ _event_drive() {
   while IFS='	' read -r name max model ran; do
     [ -n "$name" ] || continue
     [ "$model" = - ] && model=""
-    _event_drive_one "$name" "$slug" "$max" "$model" "$ran" || true
+    _event_drive_one "$name" "$slug" "$max" "$model" "$ran" "$1" || true
   done <<EOF
 $goals
 EOF
 }
 
 _event_drive_one() {
-  local name="$1" slug="$2" max="$3" model="$4" ran="$5"
-  local dir="$CX_DATA_DIR/driving" lock doc bin agent_bin
+  local name="$1" slug="$2" max="$3" model="$4" ran="$5" sid="$6"
+  local dir="$CX_DATA_DIR/driving" lock pending doc bin agent_bin
 
   if [ "${ran:-0}" -ge "${max:-6}" ]; then
     _event_drive_note "$name" "$slug" on-stop-capped \
@@ -2572,23 +2587,33 @@ _event_drive_one() {
 
   mkdir -p "$dir" 2>/dev/null || return 0
   lock="$dir/$name.lock"
+  pending="$dir/$name.pending"
   if ! mkdir "$lock" 2>/dev/null; then
     # Held. By a pass that is still running, leave it; by one that died
     # without cleaning up, take it over.
     local holder
     holder=$(cat "$lock/pid" 2>/dev/null) || holder=""
     if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      # But remember this turn. It is usually the reply to a nudge the running
+      # pass has just sent, landing in the seconds before that pass exits — and
+      # dropped, it is the last Stop the goal ever sees: the pass ends, nothing
+      # else is coming, and the goal stalls with its definition of done already
+      # met. Found on a real server exactly that way. The pass replays it on its
+      # way out; any number of turns meanwhile come to one replay.
+      printf '%s' "$sid" >"$pending" 2>/dev/null || true
       return 0
     fi
     rm -rf "$lock" 2>/dev/null || true
     mkdir "$lock" 2>/dev/null || return 0
   fi
 
-  agent_bin="$0"
-  case "$agent_bin" in
-    /*) ;;
-    *) agent_bin="$HOME/.local/bin/cx-agent" ;;
-  esac
+  agent_bin=$(_agent_self)
+
+  # This pass will see every member, so anything it was waiting to replay is
+
+  # covered by it.
+
+  rm -f "$pending" 2>/dev/null || true
 
   _goal_apply "$name" '
     .log = ((.log // []) + [{at: $_t, event: "on-stop", target: $tg,
@@ -2612,8 +2637,20 @@ Follow \"When the server started you\" in your instructions: one pass, for this 
   # releases the lock itself when it ends.
   (
     cd "$HOME" 2>/dev/null || true
-    nohup sh -c 'lock=$1; shift; printf "%s" "$$" >"$lock/pid"; "$@"; rm -rf "$lock"' \
-      cx-driver "$lock" "$bin" "${args[@]+"${args[@]}"}" \
+    nohup sh -c '
+      lock=$1 pending=$2 agent=$3
+      shift 3
+      printf "%s" "$$" >"$lock/pid"
+      "$@"
+      rm -rf "$lock"
+      # A turn that finished while this pass ran: replay it through the
+      # ordinary path, so the cap, the lock and a paused goal all still apply.
+      if [ -s "$pending" ]; then
+        sid=$(cat "$pending")
+        rm -f "$pending"
+        printf "{\"session_id\":\"%s\",\"hook_event_name\":\"Stop\"}" "$sid" | "$agent" event
+      fi' \
+      cx-driver "$lock" "$pending" "$agent_bin" "$bin" "${args[@]+"${args[@]}"}" \
       >>"$dir/$name.log" 2>&1 </dev/null &
   ) >/dev/null 2>&1 </dev/null
   return 0

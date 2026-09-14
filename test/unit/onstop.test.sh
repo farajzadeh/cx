@@ -47,6 +47,20 @@ chmod +x "$TMP/fake-claude"
 export FAKE_LOG="$TMP/claude.log"
 _find_claude() { printf '%s' "$TMP/fake-claude"; }
 
+# What the agent runs when it runs itself again later — a pass replaying a turn
+# it missed. A copy of the repository's agent with the same fake Claude, so a
+# test can never reach the installed agent, or through it a real Claude.
+cat >"$TMP/agent" <<EOF
+#!/usr/bin/env bash
+export CX_AGENT_NO_MAIN=1
+. "$ROOT/server/cx-agent"
+set +eu
+_find_claude() { printf '%s' "$TMP/fake-claude"; }
+main "\$@"
+EOF
+chmod +x "$TMP/agent"
+export CX_AGENT_BIN="$TMP/agent"
+
 printf '{"version":1,"root":"%s","projects":[{"name":"api","path":"%s/api"}]}\n' "$TMP" "$TMP" >"$CX_REGISTRY"
 printf '{"version":1,"sessions":{"api@impl":{"uuid":"u-impl"},"api@other":{"uuid":"u-other"}}}\n' >"$CX_SESSIONS"
 printf '# driver\nthe rules\n' >"$CX_DATA_DIR/cx-driver.agent.md"
@@ -140,13 +154,7 @@ it "hands it the driver's instructions"
 assert_contains "$(call)" "the rules"
 
 it "lets it run the agent and nothing broader"
-# The agent names itself by $0 when that is absolute, and by its installed
-# path otherwise — here the test was run by a relative path.
-case "$0" in
-  /*) AGENT_BIN="$0" ;;
-  *) AGENT_BIN="$HOME/.local/bin/cx-agent" ;;
-esac
-assert_contains "$(call)" "Bash($AGENT_BIN *)"
+assert_contains "$(call)" "Bash($CX_AGENT_BIN *)"
 
 it "never lets it wait on a permission prompt nobody will answer"
 assert_contains "$(call)" "dontAsk"
@@ -222,5 +230,77 @@ assert_eq "$(calls 1)" 0
 
 it "pointing at cx provision"
 assert_contains "$(goal '.log[-1].text')" "cx provision"
+
+describe "a turn that finishes while a pass is still running"
+# The reply to a nudge a pass has just sent routinely lands before that pass
+# exits. On a real server that reply was the last Stop the goal ever saw: it was
+# dropped for the lock, the pass ended, and the goal stalled with its definition
+# of done met.
+
+printf '# driver\nthe rules\n' >"$CX_DATA_DIR/cx-driver.agent.md"
+(cmd_goal state ship active) >/dev/null 2>&1
+(cmd_goal on-stop ship --max 60) >/dev/null 2>&1
+unlocked
+
+# passes N — wait up to eight seconds for the Nth call, then report the count.
+passes() {
+  local i=0
+  while [ $i -lt 80 ]; do
+    [ "$(grep -c '^CALL' "$FAKE_LOG" 2>/dev/null || echo 0)" -ge "$1" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -c '^CALL' "$FAKE_LOG" 2>/dev/null || echo 0
+}
+settled() {
+  local i=0
+  while [ $i -lt 100 ] && { [ -e "$CX_DATA_DIR/driving/ship.lock" ] || [ -e "$CX_DATA_DIR/driving/ship.pending" ]; }; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  sleep 0.5
+}
+
+rm -f "$FAKE_LOG"
+export FAKE_HOLD=2
+stop u-impl
+passes 1 >/dev/null
+stop u-impl
+
+it "remembers it instead of dropping it"
+assert_ok test -s "$CX_DATA_DIR/driving/ship.pending"
+
+it "and runs one more pass as soon as the running one ends"
+assert_eq "$(passes 2)" 2
+
+unset FAKE_HOLD
+settled
+
+it "clears the reminder once it is replayed"
+assert_fail test -e "$CX_DATA_DIR/driving/ship.pending"
+
+it "replays once, however many turns finished meanwhile"
+rm -f "$FAKE_LOG"
+export FAKE_HOLD=2
+stop u-impl
+passes 1 >/dev/null
+stop u-impl
+stop u-impl
+stop u-impl
+unset FAKE_HOLD
+settled
+assert_eq "$(grep -c '^CALL' "$FAKE_LOG")" 2
+
+it "does not replay into a goal paused in the meantime"
+rm -f "$FAKE_LOG"
+export FAKE_HOLD=2
+stop u-impl
+passes 1 >/dev/null
+stop u-impl
+(cmd_goal state ship paused) >/dev/null 2>&1
+unset FAKE_HOLD
+settled
+assert_eq "$(grep -c '^CALL' "$FAKE_LOG")" 1
+(cmd_goal state ship active) >/dev/null 2>&1
 
 summary

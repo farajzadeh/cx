@@ -270,7 +270,9 @@ one: that pin is what the next `cx open` resumes.
 **`cx goal on-stop`** — the one place cx starts Claude by itself. A member's
 Stop hook runs one `claude -p` driver pass, bounded by opt-in, an hourly cap
 counted from the goal log, and a per-goal lock; see invariant 11 in CLAUDE.md
-for why that is not a loop.
+for why that is not a loop. A turn that ends while a pass holds the lock is
+replayed when that pass exits — usually it is the reply to that pass's own
+nudge, and dropping it stalls the goal.
 
 **`cx nudge`** — types into a live session. It declines with **exit 0** and
 `sent: false` when the session is not ready, following the precedent that

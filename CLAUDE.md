@@ -189,7 +189,11 @@ have is a feedback edge — the pass nudges a member, the member finishes, its
 Stop starts another pass — so it is bounded three ways, each checked before
 anything launches. It is opt-in per goal and only while the goal is active;
 at most `max_per_hour` passes are counted from the goal log; and one pass per
-goal at a time is held by a lock with the pass's pid in it. The pass gets
+goal at a time is held by a lock with the pass's pid in it. A Stop that
+arrives while that lock is held is not dropped but remembered, and the pass
+replays it through the same path on its way out: it is usually the reply to
+the nudge that pass just sent, and on a real server, dropping it left a goal
+stalled for good with its definition of done already met. The pass gets
 `--permission-mode dontAsk` and `--allowedTools "Bash(<agent> *)"`, because a
 permission prompt in a process nobody is watching would wait forever. Its
 instructions are `docs/cx-driver.agent.md`, which `cx provision` copies to
