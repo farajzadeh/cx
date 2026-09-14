@@ -193,3 +193,60 @@ cx_cache_write_targets() {
 
   printf '%s' "$out" | grep -v '^$' | sort -u | cx_write_atomic "$d/targets" 2>/dev/null || true
 }
+
+# ---------------------------------------------------------------------------
+# Session states
+# ---------------------------------------------------------------------------
+#
+# `cx bar --window` answers "what is this tmux tab's session doing". It runs
+# once per window on every status redraw — nine windows is nine invocations
+# every interval — so it must do NO network work at all, the same rule shell
+# completion follows and for the same reason: a status line that blocks is
+# worse than a slightly old one.
+#
+# So it reads this file, which any observe fan-out refreshes as a side effect.
+# One line per session:
+#
+#   host:target<TAB>state
+#
+# Disposable like everything else here. Delete it and tabs lose their icons
+# until the next refresh; nothing else changes.
+
+cx_state_file() { printf '%s/state' "$(cx_cache_dir)"; }
+
+# cx_state_write — rows on stdin, host / target / state in the first three
+# columns. Anything after them is ignored, so both cx bar's rows and cx peek's
+# wider display rows can be piped in unchanged.
+#
+# Writes the WHOLE picture or nothing: a caller that looked at one host only
+# would otherwise erase every other host's tabs.
+cx_state_write() {
+  cx_cache_init
+  awk -F'\t' 'NF >= 3 && $2 != "" { printf "%s:%s\t%s\n", $1, $2, $3 }' |
+    cx_write_atomic "$(cx_state_file)" 2>/dev/null || true
+}
+
+# cx_state_read TARGET — the cached state for TARGET, or nothing.
+#
+# TARGET is host:project[/worktree][@label], or the unqualified form when it is
+# unambiguous — resolving a bare name properly means asking the servers, which
+# is exactly what this function exists not to do.
+#
+# Returns 1 for every "cannot say": no file, too old, no such session. The
+# caller renders that as no icon rather than as a state, because a tab that
+# confidently shows `idle` from a ten-minute-old file is worse than a tab that
+# shows nothing.
+cx_state_read() {
+  local f age ttl
+  f=$(cx_state_file)
+  [ -s "$f" ] || return 1
+  ttl="${CX_STATE_TTL:-180}"
+  age=$(cx_age "$f" 2>/dev/null || printf 99999)
+  [ "${age:-99999}" -lt "$ttl" ] || return 1
+
+  awk -F'\t' -v t="$1" '
+    { bare = $1; sub(/^[^:]*:/, "", bare) }
+    $1 == t || bare == t { print $2; found = 1; exit }
+    END { exit !found }
+  ' "$f"
+}
