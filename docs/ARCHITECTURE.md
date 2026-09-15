@@ -240,10 +240,32 @@ than "the current window": current means the session's *active* window, so a
 tab opening in the background tags somebody else's — nine tabs opened at once
 all tagged the last one created and the other eight silently got nothing.
 
-One consequence of `tmux attach -d`, which the agent uses so a dropped SSH
-cannot leave a phantom client sizing the window: a tab takes its session from
-whoever else is attached. Two places attached to one session will keep taking
-it from each other.
+Two places attached to one session used to take it from each other: the agent
+attached with `tmux attach -d` so a phantom client left by a dropped SSH
+connection could not size the window, and `-d` threw out every real client too.
+On tmux 3.1 and later it sets `window-size latest` and attaches without `-d`,
+since a phantom is never the latest client.
+
+**The session's own tmux bar** — once attached, the bar at the bottom belongs to
+the *server's* tmux, and `cx open` puts that session's facts in it: state,
+model, how full the context is, the five-hour and weekly usage limits, cost,
+lines changed, branch, and any other cx session showing a permission prompt.
+Two agent verbs and a file between them. Claude runs `cx-agent statusline` as
+the status-line command `cx open` passes in `--settings`, hands it those numbers
+at startup and after every turn, and it keeps a copy in
+`state/<session_id>.line`; tmux runs `cx-agent tmux-status <slug>` from the
+session's `status-right` and it prints one line from that copy and Claude's
+status file for the pane's own process.
+
+Neither is a loop — Claude and tmux do the calling — and neither is
+load-bearing. The numbers are Claude's own (its context percentage, not one
+worked out here), observed rather than documented like the rest of its storage;
+a session that never ran cx's status line shows the model and token count from
+its transcript instead. Two choices keep it out of the user's way. The options
+are set on the one tmux session, never globally, with whatever was on the right
+kept after cx's part. And `--settings` outranks the user's own settings files,
+so `statusline` runs *their* status-line command, if they have one, with the
+same input and prints what it prints: installing cx's must not take theirs away.
 
 **`cx tabs`** — a tmux tab per live session, on the machine cx is running on.
 The only command that drives tmux on the *client*, which is less of a departure

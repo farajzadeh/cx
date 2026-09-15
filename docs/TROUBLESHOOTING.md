@@ -528,6 +528,39 @@ status line that refreshes it is not running — keep the `status-right` line
 from `cx bar --setup`, or use `cx jump -r` to fetch first. "Has no tab" means the
 waiting session is not open in a tab: `cx open` it in one.
 
+### The server's tmux bar shows no context, cost or limits
+
+The bar at the bottom of an attached session is drawn on the server, from what
+Claude tells its status line. A session shows only a model and a token count —
+no percentage, cost or limits — when Claude never ran cx's status line:
+
+- **It was started before agent 0.5.0.** `cx provision <host>`, then restart the
+  session (`cx stop`, `cx open`). Re-opening alone draws the bar but cannot add
+  a status line to a Claude that is already running.
+- **It was started with `CX_SERVER_BAR=0`.**
+- **The limits appear after the first reply.** Claude learns them from the API,
+  so a session nobody has sent anything shows context and model only. They are
+  a Claude subscription's limits; with an API key there are none to show.
+
+### The server's tmux bar is not there at all
+
+`cx open` sets it each time it opens a session, so an older session gets it the
+next time you open it. Check with
+`tmux show-options -t '=cx-<project>' status-right` on the server; empty means
+cx did not set it — the agent is older than 0.5.0 or `CX_SERVER_BAR=0`. It is set
+on that session only, and keeps what your server's bar had on the right as it
+was when the session was opened, so a change to your server's `~/.tmux.conf`
+reaches a cx session when you next open it.
+
+### Claude shows an empty row under its prompt box
+
+That row is the status line cx gives Claude, which is how the server's tmux bar
+learns the context, cost and usage numbers. Claude keeps a row for any status
+line, and cx's prints nothing there, since the numbers go to the tmux bar
+instead. A status line of your own fills the row as before: cx runs it. To have
+the row back, set `CX_SERVER_BAR=0` and restart the session (`cx stop`,
+`cx open`) — the status line is fixed when Claude starts.
+
 ### A goal with `on-stop` never drives itself
 
 `cx goal show <name>` says why, in its log: `on-stop-failed` (no driver on the

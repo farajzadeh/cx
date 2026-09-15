@@ -68,6 +68,7 @@ Not in the config file; set these in the environment when you need them.
 | `CX_BAR_COLOR` | `0` | `1` colours the status bar and the tab icons by state. Off by default so your terminal theme's colours are used; `NO_COLOR` and `--no-color` override it. |
 | `CX_TMUX_TAG` | `1` | Whether `cx open` records its target on the local tmux window it was launched in, which is what puts a state icon in the tab title. Invisible otherwise. `0` disables it. |
 | `CX_TMUX_TITLE` | `0` | `1` also renames that window to the target. Off by default: tmux turns off `automatic-rename` for any window given an explicit name, and that is a lasting change to how your tmux behaves. |
+| `CX_SERVER_BAR` | `1` | Whether `cx open` draws the session's facts — state, model, context, usage limits, cost, branch — on the session's own tmux bar **on the server**, the one you see at the bottom once attached. Set per session, never globally, and whatever your server's bar showed on the right is kept after it. `0` leaves the bar alone and installs no status line. Its icons follow `CX_BAR_ICONS`. Needs agent 0.5.0. |
 | `CX_GOAL_HOST` | — | Which server holds goals when a command does not name one. Falls back to `CX_DEFAULT_HOST`, then to the only configured server if there is just one. |
 
 ## On the server
@@ -77,7 +78,7 @@ These live on each server, not on the machine you run cx from.
 | Path | What it does |
 |---|---|
 | `~/.config/cx/notify` | An executable run when a session turns `blocked` or `idle`, with `<target> <state> <message>` and `CX_NOTIFY_HOST` set. Runs in the background, is never waited for, and fires only on a change. Absent means no notifications. `CX_NOTIFY` in the server's environment names a different file. |
-| `~/.local/share/cx/state/` | What each session's hooks last reported. A cache: delete it and cx reads conversations instead. |
+| `~/.local/share/cx/state/` | What each session's hooks last reported, and, as `<id>.line`, what Claude last told its status line: the context, cost and usage-limit numbers the session's tmux bar shows. A cache: delete it and cx reads conversations instead. |
 | `~/.local/share/cx/cx-driver.agent.md` | The driver's instructions, copied by `cx provision`. Goals with `on-stop` cannot drive themselves without it. |
 | `~/.local/share/cx/driving/<goal>.log` | What each self-driving pass printed. |
 

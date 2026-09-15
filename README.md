@@ -354,6 +354,30 @@ same way a person or a driver agent decides how often to run `cx peek`. Each
 redraw is one SSH round trip per server, well under a second even with a couple
 of dozen sessions, so `cx bar --setup` uses 10 seconds.
 
+### On the server's own bar
+
+Once you are attached, the bar at the bottom is the **server's** tmux, and
+`cx open` puts that session's facts in it:
+
+```
+[cx-api] 0:claude*   ● idle · Opus 5 · ctx 8% 79k/1M · 5h 9% ↻21:50 7d 56% · $1.23 · +12 -3 · ⎇ main · ▲ web@tests
+```
+
+State, model, how full the context is, your plan's five-hour and weekly usage
+(and when the five-hour window resets), what the session has cost, lines
+changed, the branch, and any other cx session on that server showing a
+permission prompt. The numbers are Claude's own: cx has Claude hand them over
+through a status line after every turn. A session started before this shows
+the model and a token count until it is restarted.
+
+It is set on that one tmux session, never on your server's tmux as a whole, and
+whatever your bar showed on the right stays after it. It follows
+`CX_BAR_ICONS`, and `CX_SERVER_BAR=0` turns it off. A status line of your own in
+Claude's settings keeps working: cx runs it, and Claude shows what it prints.
+Without one, Claude still keeps a row under its prompt box for the status line
+cx gave it, so a session cx starts shows one empty row there; `CX_SERVER_BAR=0`
+gives it back.
+
 ### Definitions of done
 
 Write down what a set of sessions is *for*, and it stops being something you
