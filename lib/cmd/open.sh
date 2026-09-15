@@ -95,6 +95,8 @@ _open_common() {
     cx_agent_supports "$CX_T_HOST" "--no-hooks" 0.4.0 "$ver" || return 1
     hookargs=(--no-hooks)
   fi
+  _open_bar_args "$ver"
+  hookargs=("${hookargs[@]+"${hookargs[@]}"}" "${_OPEN_BAR_ARGS[@]+"${_OPEN_BAR_ARGS[@]}"}")
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -185,6 +187,23 @@ _open_common() {
       "${hookargs[@]+"${hookargs[@]}"}" \
       "${CX_CLAUDE_ARGS[@]+"${CX_CLAUDE_ARGS[@]}"}" \
       "${sep[@]+"${sep[@]}"}" "${passthru[@]+"${passthru[@]}"}")"
+}
+
+# _open_bar_args AGENT_VERSION — what to tell the agent about the tmux bar it
+# draws on the session itself, in _OPEN_BAR_ARGS.
+#
+# Only what differs from the agent's default, and only to an agent that knows
+# the flag. An older agent is sent exactly the argv it always was and simply
+# draws no bar: a status line is decoration, never a reason to refuse to open.
+_open_bar_args() {
+  _OPEN_BAR_ARGS=()
+  cx_version_ge "${1:-0}" 0.5.0 || return 0
+  if [ "${CX_SERVER_BAR:-1}" = 0 ]; then
+    _OPEN_BAR_ARGS=(--bar off)
+  elif [ "${CX_BAR_ICONS:-unicode}" = nerd ]; then
+    _OPEN_BAR_ARGS=(--bar nerd)
+  fi
+  return 0
 }
 
 # _open_tag_window — tell the LOCAL tmux which session this window now holds.

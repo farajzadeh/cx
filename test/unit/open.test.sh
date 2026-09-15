@@ -105,4 +105,34 @@ tmux() { return 1; }
 run_rc _open_tag_window
 assert_eq "$_T_RC" 0
 
+describe "_open_bar_args — what cx open tells the agent about the server's bar"
+
+# bar_args AGENT_VERSION CX_SERVER_BAR CX_BAR_ICONS — the flags, space-joined.
+bar_args() {
+  (
+    CX_SERVER_BAR="$2" CX_BAR_ICONS="$3"
+    export CX_SERVER_BAR CX_BAR_ICONS
+    _open_bar_args "$1"
+    printf '%s' "${_OPEN_BAR_ARGS[*]+${_OPEN_BAR_ARGS[*]}}"
+  )
+}
+
+it "tells a new agent nothing by default, since a bar is its default"
+assert_eq "$(bar_args 0.5.0 1 unicode)" ""
+
+it "asks for Nerd Font icons when the tabs use them"
+assert_eq "$(bar_args 0.5.0 1 nerd)" "--bar nerd"
+
+it "turns it off with CX_SERVER_BAR=0"
+assert_eq "$(bar_args 0.5.0 0 unicode)" "--bar off"
+
+it "and off wins over the icon set"
+assert_eq "$(bar_args 0.6.1 0 nerd)" "--bar off"
+
+it "sends an older agent nothing, so it opens exactly as it did"
+assert_eq "$(bar_args 0.4.0 0 nerd)" ""
+
+it "and nothing when the version is not known"
+assert_eq "$(bar_args "" 0 nerd)" ""
+
 summary
