@@ -360,15 +360,21 @@ Once you are attached, the bar at the bottom is the **server's** tmux, and
 `cx open` puts that session's facts in it:
 
 ```
-[cx-api] 0:claude*   ● idle · Opus 5 · ctx 8% 79k/1M · 5h 9% ↻21:50 7d 56% · $1.23 · +12 -3 · ⎇ main · ▲ web@tests
+[cx-api] 0:claude*   ● idle · Opus 5 · ctx 8% 79k/1M · 5h 18% ↻21:50 · 7d 57% ↻Thu 00:00 · 7d Fable 21% · $1.23 · +12 -3 · ⎇ main · ▲ web@tests
 ```
 
-State, model, how full the context is, your plan's five-hour and weekly usage
-(and when the five-hour window resets), what the session has cost, lines
-changed, the branch, and any other cx session on that server showing a
-permission prompt. The numbers are Claude's own: cx has Claude hand them over
-through a status line after every turn. A session started before this shows
-the model and a token count until it is restarted.
+State, model, how full the context is, your plan's usage limits — the five-hour
+and weekly windows with when each resets, and any single model's weekly limit —
+what the session has cost, lines changed, the branch, and any other cx session
+on that server showing a permission prompt.
+
+The numbers are Claude's own. Context and cost come from a status line cx has
+Claude run after every turn, so a session started before this shows the model
+and a token count until it is restarted. The usage limits are your account's
+rather than any one session's, so every session shows them, from whichever
+reading is newer: the last status line any session ran, or the copy of its
+usage screen Claude keeps in `~/.claude.json`. Claude refreshes that copy
+rarely, so a reading older than fifteen minutes says so: `(1h ago)`.
 
 It is set on that one tmux session, never on your server's tmux as a whole, and
 whatever your bar showed on the right stays after it. It follows

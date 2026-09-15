@@ -528,19 +528,27 @@ status line that refreshes it is not running — keep the `status-right` line
 from `cx bar --setup`, or use `cx jump -r` to fetch first. "Has no tab" means the
 waiting session is not open in a tab: `cx open` it in one.
 
-### The server's tmux bar shows no context, cost or limits
+### The server's tmux bar shows no context percentage or cost
 
 The bar at the bottom of an attached session is drawn on the server, from what
 Claude tells its status line. A session shows only a model and a token count —
-no percentage, cost or limits — when Claude never ran cx's status line:
+no percentage or cost — when Claude never ran cx's status line:
 
 - **It was started before agent 0.5.0.** `cx provision <host>`, then restart the
   session (`cx stop`, `cx open`). Re-opening alone draws the bar but cannot add
   a status line to a Claude that is already running.
 - **It was started with `CX_SERVER_BAR=0`.**
-- **The limits appear after the first reply.** Claude learns them from the API,
-  so a session nobody has sent anything shows context and model only. They are
-  a Claude subscription's limits; with an API key there are none to show.
+
+### The usage limits are missing, or say `(1h ago)`
+
+Limits are your account's, so every cx session on a server shows the same ones,
+from whichever reading is newer: the last status line any session there ran,
+which Claude refreshes on every turn, or the copy of its usage screen Claude
+keeps in `~/.claude.json`, which it refreshes rarely. A reading older than
+fifteen minutes says how old it is; one turn in any session started by agent
+0.5.0 brings every bar up to date. A window that has already reset is left out
+until a newer reading arrives. No limits at all means neither reading exists on
+that server yet — or the account has none to show, as with an API key.
 
 ### The server's tmux bar is not there at all
 

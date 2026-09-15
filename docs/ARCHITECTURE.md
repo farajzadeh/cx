@@ -261,7 +261,11 @@ Neither is a loop — Claude and tmux do the calling — and neither is
 load-bearing. The numbers are Claude's own (its context percentage, not one
 worked out here), observed rather than documented like the rest of its storage;
 a session that never ran cx's status line shows the model and token count from
-its transcript instead. Two choices keep it out of the user's way. The options
+its transcript instead. Usage limits are the account's, not a session's, so every
+session shows them from the newest reading on the server: any session's last
+status line, or the copy of its `/usage` screen Claude keeps in
+`~/.claude.json`, which is refreshed rarely and so carries its age once it is
+older than fifteen minutes. Two choices keep it out of the user's way. The options
 are set on the one tmux session, never globally, with whatever was on the right
 kept after cx's part. And `--settings` outranks the user's own settings files,
 so `statusline` runs *their* status-line command, if they have one, with the
