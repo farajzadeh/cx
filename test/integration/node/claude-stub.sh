@@ -189,16 +189,18 @@ _hook() {
 
 # _statusline — run the statusLine command --settings configured, with the JSON
 # real Claude hands one: at startup and after every turn. The numbers move with
-# the turn count so a test can see a later call replace an earlier one. What it
+# the turn count so a test can see a later call replace an earlier one, and
+# the reset times are relative to now, since a reset window is not shown. What it
 # prints is kept, because that is what Claude would show under its prompt box.
 _statusline() {
   [ -n "$settings" ] && [ -n "$session" ] && command -v jq >/dev/null 2>&1 || return 0
   _sl=$(printf '%s' "$settings" | jq -r '.statusLine.command // empty' 2>/dev/null)
   [ -n "$_sl" ] || return 0
   _turns=${_turns:-0}
-  printf '{"session_id":"%s","transcript_path":"%s/%s.jsonl","cwd":"%s","workspace":{"current_dir":"%s","project_dir":"%s"},"model":{"id":"stub-model","display_name":"Stub 1 (test)"},"cost":{"total_cost_usd":0.25,"total_lines_added":%s,"total_lines_removed":0},"context_window":{"context_window_size":200000,"used_percentage":%s,"current_usage":{"input_tokens":10,"cache_creation_input_tokens":%s,"cache_read_input_tokens":0}},"rate_limits":{"five_hour":{"used_percentage":9,"resets_at":1789509000},"seven_day":{"used_percentage":56,"resets_at":1789603200}}}' \
+  printf '{"session_id":"%s","transcript_path":"%s/%s.jsonl","cwd":"%s","workspace":{"current_dir":"%s","project_dir":"%s"},"model":{"id":"stub-model","display_name":"Stub 1 (test)"},"cost":{"total_cost_usd":0.25,"total_lines_added":%s,"total_lines_removed":0},"context_window":{"context_window_size":200000,"used_percentage":%s,"current_usage":{"input_tokens":10,"cache_creation_input_tokens":%s,"cache_read_input_tokens":0}},"rate_limits":{"five_hour":{"used_percentage":9,"resets_at":%s},"seven_day":{"used_percentage":56,"resets_at":%s}}}' \
     "$session" "$(_store_dir)" "$session" "$(pwd)" "$(pwd)" "$(pwd)" \
-    "$_turns" "$_turns" "$((_turns * 2000))" |
+    "$_turns" "$_turns" "$((_turns * 2000))" \
+    "$(($(date +%s) + 3600))" "$(($(date +%s) + 172800))" |
     sh -c "$_sl" >>"$HOME/.cx-stub-statusline-stdout" 2>/dev/null || true
 }
 

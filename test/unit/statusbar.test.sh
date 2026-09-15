@@ -17,6 +17,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/cx-statusbar.XXXXXX")
 export CX_DATA_DIR="$TMP/data" CX_CLAUDE_DIR="$TMP/claude"
 export CX_REGISTRY="$TMP/data/projects.json" CX_SESSIONS="$TMP/data/sessions.json"
 export CX_GOALS="$TMP/data/goals.json" CX_STATE_DIR="$TMP/data/state"
+export CX_CLAUDE_JSON="$TMP/claude.json"
 export CX_AGENT_NO_MAIN=1
 mkdir -p "$CX_DATA_DIR" "$CX_CLAUDE_DIR/sessions" "$CX_STATE_DIR"
 
@@ -60,6 +61,8 @@ assert_eq "$(_hook_settings /a/cx-agent | jq -c 'keys')" '["hooks"]'
 # ---------------------------------------------------------------------------
 
 # What real Claude Code 2.1.272 handed a status line after one turn, trimmed.
+# Reset times are relative to now: a window that has reset is left out.
+NOW=$(date +%s)
 SID=11111111-2222-3333-4444-555555555555
 PROJ="$TMP/proj"
 mkdir -p "$PROJ"
@@ -71,8 +74,8 @@ line_json() {
  "cost":{"total_cost_usd":1.2345,"total_lines_added":12,"total_lines_removed":3},
  "context_window":{"context_window_size":1000000,"used_percentage":8,
    "current_usage":{"input_tokens":10,"output_tokens":58,"cache_creation_input_tokens":4000,"cache_read_input_tokens":75400}},
- "rate_limits":{"five_hour":{"used_percentage":9,"resets_at":1789509000},
-   "seven_day":{"used_percentage":56.00000000000001,"resets_at":1789603200}}}
+ "rate_limits":{"five_hour":{"used_percentage":9,"resets_at":$((NOW + 3600))},
+   "seven_day":{"used_percentage":56.00000000000001,"resets_at":$((NOW + 172800))}}}
 EOF
 }
 
@@ -329,6 +332,96 @@ assert_not_contains "$(bar api@impl)" "api@impl"
 
 kill "$OTHER" 2>/dev/null
 OTHER=""
+
+# ---------------------------------------------------------------------------
+
+describe "tmux-status shows the account's usage limits, whoever reported them"
+#
+# Limits belong to the account, so a session with no status line of its own —
+# one started before cx gave Claude one — still shows them.
+
+rm -f "$CX_STATE_DIR"/*.line
+status_file "$PANE_PID" idle
+
+# iso EPOCH — a reset time the way Claude's usage screen writes one.
+iso() { jq -rn --argjson t "$1" '($t | todate | .[0:19]) + ".463080+00:00"'; }
+
+# usage_json FETCHED_SECONDS_AGO FIVE_HOUR_RESETS_IN — Claude's own copy of its
+# /usage screen in ~/.claude.json, trimmed from a real one.
+usage_json() {
+  cat >"$CX_CLAUDE_JSON" <<EOF
+{"numStartups":3,"cachedUsageUtilization":{"fetchedAtMs":$(((NOW - $1) * 1000)),
+ "utilization":{"five_hour":{"utilization":18,"resets_at":"$(iso $((NOW + $2)))"},
+   "seven_day":{"utilization":57,"resets_at":"$(iso $((NOW + 172800)))"},
+   "limits":[{"kind":"session","percent":18,"resets_at":"$(iso $((NOW + $2)))","scope":null},
+     {"kind":"weekly_scoped","percent":21,"resets_at":"$(iso $((NOW + 172800)))",
+      "scope":{"model":{"id":null,"display_name":"Fable"}}}]}}}
+EOF
+}
+
+usage_json 60 3600
+out=$(bar api@impl)
+
+it "reads them from Claude's own copy of its usage screen"
+assert_contains "$out" "5h 18%"
+assert_contains "$out" "7d 57%"
+
+it "including the weekly limit of a single model"
+assert_contains "$out" "7d Fable 21%"
+
+it "says nothing about age for a recent reading"
+assert_not_contains "$out" "ago"
+
+usage_json 7200 3600
+it "says how old a reading is once it is more than a few minutes old"
+assert_contains "$(bar api@impl)" "(2h ago)"
+
+usage_json 60 -60
+out=$(bar api@impl)
+
+it "leaves out a window that has already reset"
+assert_not_contains "$out" "5h"
+
+it "but keeps the ones that have not"
+assert_contains "$out" "7d 57%"
+
+usage_json 7200 3600
+statusline "$(line_json)"
+out=$(bar api@impl)
+
+it "prefers a newer status line to an older copy"
+assert_contains "$out" "5h 9%"
+assert_not_contains "$out" "5h 18%"
+
+it "and does not call the newer reading old"
+assert_not_contains "$out" "ago"
+
+it "while still showing the per-model limit only Claude's copy has"
+assert_contains "$out" "7d Fable 21%"
+
+touch -t "$(jq -rn --argjson t $((NOW - 7200)) '$t | strflocaltime("%Y%m%d%H%M")')" "$CX_STATE_DIR/$SID.line"
+usage_json 60 3600
+it "and a newer copy to an older status line"
+assert_contains "$(bar api@impl)" "5h 18%"
+
+rm -f "$CX_STATE_DIR/$SID.line"
+printf '%s' "$(line_json)" | sed "s/$SID/99999999-aaaa-bbbb-cccc-dddddddddddd/g" | cmd_statusline >/dev/null 2>&1
+usage_json 7200 3600
+it "serves a session whose own status line never ran, from another session's"
+assert_contains "$(bar api@impl)" "5h 9%"
+
+printf 'not json' >"$CX_CLAUDE_JSON"
+rm -f "$CX_STATE_DIR"/*.line
+out=$(bar api@impl)
+
+it "shows no limits when neither reading says anything"
+assert_not_contains "$out" "5h"
+
+it "and the rest of the line is unaffected"
+assert_contains "$out" "idle"
+assert_eq "$(cat "$TMP/stderr")" ""
+
+rm -f "$CX_CLAUDE_JSON"
 
 # ---------------------------------------------------------------------------
 

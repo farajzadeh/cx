@@ -395,7 +395,17 @@ Five commands, and the split between them is invariant 11 made concrete:
   box for any status line**, and printing nothing or exiting non-zero both
   leave that row empty rather than hiding it — verified side by side against a
   Claude with none. So a session cx starts shows one empty row, and
-  `CX_SERVER_BAR=0` is how to have it back. The client sends `--bar nerd|off` (from `CX_BAR_ICONS` and
+  `CX_SERVER_BAR=0` is how to have it back.
+
+  **Usage limits are the account's, not the session's**, so `tmux-status`
+  takes them from the newest of two readings: the newest `state/*.line` any
+  session wrote, or `cachedUsageUtilization` in `~/.claude.json` — Claude's own
+  copy of its `/usage` screen, observed rather than documented, and the only
+  one with per-model weekly limits (`weekly_scoped`). That copy is fetched
+  rarely, over an hour apart on a busy server, so a reading older than fifteen
+  minutes is marked `(Nh ago)`. It is what gives a session started before
+  cx's status line its limits at all. A window whose `resets_at` has passed is
+  dropped — which is also why every fixture's reset times are relative to now. The client sends `--bar nerd|off` (from `CX_BAR_ICONS` and
   `CX_SERVER_BAR`) only to an agent 0.5.0 or newer and only when it differs from
   the default, so an older agent gets the argv it always did. A session that
   never ran the status line falls back to its transcript: the model id and a

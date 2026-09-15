@@ -48,6 +48,7 @@ CX_AGENT_VERSION="0.5.0"
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
 CX_CLAUDE_DIR="${CX_CLAUDE_DIR:-$HOME/.claude}"
+CX_CLAUDE_JSON="${CX_CLAUDE_JSON:-$HOME/.claude.json}"
 CX_LOCK_DIR="$CX_DATA_DIR/.lock"
 CX_TMUX_PREFIX="cx-"
 
@@ -2616,14 +2617,14 @@ _TMUX_STATUS_DEFS='
 '
 
 # What Claude Code 2.1.272 hands a status line, as the bar's pieces: model,
-# context, usage limits, cost, lines changed, transcript. The percentages are
-# Claude's own figures, not worked out here — it knows what counts against the
-# window and cx does not. Every piece Claude left out is "-", and the reset
-# time is tried rather than trusted, since strflocaltime is newer than jq 1.5.
+# context, cost, lines changed, transcript. The percentage is Claude's own
+# figure, not worked out here — it knows what counts against the window and cx
+# does not. Every piece Claude left out is "-". The usage limits it also hands
+# over are read separately, by _tmux_status_limits, because they are the
+# account's rather than this session's.
 _TMUX_STATUS_LINE_JQ='
   (.context_window // {}) as $w
   | ($w.current_usage // null) as $u
-  | (.rate_limits // {}) as $r
   | [ ((.model.display_name // .model.id // null)
         | if . == null then null else tostring | split(" (")[0] end | f),
       (if $w.context_window_size == null then null
@@ -2634,13 +2635,6 @@ _TMUX_STATUS_LINE_JQ='
               + ($u.cache_read_input_tokens // 0) end | tok)
          + "/" + ($w.context_window_size | tok)
        end | f),
-      ([ (if $r.five_hour.used_percentage == null then empty
-          else "5h " + ($r.five_hour.used_percentage | pct)
-            + (try (" ↻" + ($r.five_hour.resets_at | strflocaltime("%H:%M"))) catch "")
-          end),
-         (if $r.seven_day.used_percentage == null then empty
-          else "7d " + ($r.seven_day.used_percentage | pct) end)
-       ] | join(" ") | f),
       (.cost.total_cost_usd // 0
         | if . > 0 then (. * 100 + 0.5 | floor) as $c
             | "$" + ($c / 100 | floor | tostring) + "."
@@ -2662,7 +2656,7 @@ _TMUX_STATUS_TRANSCRIPT_JQ='
   | [ ($m.model // null | if . == null then null else tostring | ltrimstr("claude-") end | f),
       ("ctx " + (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
         + ($m.usage.cache_read_input_tokens // 0) | tok)),
-      "-", "-", "-", "-"
+      "-", "-", "-"
     ] | @tsv'
 
 # cmd_statusline — keep what Claude tells its status line. Run BY CLAUDE.
@@ -2751,6 +2745,93 @@ _tmux_status_icon() {
   fi
 }
 
+# Claude's own copy of its /usage screen, kept in ~/.claude.json, in the shape
+# _TMUX_STATUS_LIMITS_JQ reads: when it was fetched, the five-hour and weekly
+# windows, and the weekly limit of any single model. Reset times arrive as ISO
+# strings in UTC ("+00:00", as seen); anything else is not guessed at.
+_TMUX_STATUS_USAGE_JQ='
+  def iso: if type == "string" and length >= 19
+      and (endswith("+00:00") or endswith("Z"))
+    then (try (.[0:19] + "Z" | fromdateiso8601) catch null) else null end;
+  .cachedUsageUtilization
+  | select(type == "object" and (.utilization | type) == "object")
+  | .utilization as $u
+  | {at: ((.fetchedAtMs // 0) / 1000 | floor),
+     five: {pct: $u.five_hour.utilization, reset: ($u.five_hour.resets_at | iso)},
+     seven: {pct: $u.seven_day.utilization, reset: ($u.seven_day.resets_at | iso)},
+     scoped: [($u.limits // [])[]
+       | select(.kind == "weekly_scoped" and (.scope.model.display_name | type) == "string")
+       | {name: .scope.model.display_name, pct: .percent, reset: (.resets_at | iso)}]}'
+
+# The readings to one piece of the bar — "5h 18% <reset> 21:50 . 7d 57% <reset>
+# Thu 00:00 . 7d Fable 21%" — then how old the reading is, past fifteen
+# minutes. A window that has already reset is left out, since its figure
+# describes nothing now, and the reset time is tried because strflocaltime is
+# newer than jq 1.5.
+_TMUX_STATUS_LIMITS_JQ='
+  def ago: if . < 900 then ""
+    elif . < 3600 then " (\(. / 60 | floor)m ago)"
+    elif . < 86400 then " (\(. / 3600 | floor)h ago)"
+    else " (\(. / 86400 | floor)d ago)" end;
+  def win($label; $fmt; $now):
+    if .pct == null or (.reset != null and .reset <= $now) then empty
+    else $label + " " + (.pct | pct)
+      + (if .reset == null then ""
+         else (try (" \u21bb" + (.reset | strflocaltime($fmt))) catch "") end)
+    end;
+  now as $now
+  | [inputs | select(type == "object")] as $r
+  | ($r | map(select(.five.pct != null or .seven.pct != null)) | max_by(.at)) as $w
+  | ($r | map(select((.scoped | length) > 0)) | max_by(.at)) as $s
+  | [ (if $w == null then empty
+       else ($w.five | win("5h"; "%H:%M"; $now)), ($w.seven | win("7d"; "%a %H:%M"; $now)) end),
+      (if $s == null then empty
+       else $s.scoped[] | select(.pct != null and (.reset == null or .reset > $now))
+         | "7d " + .name + " " + (.pct | pct) end)
+    ] as $parts
+  | if ($parts | length) == 0 then empty
+    else ($parts | join(" \u00b7 ")) + (if $w == null then "" else ($now - $w.at | ago) end) end'
+
+# _tmux_status_limits — the account's usage limits, for every session's bar.
+#
+# Limits belong to the account, not to a session, so any fresh reading serves
+# every bar — which is what lets a session started before cx gave Claude a
+# status line show them too. Two readings, and the newer wins:
+#
+#   * the newest status line any session on this server was handed, which
+#     Claude refreshes on every turn;
+#   * the copy Claude keeps of its own /usage screen, cachedUsageUtilization in
+#     ~/.claude.json. Only it has the per-model weekly limits, but it is fetched
+#     rarely: over an hour apart on a busy server.
+#
+# Both are observed, not documented, and either missing costs only its part.
+# ~/.claude.json is read whole each time; at ~100 KB that is a few milliseconds
+# of jq, cheaper than keeping a copy of it honest.
+_tmux_status_limits() {
+  local newest="" at=0
+  # One ls for the newest, rather than a stat per session per redraw. The names
+  # are conversation ids, validated when written, so nothing can mis-split.
+  # shellcheck disable=SC2012
+  newest=$(ls -t "$CX_STATE_DIR"/*.line 2>/dev/null | head -n 1) || newest=""
+  if [ -n "$newest" ]; then at=$(_mtime "$newest" 2>/dev/null) || at=0; fi
+  {
+    if [ -n "$newest" ]; then
+      jq -c --argjson at "${at:-0}" '
+        select((.rate_limits | type) == "object")
+        | {at: $at,
+           five: {pct: .rate_limits.five_hour.used_percentage,
+                  reset: .rate_limits.five_hour.resets_at},
+           seven: {pct: .rate_limits.seven_day.used_percentage,
+                   reset: .rate_limits.seven_day.resets_at},
+           scoped: []}' "$newest" 2>/dev/null
+    fi
+    if [ -r "$CX_CLAUDE_JSON" ]; then
+      jq -c "$_TMUX_STATUS_USAGE_JQ" "$CX_CLAUDE_JSON" 2>/dev/null
+    fi
+  } | jq -rn "$_TMUX_STATUS_DEFS$_TMUX_STATUS_LIMITS_JQ" 2>/dev/null
+  return 0
+}
+
 # cmd_tmux_status SLUG [--icons unicode|nerd] — one line for a cx session's
 # tmux bar. Run BY TMUX, from the status-right _open_status_bar sets.
 #
@@ -2836,13 +2917,14 @@ EOF
       tail -n 1) || facts=""
   fi
   if [ -n "$facts" ]; then
-    IFS='	' read -r model ctx limits cost lines tpath <<EOF
+    IFS='	' read -r model ctx cost lines tpath <<EOF
 $facts
 EOF
   fi
   if [ "$tpath" = - ] && [ -n "$sid" ] && [ -n "$cwd" ]; then
     tpath="$(_session_dir "$cwd")/$sid.jsonl"
   fi
+  limits=$(_tmux_status_limits) || limits=""
   # Claude writes no transcript until the first exchange, so an idle Claude
   # without one has been asked nothing — the same rule peek applies.
   if [ "$state" = idle ] && [ "$tpath" != - ] && [ ! -e "$tpath" ]; then
