@@ -567,6 +567,65 @@ assert_eq "$(agent "observe hooks --session plain --tail 0" | jq -r '.sessions[0
 it "and is still classified"
 assert_eq "$(cx_run "$HOME_DIR" --json peek cx-test-web1:hooks@plain | jq -r '.sessions[0].state')" fresh
 
+describe "a session's own tmux bar on the server"
+
+cx_run "$HOME_DIR" open -d cx-test-web1:hooks@bar >/dev/null 2>&1
+settle 3
+
+it "draws cx's line on that session's tmux bar"
+assert_contains "$(on_node 'tmux show-options -v -t "=cx-hooks@bar:" status-right')" "tmux-status 'hooks@bar'"
+
+it "keeps what the right side showed before, after it"
+assert_contains "$(on_node 'tmux show-options -v -t "=cx-hooks@bar:" status-right')" "%H:%M"
+
+it "leaves every other tmux session's bar alone"
+assert_not_contains "$(on_node 'tmux show-options -gv status-right')" "tmux-status"
+
+_bar=$(agent "tmux-status hooks@bar")
+
+it "shows the state Claude reports"
+assert_contains "$_bar" "fresh"
+
+it "names the model Claude's status line reported"
+assert_contains "$_bar" "Stub 1"
+
+it "shows the context and the usage limits"
+assert_contains "$_bar" "ctx 0% 10/200k"
+assert_contains "$_bar" "5h 9%"
+
+it "prints nothing of cx's own under Claude's prompt box"
+assert_eq "$(on_node 'cat $HOME/.cx-stub-statusline-stdout 2>/dev/null')" ""
+
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks@bar "write the patch" >/dev/null 2>&1
+settle 3
+_bar=$(agent "tmux-status hooks@bar")
+
+it "moves with the conversation: the status line Claude ran after the turn"
+assert_contains "$_bar" "ctx 1% 2k/200k"
+
+it "and the state after it"
+assert_contains "$_bar" "idle"
+
+on_node 'mkdir -p $HOME/projects/hooks/.claude && printf "{\"statusLine\":{\"type\":\"command\",\"command\":\"echo USER-LINE\"}}" >$HOME/projects/hooks/.claude/settings.json' >/dev/null
+cx_run "$HOME_DIR" nudge cx-test-web1:hooks@bar "and the tests" >/dev/null 2>&1
+settle 3
+
+it "passes Claude's status line on to the user's own, when they have one"
+assert_contains "$(on_node 'cat $HOME/.cx-stub-statusline-stdout 2>/dev/null')" "USER-LINE"
+on_node 'rm -rf $HOME/projects/hooks/.claude' >/dev/null
+
+CX_SERVER_BAR=0 cx_run "$HOME_DIR" open -d cx-test-web1:hooks@nobar >/dev/null 2>&1
+settle 3
+
+it "CX_SERVER_BAR=0 leaves that session's bar as tmux has it"
+assert_eq "$(on_node 'tmux show-options -v -t "=cx-hooks@nobar:" status-right')" ""
+
+it "and installs no status line"
+assert_not_contains "$(agent "tmux-status hooks@nobar")" "Stub 1"
+
+it "prints nothing for a session that does not exist"
+assert_eq "$(agent "tmux-status nosuch")" ""
+
 cx_run "$HOME_DIR" stop cx-test-web1:hooks --all >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
