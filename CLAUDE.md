@@ -41,6 +41,7 @@ bash test/unit/sessions.test.sh            # attach sharing, and cx-agent forget
 bash test/unit/onstop.test.sh              # goals that drive themselves, and what they refuse
 bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
+bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -373,6 +374,33 @@ Five commands, and the split between them is invariant 11 made concrete:
   Bound as `run-shell -b` in `cx bar --setup`, and answers through
   `display-message`, because a key binding's stdout lands in a pane that has to
   be dismissed.
+
+- **The session's own tmux bar** — once attached, the bar at the bottom is the
+  *server's* tmux. `cx open` sets that tmux session's `status-right` to
+  `cx-agent tmux-status <slug>` — on that session only, never globally, with
+  the global value kept after cx's part — and passes Claude a `statusLine` in
+  the same `--settings` as the hooks, routed to `cx-agent statusline`. Claude
+  hands a status line its context percentage and window size, cost, lines
+  changed and, for a subscription after the first reply, the five-hour and
+  weekly `rate_limits`, verified against Claude Code 2.1.272. `statusline`
+  keeps that JSON in `state/<session_id>.line`; `tmux-status` renders it with
+  the state from the status file of **the pane's own pid**, since the pane
+  execs Claude.
+
+  Both are run by another program, on `cmd_event`'s terms: exit 0, nothing on
+  stdout but what the caller wants. For `statusline` that stdout **is Claude's
+  status line**, and `--settings` outranks the user's own settings files, so it
+  runs the user's `statusLine` command with the same input rather than taking
+  it away. Installing one is not free: **Claude keeps a row under its prompt
+  box for any status line**, and printing nothing or exiting non-zero both
+  leave that row empty rather than hiding it — verified side by side against a
+  Claude with none. So a session cx starts shows one empty row, and
+  `CX_SERVER_BAR=0` is how to have it back. The client sends `--bar nerd|off` (from `CX_BAR_ICONS` and
+  `CX_SERVER_BAR`) only to an agent 0.5.0 or newer and only when it differs from
+  the default, so an older agent gets the argv it always did. A session that
+  never ran the status line falls back to its transcript: the model id and a
+  token count, **never a percentage** — the transcript's model id has no
+  `[1m]`, so the window size cannot be known from it.
 
 - **`cx nudge`** — types into a live session. Declines with **exit 0** and
   `sent: false` when the session is not ready, following `cmd_stop`'s

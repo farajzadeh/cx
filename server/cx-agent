@@ -10,6 +10,10 @@
 #   stderr  human-readable progress and errors
 #   exit    0 ok, 1 error, 2 not found, 3 usage, 4 conflict
 #
+# Three verbs answer to a program other than the client — event and statusline
+# to Claude Code, tmux-status to tmux — and each says where it is defined how
+# that changes the rules.
+#
 # This split is what lets the client consume output while errors still reach
 # the user's terminal.
 #
@@ -33,10 +37,13 @@ set -eu
 # with the driver pass a member's Stop hook starts, and the merged fact in list
 # and worktree list with worktree rm --merged, and the record of which
 # sessions were started with hooks that lets nudge refuse one still starting.
+# 0.5.0 added the server's own tmux bar: open --bar, the statusline verb Claude
+# runs to report context, cost and usage limits, and tmux-status, which tmux
+# runs to draw them.
 # The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.4.0"
+CX_AGENT_VERSION="0.5.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -1153,13 +1160,23 @@ EOF
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
   local name="" wt="" label="" mode="continue" dangerous=0 detach=0 hooks=1 hooked=0
-  local perm_mode="" model="" effort=""
+  local perm_mode="" model="" effort="" bar=unicode
   # Everything after `--`, quoted individually and handed to claude verbatim.
   local passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --detach) detach=1 ;;
       --no-hooks) hooks=0 ;;
+      # The session's own tmux bar; see _open_status_bar. `on` is the default
+      # spelled out, and `nerd` draws its state with Nerd Font icons.
+      --bar)
+        shift
+        case "${1:-}" in
+          on | unicode) bar=unicode ;;
+          nerd | off) bar="$1" ;;
+          *) die "--bar takes on, nerd or off" 3 ;;
+        esac
+        ;;
       --mode)
         shift
         mode="${1:-continue}"
@@ -1278,18 +1295,21 @@ cmd_open() {
     fi
 
     # Hooks, so Claude reports its own state instead of cx inferring it from
-    # the transcript — see cmd_event. Same terms as --name: only when this
-    # Claude Code accepts --settings, and never a reason to refuse to start.
-    # The agent is named by absolute path because the hook runs inside Claude,
-    # whose PATH is whatever the pane inherited.
-    if [ "$hooks" = 1 ] && [ "$mode" != shell ] &&
+    # the transcript — see cmd_event. And a status line, so it reports the
+    # context, cost and usage limits the session's tmux bar shows — see
+    # cmd_statusline. Same terms as --name: only when this Claude Code accepts
+    # --settings, and never a reason to refuse to start. The agent is named by
+    # absolute path because both run inside Claude, whose PATH is whatever the
+    # pane inherited.
+    if [ "$mode" != shell ] && { [ "$hooks" = 1 ] || [ "$bar" != off ]; } &&
       _claude_supports "$claude_bin" --settings; then
-      local agent_bin settings=""
+      local agent_bin settings="" line=1
       agent_bin=$(_agent_self)
-      settings=$(_hook_settings "$agent_bin" 2>/dev/null) || settings=""
+      if [ "$bar" = off ]; then line=0; fi
+      settings=$(_launch_settings "$agent_bin" "$hooks" "$line" 2>/dev/null) || settings=""
       if [ -n "$settings" ]; then
         opts="$opts --settings $(cx_q "$settings")"
-        hooked=1
+        if [ "$hooks" = 1 ]; then hooked=1; fi
       fi
     fi
 
@@ -1393,6 +1413,12 @@ cmd_open() {
     fi
   fi
 
+  # The session's own tmux bar. On every open, not only at creation, so a
+  # session started before cx drew one gets it the next time it is opened.
+  if [ "$mode" != shell ]; then
+    _open_status_bar "$tname" "$slug" "$bar"
+  fi
+
   # Detached: everything above already did the work — created the session and
   # sent Claude the command. Only the attach is skipped, so this shares one
   # code path with the interactive open rather than reimplementing it.
@@ -1432,6 +1458,35 @@ cmd_open() {
   fi
   tmux set-option -w -t "=$tname:" window-size latest 2>/dev/null || true
   exec tmux attach -t "=$tname"
+}
+
+# _open_status_bar TNAME SLUG BAR — draw the session's facts in its own tmux
+# bar: state, model, context, cost and usage limits, via tmux-status.
+#
+# Session options, never global. The user's other tmux sessions, and anything
+# on this server's tmux that is not cx, look exactly as they did. What was on
+# the right already is kept, after cx's part, read from the global value on
+# each open so a later change to it reaches a cx session when it is next
+# opened. The interval is the session's own too: tmux is the loop here
+# (invariant 11), and ten seconds is how stale the state may get.
+_open_status_bar() {
+  # A PANE target, with the trailing colon, though these are session options:
+  # set-option's -t takes a pane, and a bare "=name" fails with "no such
+  # session" — silently, under the || true below. Invariant 8 again.
+  local pane="=$1:" slug="$2" bar="$3" cmd right=""
+  if [ "$bar" = off ]; then
+    tmux set-option -u -t "$pane" status-right 2>/dev/null || true
+    tmux set-option -u -t "$pane" status-right-length 2>/dev/null || true
+    tmux set-option -u -t "$pane" status-interval 2>/dev/null || true
+    return 0
+  fi
+  cmd="$(cx_q "$(_agent_self)") tmux-status $(cx_q "$slug")"
+  if [ "$bar" = nerd ]; then cmd="$cmd --icons nerd"; fi
+  right=$(tmux show-options -gv status-right 2>/dev/null) || right=""
+  tmux set-option -t "$pane" status-right "#($cmd)${right:+ $right}" 2>/dev/null || true
+  tmux set-option -t "$pane" status-right-length 160 2>/dev/null || true
+  tmux set-option -t "$pane" status-interval 10 2>/dev/null || true
+  return 0
 }
 
 # _attach_must_detach — true when attaching has to detach everyone else.
@@ -1825,7 +1880,7 @@ _observe_load() {
 # at the moment the file records. Two real files on the machine this was
 # written on passed `kill -0` for pids that had been reused by something else.
 _observe_claude() {
-  local d="$CX_CLAUDE_DIR/sessions" f row sid tmx st at kind pid start stat rest
+  local d="$CX_CLAUDE_DIR/sessions" f row sid tmx st at kind pid start
   [ -d "$d" ] || return 0
   for f in "$d"/*.json; do
     [ -f "$f" ] || continue
@@ -1844,19 +1899,29 @@ _observe_claude() {
     IFS='	' read -r sid tmx st at kind pid start <<EOF
 $row
 EOF
-    kill -0 "$pid" 2>/dev/null || continue
-    if [ "$start" != - ] && [ -r "/proc/$pid/stat" ]; then
-      # starttime is field 22. Field 2 is the command name in parentheses and
-      # may itself contain spaces or parentheses, so count from after the LAST
-      # ") " rather than splitting the whole line.
-      read -r stat <"/proc/$pid/stat" 2>/dev/null || continue
-      rest="${stat##*) }"
-      # shellcheck disable=SC2086
-      set -- $rest
-      [ "${20:-}" = "$start" ] || continue
-    fi
+    _proc_started "$pid" "$start" || continue
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$tmx" "$st" "$at" "$kind" "$pid"
   done
+}
+
+# _proc_started PID START — true when PID is running and, where /proc can say,
+# started at START ("-" skips that half). A file that names a pid outlives the
+# process, and pids get reused.
+#
+# starttime is field 22 of /proc/PID/stat. Field 2 is the command name in
+# parentheses and may itself contain spaces or parentheses, so count from after
+# the LAST ") " rather than splitting the whole line.
+_proc_started() {
+  local pid="$1" start="$2" stat rest
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [ "$start" != - ] && [ -r "/proc/$pid/stat" ]; then
+    read -r stat <"/proc/$pid/stat" 2>/dev/null || return 1
+    rest="${stat##*) }"
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ "${20:-}" = "$start" ] || return 1
+  fi
+  return 0
 }
 
 # _observe_candidates ROWS MAP — every slug `observe --all` might report: the
@@ -2351,7 +2416,7 @@ cmd_forget() {
   _unlock
   trap - EXIT INT TERM
 
-  rm -f "$CX_STATE_DIR/$uuid" 2>/dev/null || true
+  rm -f "$CX_STATE_DIR/$uuid" "$CX_STATE_DIR/$uuid.line" 2>/dev/null || true
   jq -nc --arg t "$slug" --arg u "$uuid" '{target: $t, forgotten: true, uuid: $u}'
 }
 
@@ -2388,22 +2453,32 @@ _agent_self() {
   esac
 }
 
-# _hook_settings AGENT — the --settings JSON that routes Claude's hooks here.
+# _launch_settings AGENT HOOKS LINE — the --settings JSON for one launch:
+# Claude's hooks routed to `event` when HOOKS is 1, and its status line routed
+# to `statusline` when LINE is 1.
 #
 # Passed per launch rather than written into ~/.claude/settings.json, so the
 # user's own settings are never touched and a session started by an older cx
-# simply has no hooks.
-_hook_settings() {
-  local cmd
-  cmd="$(cx_q "$1") event"
-  jq -nc --arg c "$cmd" '
-    {hooks: (
-      ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-       "PostToolUseFailure", "PermissionRequest", "Notification", "Stop",
-       "SessionEnd"]
-      | map({key: ., value: [{hooks: [{type: "command", command: $c, timeout: 10}]}]})
-      | from_entries)}'
+# simply has neither.
+_launch_settings() {
+  local base line=""
+  base=$(cx_q "$1")
+  if [ "${3:-0}" = 1 ]; then line="$base statusline"; fi
+  jq -nc --arg c "$base event" --arg l "$line" --arg h "${2:-1}" '
+    (if $h == "1" then
+      {hooks: (
+        ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+         "PostToolUseFailure", "PermissionRequest", "Notification", "Stop",
+         "SessionEnd"]
+        | map({key: ., value: [{hooks: [{type: "command", command: $c, timeout: 10}]}]})
+        | from_entries)}
+     else {} end)
+    + (if $l == "" then {}
+       else {statusLine: {type: "command", command: $l, padding: 0}} end)'
 }
+
+# _hook_settings AGENT — the hooks alone.
+_hook_settings() { _launch_settings "$1" 1 0; }
 
 # _event_state EVENT NOTIFICATION_TYPE SOURCE — the state an event means, or
 # nothing for an event that says nothing about state.
@@ -2474,7 +2549,7 @@ EOF
   file="$CX_STATE_DIR/$sid"
 
   if [ "$ev" = SessionEnd ]; then
-    rm -f "$file" 2>/dev/null || true
+    rm -f "$file" "$file.line" 2>/dev/null || true
     return 0
   fi
 
@@ -2504,6 +2579,316 @@ EOF
   if [ "$ev" = Stop ]; then
     _event_drive "$sid" || true
   fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# The session's own tmux bar — context, cost and usage limits
+# ---------------------------------------------------------------------------
+#
+# Attached to a cx session, the tmux bar is the one line on screen that belongs
+# to neither Claude nor the conversation, and it is where the facts go that
+# Claude shows only when asked: how full the context is, what the session has
+# cost, and how much of the plan's five-hour and weekly limits are gone.
+#
+# Two verbs for two callers, and a file between them:
+#
+#   statusline   run BY CLAUDE, as the statusLine command open installs. Claude
+#                hands it those numbers at startup and after every turn, and it
+#                keeps a copy in state/<session_id>.line.
+#   tmux-status  run BY TMUX, from the status-right open sets, once per
+#                status-interval. It reads that copy and Claude's status file
+#                for the pane's process, and prints one line.
+#
+# Neither is a loop (invariant 11): Claude and tmux do the calling, and each
+# verb runs once and exits. Neither is load-bearing: what a status line is
+# handed is observed, not documented, like the rest of Claude's storage, and a
+# session that never ran cx's — started by an older cx, or with --bar off —
+# shows what its transcript can say, which is a model and a token count.
+
+# Shared by both readers below: a token count the way a bar has room for it.
+_TMUX_STATUS_DEFS='
+  def f: if . == null or . == "" then "-" else tostring end;
+  def tok: if . >= 1000000 then ((. / 100000 | floor) / 10 | tostring) + "M"
+    elif . >= 1000 then (. / 1000 | floor | tostring) + "k"
+    else (floor | tostring) end;
+  def pct: (. + 0.5 | floor | tostring) + "%";
+'
+
+# What Claude Code 2.1.272 hands a status line, as the bar's pieces: model,
+# context, usage limits, cost, lines changed, transcript. The percentages are
+# Claude's own figures, not worked out here — it knows what counts against the
+# window and cx does not. Every piece Claude left out is "-", and the reset
+# time is tried rather than trusted, since strflocaltime is newer than jq 1.5.
+_TMUX_STATUS_LINE_JQ='
+  (.context_window // {}) as $w
+  | ($w.current_usage // null) as $u
+  | (.rate_limits // {}) as $r
+  | [ ((.model.display_name // .model.id // null)
+        | if . == null then null else tostring | split(" (")[0] end | f),
+      (if $w.context_window_size == null then null
+       else "ctx "
+         + (if $w.used_percentage == null then "" else ($w.used_percentage | pct) + " " end)
+         + (if $u == null then 0
+            else ($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0)
+              + ($u.cache_read_input_tokens // 0) end | tok)
+         + "/" + ($w.context_window_size | tok)
+       end | f),
+      ([ (if $r.five_hour.used_percentage == null then empty
+          else "5h " + ($r.five_hour.used_percentage | pct)
+            + (try (" ↻" + ($r.five_hour.resets_at | strflocaltime("%H:%M"))) catch "")
+          end),
+         (if $r.seven_day.used_percentage == null then empty
+          else "7d " + ($r.seven_day.used_percentage | pct) end)
+       ] | join(" ") | f),
+      (.cost.total_cost_usd // 0
+        | if . > 0 then (. * 100 + 0.5 | floor) as $c
+            | "$" + ($c / 100 | floor | tostring) + "."
+              + (if $c % 100 < 10 then "0" else "" end) + ($c % 100 | tostring)
+          else null end | f),
+      ((.cost.total_lines_added // 0) as $a | (.cost.total_lines_removed // 0) as $d
+        | if $a + $d > 0 then "+\($a) -\($d)" else null end | f),
+      (.transcript_path | f)
+    ] | @tsv'
+
+# The last main-thread turn of a transcript, for a session with no status line:
+# the model that answered and the context it carried. No percentage, because
+# the window size is not in the transcript — the model id there has no [1m].
+_TMUX_STATUS_TRANSCRIPT_JQ='
+  fromjson? // empty
+  | select(type == "object" and .type == "assistant" and (.isSidechain | not)
+      and (.message.usage | type) == "object")
+  | .message as $m
+  | [ ($m.model // null | if . == null then null else tostring | ltrimstr("claude-") end | f),
+      ("ctx " + (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
+        + ($m.usage.cache_read_input_tokens // 0) | tok)),
+      "-", "-", "-", "-"
+    ] | @tsv'
+
+# cmd_statusline — keep what Claude tells its status line. Run BY CLAUDE.
+#
+# Whatever this prints IS Claude's status line, so the rules are cmd_event's
+# with a twist. Exit 0 always and return fast, as for a hook. And print nothing
+# of cx's own: the line under the prompt box is the user's. --settings outranks
+# their settings files, so installing this would quietly take away a status
+# line they configured — instead theirs is found and run with the same input,
+# and what it prints is what Claude shows.
+cmd_statusline() {
+  local input row sid="" dir="" own f
+  input=$(cat 2>/dev/null) || input=""
+  [ -n "$input" ] && have jq || return 0
+  row=$(printf '%s' "$input" | jq -r '
+    def f: if . == null or . == "" then "-" else tostring end;
+    [(.session_id | f), (.workspace.project_dir // .cwd | f)] | @tsv' 2>/dev/null) || return 0
+  IFS='	' read -r sid dir <<EOF
+$row
+EOF
+  [ "$dir" != - ] || dir=""
+
+  # The id becomes a file name, as in cmd_event.
+  case "$sid" in
+    '' | - | *[!A-Za-z0-9-]*) ;;
+    *)
+      f="$CX_STATE_DIR/$sid.line"
+      if mkdir -p "$CX_STATE_DIR" 2>/dev/null &&
+        printf '%s\n' "$input" >"$f.tmp.$$" 2>/dev/null; then
+        mv -f "$f.tmp.$$" "$f" 2>/dev/null || rm -f "$f.tmp.$$" 2>/dev/null
+      fi
+      ;;
+  esac
+
+  # A settings file naming this very command would otherwise run itself for
+  # ever, each process inside the last.
+  [ -z "${CX_STATUSLINE_NESTED:-}" ] || return 0
+  own=$(_statusline_own "$dir")
+  [ -n "$own" ] || return 0
+  printf '%s' "$input" | CX_STATUSLINE_NESTED=1 sh -c "$own" 2>/dev/null
+  return 0
+}
+
+# _statusline_own DIR — the status line command the user configured, if any, in
+# the order Claude Code takes settings: the project's local file, the project's
+# shared one, then their own.
+_statusline_own() {
+  local f cmd files=()
+  if [ -n "${1:-}" ]; then
+    files=("$1/.claude/settings.local.json" "$1/.claude/settings.json")
+  fi
+  files=("${files[@]+"${files[@]}"}" "$CX_CLAUDE_DIR/settings.json")
+  for f in "${files[@]+"${files[@]}"}"; do
+    [ -r "$f" ] || continue
+    cmd=$(jq -r '.statusLine // empty
+      | select(type == "object" and .type == "command")
+      | .command // empty | strings' "$f" 2>/dev/null) || cmd=""
+    if [ -n "$cmd" ]; then
+      printf '%s' "$cmd"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# _tmux_status_icon WHAT ICONS — the shapes cx bar draws on a tab, so a state
+# looks alike in both places. Octal, as there: the Nerd Font glyphs are Private
+# Use codepoints that show as nothing in a diff.
+_tmux_status_icon() {
+  if [ "${2:-}" = nerd ]; then
+    case "$1" in
+      idle) printf '\357\201\230' ;;    # U+F058 check-circle
+      working) printf '\357\204\220' ;; # U+F110 spinner
+      blocked) printf '\357\201\261' ;; # U+F071 exclamation-triangle
+      fresh) printf '\357\204\214' ;;   # U+F10C circle-o
+      branch) printf '\356\202\240' ;;  # U+E0A0 branch
+    esac
+  else
+    case "$1" in
+      idle) printf '\342\227\217' ;;    # U+25CF
+      working) printf '\342\227\220' ;; # U+25D0
+      blocked) printf '\342\226\262' ;; # U+25B2
+      fresh) printf '\342\227\213' ;;   # U+25CB
+      branch) printf '\342\216\207' ;;  # U+2387
+    esac
+  fi
+}
+
+# cmd_tmux_status SLUG [--icons unicode|nerd] — one line for a cx session's
+# tmux bar. Run BY TMUX, from the status-right _open_status_bar sets.
+#
+# State, model, context, usage limits, cost, lines changed, branch, and any
+# other cx session showing a permission prompt. What is not known is left out
+# rather than guessed.
+#
+# Answers to a program, like cmd_event: exit 0 whatever happens, and nothing on
+# stdout but the line. tmux redraws it every few seconds and can act on no
+# error, and an empty line is better than a wrong one.
+cmd_tmux_status() {
+  local slug="" icons=unicode
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --icons)
+        shift
+        icons="${1:-unicode}"
+        ;;
+      -*) ;;
+      *) [ -n "$slug" ] || slug="$1" ;;
+    esac
+    [ $# -eq 0 ] || shift
+  done
+  [ -n "$slug" ] && have jq && have tmux || return 0
+
+  local tname pane pid="" cwd="" created=""
+  tname=$(_tmux_name "$slug")
+  pane=$(tmux display-message -p -t "=$tname:" \
+    '#{pane_pid}	#{pane_current_path}	#{session_created}' 2>/dev/null) || return 0
+  IFS='	' read -r pid cwd created <<EOF
+$pane
+EOF
+  case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+  case "$created" in '' | *[!0-9]*) created=0 ;; esac
+
+  # The pane execs Claude, so the pane's process IS Claude and its status file
+  # needs no search. The file under that pid may still be an earlier process's.
+  local sf="$CX_CLAUDE_DIR/sessions/$pid.json" row="" sid=- status=- start=- ccwd=-
+  if [ -r "$sf" ]; then
+    row=$(jq -r 'def f: if . == null or . == "" then "-" else tostring end;
+      [(.sessionId | f), (.status | f), (.procStart | f), (.cwd | f)] | @tsv' \
+      "$sf" 2>/dev/null) || row=""
+    if [ -n "$row" ]; then
+      IFS='	' read -r sid status start ccwd <<EOF
+$row
+EOF
+      _proc_started "$pid" "$start" || { sid=- status=- ccwd=-; }
+    fi
+  fi
+  [ "$ccwd" = - ] || cwd="$ccwd"
+  if [ "$sid" = - ]; then sid=$(_session_uuid_get "$slug" 2>/dev/null) || sid=""; fi
+  case "$sid" in *[!A-Za-z0-9-]*) sid="" ;; esac
+
+  local state=""
+  case "$status" in
+    waiting) state=blocked ;;
+    busy) state=working ;;
+    idle) state=idle ;;
+  esac
+  if [ -z "$state" ] && [ -n "$sid" ] && [ -r "$CX_STATE_DIR/$sid" ]; then
+    local est="" eat=""
+    IFS='	' read -r est eat _ <"$CX_STATE_DIR/$sid" 2>/dev/null || true
+    # A report from before this tmux session describes an earlier one: the
+    # file is keyed by conversation, and a conversation outlives its session.
+    case "$eat" in
+      '' | *[!0-9]*) est="" ;;
+      *) [ "$eat" -ge "$created" ] || est="" ;;
+    esac
+    state="$est"
+  fi
+
+  local facts="" model=- ctx=- limits=- cost=- lines=- tpath=-
+  if [ -n "$sid" ] && [ -r "$CX_STATE_DIR/$sid.line" ]; then
+    facts=$(jq -r "$_TMUX_STATUS_DEFS$_TMUX_STATUS_LINE_JQ" \
+      "$CX_STATE_DIR/$sid.line" 2>/dev/null) || facts=""
+  fi
+  if [ -z "$facts" ] && [ -n "$sid" ] && [ -n "$cwd" ] &&
+    [ -r "$(_session_dir "$cwd")/$sid.jsonl" ]; then
+    # The tail only: the last turn is at the end, and a transcript runs to
+    # megabytes. A line cut in half at the start is skipped by fromjson?.
+    facts=$(tail -c 131072 "$(_session_dir "$cwd")/$sid.jsonl" 2>/dev/null |
+      jq -Rr "$_TMUX_STATUS_DEFS$_TMUX_STATUS_TRANSCRIPT_JQ" 2>/dev/null |
+      tail -n 1) || facts=""
+  fi
+  if [ -n "$facts" ]; then
+    IFS='	' read -r model ctx limits cost lines tpath <<EOF
+$facts
+EOF
+  fi
+  if [ "$tpath" = - ] && [ -n "$sid" ] && [ -n "$cwd" ]; then
+    tpath="$(_session_dir "$cwd")/$sid.jsonl"
+  fi
+  # Claude writes no transcript until the first exchange, so an idle Claude
+  # without one has been asked nothing — the same rule peek applies.
+  if [ "$state" = idle ] && [ "$tpath" != - ] && [ ! -e "$tpath" ]; then
+    state=fresh
+  fi
+
+  local branch=-
+  if [ -n "$cwd" ] && [ -d "$cwd" ] && have git; then
+    branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null) || branch=""
+    if [ -n "$branch" ]; then
+      branch="$(_tmux_status_icon branch "$icons") $branch"
+    else
+      branch=-
+    fi
+  fi
+
+  # Other cx sessions on a permission prompt: the one thing elsewhere on this
+  # server that cannot move without you. Claude's status files say so exactly,
+  # and reading them is cheap enough for a status bar.
+  local orows="" opid otmux ostart others="" n=0
+  orows=$(jq -r 'select(type == "object" and .status == "waiting" and (.pid | type) == "number")
+    | [(.pid | tostring),
+       ((.tmux // "") | tostring | split(":")[0] | if . == "" then "-" else . end),
+       ((.procStart // "-") | tostring | if . == "" then "-" else . end)]
+    | @tsv' "$CX_CLAUDE_DIR"/sessions/*.json 2>/dev/null) || true
+  while IFS='	' read -r opid otmux ostart; do
+    [ -n "$opid" ] || continue
+    case "$otmux" in "$CX_TMUX_PREFIX"*) ;; *) continue ;; esac
+    [ "$otmux" != "$tname" ] || continue
+    _proc_started "$opid" "$ostart" || continue
+    n=$((n + 1))
+    if [ "$n" -le 2 ]; then others="${others:+$others }${otmux#"$CX_TMUX_PREFIX"}"; fi
+  done <<EOF
+$orows
+EOF
+  if [ "$n" -gt 2 ]; then others="$others +$((n - 2))"; fi
+  if [ -n "$others" ]; then others="$(_tmux_status_icon blocked "$icons") $others"; fi
+
+  local out="" sep s
+  sep=$(printf ' \302\267 ')
+  if [ -n "$state" ]; then out="$(_tmux_status_icon "$state" "$icons") $state"; fi
+  for s in "$model" "$ctx" "$limits" "$cost" "$lines" "$branch" "$others"; do
+    if [ -n "$s" ] && [ "$s" != - ]; then out="${out:+$out$sep}$s"; fi
+  done
+  # A # anywhere in it would be read by tmux as the start of a format.
+  printf '%s\n' "$out" | tr -d '#'
   return 0
 }
 
@@ -3722,7 +4107,7 @@ cx-agent — server-side helper for cx (not intended for direct use)
   rm <name> [--purge]
   path <name> [--worktree W]
   open <name> [--worktree W] [--session L] [--detach] [--no-hooks]
-              --mode continue|resume|shell
+              --mode continue|resume|shell [--bar on|nerd|off]
               [--permission-mode M] [--model M] [--effort E] [--dangerous]
               [-- CLAUDE_ARGS...]
   stop <name> [--worktree W] [--session L] [--all]
@@ -3737,6 +4122,11 @@ cx-agent — server-side helper for cx (not intended for direct use)
                                 drop a finished session's pin
   event                         record a Claude Code hook's report (stdin);
                                 installed by open, run by Claude
+  statusline                    keep what Claude's status line is told (stdin);
+                                installed by open, run by Claude
+  tmux-status <slug> [--icons nerd]
+                                one line for a session's tmux bar; set by
+                                open, run by tmux
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
@@ -3787,6 +4177,15 @@ main() {
     # missing.
     event)
       cmd_event "$@"
+      return 0
+      ;;
+    # Run by Claude and by tmux, on the same terms as event.
+    statusline)
+      cmd_statusline "$@" || true
+      return 0
+      ;;
+    tmux-status)
+      cmd_tmux_status "$@" || true
       return 0
       ;;
   esac
