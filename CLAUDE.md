@@ -31,6 +31,7 @@ bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
+bash test/unit/filter.test.sh              # pattern matching and durations
 bash test/unit/ls.test.sh                  # cx ls output, pinned byte for byte
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
@@ -260,6 +261,17 @@ argv for the agent, emitting each flag only when non-empty — so a plain
 against a pre-0.2.0 agent. When a target does need the new flags,
 `cx_target_needs_units` gates on `cx_agent_units_ok`, which tells the user to
 re-provision instead of surfacing "unknown option: --worktree".
+
+## Narrowing listings
+
+`cx ls`, `cx host ls` and `cx wt ls` share one pattern matcher,
+`CX_FILTER_JQ` in `lib/filter.sh`: a string of jq definitions each command
+prepends to the one jq that already formats its table, because a shell-side
+matcher would cost a process per row (see "ONE jq for the whole table" in
+`lib/cmd/ls.sh`). Case-insensitive; plain text is a substring, a pattern with
+`*` is a glob over the whole field, and nothing else is special — branch names
+have dots in them. The glob is matched by splitting on `*`, not by building a
+regex, which would need escaping and leans on the least portable part of jq.
 
 ## Driving sessions
 
