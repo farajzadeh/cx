@@ -132,7 +132,22 @@ _cx_specs() {
     'host test' | 'host edit' | 'host rm') reply=('1:server:_cx_hosts') ;;
     provision) reply=('(-a --all *)'{-a,--all}'[every server]' '*:server:_cx_hosts') ;;
     login | doctor) reply=('1:server:_cx_hosts') ;;
-    ls) reply=('--git[show git branch and state]' '1:server:_cx_hosts') ;;
+    ls) reply=(
+      '--git[show git branch and state]'
+      '(-f --filter)'{-f,--filter}'[only what matches]:pattern: '
+      '*--host[only this server]:server:_cx_hosts'
+      '--live[only projects with a live session]'
+      '--active[touched within]:duration (30m, 2h, 7d): '
+      '--idle[not touched within]:duration (30m, 2h, 7d): '
+      '--dirty[only uncommitted changes (implies --git)]'
+      '--no-worktrees[projects only]'
+      '--group[layout]:group:(host none)'
+      '--sort[order]:key:(name active sessions host none)'
+      '1:server:_cx_hosts') ;;
+    'host ls') reply=(
+      '(-f --filter)'{-f,--filter}'[only what matches]:pattern: '
+      '(--down)--reachable[only servers last seen up]'
+      '(--reachable)--down[only servers last seen down]') ;;
     new) reply=(
       '--repo[clone this repository]:url: '
       '--root[project root on the server]:directory: '
@@ -144,7 +159,9 @@ _cx_specs() {
       '--from[what to branch from]:ref: '
       $open_after
       '1:project/worktree:_cx_target projslash') ;;
-    'wt ls') reply=('1:server or project:_cx_target hostproj') ;;
+    'wt ls') reply=(
+      '(-f --filter)'{-f,--filter}'[only what matches]:pattern: '
+      '1:server or project:_cx_target hostproj') ;;
     'wt rm') reply=(
       '--force[discard uncommitted changes]'
       '--merged[every worktree that is merged]'

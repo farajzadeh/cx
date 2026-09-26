@@ -305,4 +305,27 @@ assert_eq "$(comp "cx open ")" "web1:|web2:|web3:|"
 it "offers no goal names rather than an error"
 assert_eq "$(comp "cx goal show ")" ""
 
+describe "narrowing listings"
+
+it "ls offers its filters"
+got=$(comp "cx ls --")
+for f in --filter --host --live --active --idle --dirty --no-worktrees --group --sort; do
+  it "ls offers $f"
+  has "$got" "$f "
+done
+it "ls --sort completes its keys"
+assert_eq "$(comp "cx ls --sort a")" "active |"
+it "ls --group completes its layouts"
+assert_eq "$(comp "cx ls --group h")" "host |"
+it "ls --host completes hosts"
+assert_eq "$(comp "cx ls --host w")" "web1 |web2 |web3 |"
+it "a filter's pattern is not taken as the host"
+assert_eq "$(comp "cx ls -f api w")" "web1 |web2 |web3 |"
+it "host ls offers --reachable and --down"
+got=$(comp "cx host ls --")
+has "$got" "--reachable "
+has "$got" "--down "
+it "wt ls offers --filter"
+has "$(comp "cx wt ls --")" "--filter "
+
 summary

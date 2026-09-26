@@ -53,7 +53,9 @@ _cx_flags() {
     "host import") printf '%s' "--root=word" ;;
     provision) printf '%s' "--all -a" ;;
     new) printf '%s' "--repo=word --root=word $open_after" ;;
-    ls) printf '%s' "--git" ;;
+    ls) printf '%s' "--git -f=word --filter=word --host=host --live --active=word --idle=word --dirty --no-worktrees --group=lsgroup --sort=lssort" ;;
+    "host ls") printf '%s' "-f=word --filter=word --reachable --down" ;;
+    "wt ls") printf '%s' "-f=word --filter=word" ;;
     rm) printf '%s' "--purge" ;;
     "wt add") printf '%s' "--branch=word --from=word $open_after" ;;
     "wt rm") printf '%s' "--force --merged" ;;
@@ -284,6 +286,8 @@ _cx_values() {
     model) printf '%s \n' opus sonnet haiku ;;
     effort) printf '%s \n' low medium high xhigh max ;;
     icons) printf '%s \n' unicode nerd ;;
+    lsgroup) printf '%s \n' host none ;;
+    lssort) printf '%s \n' name active sessions host none ;;
     outfmt) printf '%s \n' text json stream-json ;;
     states)
       # A comma-separated list: complete its last element.
