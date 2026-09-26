@@ -38,6 +38,9 @@ _out=$(run_in '
   echo "TESTDIR=$([ -d ~/.local/share/cx/test ] && echo leaked || echo excluded)"
   export PATH="$HOME/.local/bin:$PATH"
   echo "VERSION=$(cx --version)"
+  echo "BASHCOMP=$(readlink ~/.local/share/bash-completion/completions/cx)"
+  echo "OMZLINK=$([ -r ~/.local/share/cx/completions/omz/cx/_cx ] && echo resolves || echo broken)"
+  echo "PRINTED=$(cx completion bash | grep -c "^complete -o nospace -F _cx cx")"
 ')
 
 it "exits 2 (installed; VS Code absent in the container)"
@@ -63,6 +66,15 @@ assert_contains "$_out" 'TESTDIR=excluded'
 
 it "produces a runnable cx via the shim"
 assert_contains "$_out" 'VERSION=cx 0.1.0'
+
+it "links the bash completion where bash-completion finds it"
+assert_contains "$_out" 'BASHCOMP=/root/.local/share/cx/completions/cx.bash'
+
+it "keeps the oh-my-zsh plugin's _cx symlink intact through the copy"
+assert_contains "$_out" 'OMZLINK=resolves'
+
+it "cx completion prints the installed script"
+assert_contains "$_out" 'PRINTED=1'
 
 # ---------------------------------------------------------------------------
 

@@ -90,4 +90,49 @@ case "$(detect_os)" in
   *) _t_no "$_T_NAME" "got: $(detect_os)" ;;
 esac
 
+describe "completions"
+
+# A throwaway HOME: nothing here may touch the real ~/.oh-my-zsh or
+# ~/.local/share/bash-completion.
+_ctmp=$(mktemp -d "${TMPDIR:-/tmp}/cx-inst.XXXXXX")
+(
+  HOME="$_ctmp/home"
+  CX_SHARE="$HOME/.local/share/cx"
+  unset XDG_DATA_HOME BASH_COMPLETION_USER_DIR ZSH ZSH_CUSTOM
+  mkdir -p "$CX_SHARE/completions/omz/cx" "$HOME/.oh-my-zsh/custom"
+  : >"$CX_SHARE/completions/cx.bash"
+  : >"$HOME/.oh-my-zsh/oh-my-zsh.sh"
+  install_completions >/dev/null
+  install_completions >/dev/null # idempotent
+  printf 'bash=%s\n' "$(readlink "$HOME/.local/share/bash-completion/completions/cx")"
+  printf 'omz=%s\n' "$(readlink "$HOME/.oh-my-zsh/custom/plugins/cx")"
+  SHELL=/bin/zsh
+  printf 'zshrc=%s\n' "$(shell_lines | tr '\n' ' ')"
+  uninstall_completions >/dev/null
+  printf 'after=%s%s\n' "$(ls "$HOME/.local/share/bash-completion/completions")" \
+    "$(ls "$HOME/.oh-my-zsh/custom/plugins")"
+  # Someone's own file is never replaced.
+  printf 'mine\n' >"$HOME/.local/share/bash-completion/completions/cx"
+  install_completions >/dev/null
+  printf 'own=%s\n' "$(cat "$HOME/.local/share/bash-completion/completions/cx")"
+  uninstall_completions >/dev/null
+  printf 'kept=%s\n' "$(cat "$HOME/.local/share/bash-completion/completions/cx")"
+) >"$_ctmp/out" 2>&1
+_out=$(cat "$_ctmp/out")
+rm -rf "$_ctmp"
+
+it "links the bash completion where bash-completion loads it on demand"
+assert_contains "$_out" "bash=$_ctmp/home/.local/share/cx/completions/cx.bash"
+it "links the oh-my-zsh plugin into the custom plugins directory"
+assert_contains "$_out" "omz=$_ctmp/home/.local/share/cx/completions/omz/cx"
+it "does not also source cx.zsh from ~/.zshrc when oh-my-zsh has the plugin"
+assert_contains "$_out" "plugins=(...)"
+assert_not_contains "$_out" "cx.zsh"
+it "uninstall removes both links"
+assert_contains "$_out" "after="$'\n'"own="
+it "never replaces a file that is not its own"
+assert_contains "$_out" "own=mine"
+it "and never removes one"
+assert_contains "$_out" "kept=mine"
+
 summary

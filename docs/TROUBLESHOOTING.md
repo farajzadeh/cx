@@ -692,11 +692,37 @@ cx ls
 It deliberately performs no network work, so it will never hang — but it also
 will not populate itself until something has listed projects at least once.
 
-Confirm the completion file is sourced (`--shell-setup` adds this):
+Sessions (`@label`) and their state come from a second file,
+`~/.cache/cx/state`, written by `cx peek` and `cx bar`; goal names from
+`~/.cache/cx/goals`, written by `cx goal ls`. Until those have run, `cx stop`
+and `cx nudge` complete projects instead of running sessions, and `cx goal
+show` completes nothing.
+
+Confirm the completion is loaded at all — `complete -p cx` in bash, `echo
+$_comps[cx]` in zsh should both name `_cx`. If not:
 
 ```sh
-[ -f "$HOME/.local/share/cx/completions/cx.bash" ] && . "$HOME/.local/share/cx/completions/cx.bash"
+eval "$(cx completion bash)"      # bash, in ~/.bashrc
+source <(cx completion zsh)       # zsh, in ~/.zshrc after compinit
 ```
+
+### oh-my-zsh does not pick up the plugin
+
+`cx` must be in `plugins=(...)` in `~/.zshrc`, and
+`$ZSH_CUSTOM/plugins/cx` must exist (`install.sh` links it; see the README
+for the manual `ln -s`). oh-my-zsh caches its completion index, so after
+adding the plugin once:
+
+```sh
+rm -f ~/.zcompdump* && exec zsh
+```
+
+### bash completes `cx open web1:web1:api`
+
+Something replaced cx's completion function with one that ignores
+`COMP_WORDBREAKS` — bash splits `web1:api` at the colon and only replaces the
+text after it. `complete -p cx` should print `complete -o nospace -F _cx cx`;
+re-run `eval "$(cx completion bash)"` if it does not.
 
 ---
 

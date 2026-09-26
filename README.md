@@ -89,6 +89,23 @@ cx login web1        # one-time Claude Code sign-in, on the server
 installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 --check` prints the full picture with a fix command for anything missing.
 
+### Shell completion
+
+Tab completes commands, flags, servers and whole targets —
+`web1:` → `web1:api` → `web1:api/authfix` → `web1:api@review` — with sessions
+described by what they are doing (`idle`, `working`, ...) where the shell can
+show it. It never touches the network: it reads what cx last saw, so run
+`cx ls` once for projects and `cx peek` for sessions.
+
+`install.sh` sets it up where it can; otherwise:
+
+| Shell | |
+|---|---|
+| **bash** | Linked into `~/.local/share/bash-completion/completions/cx`, which the bash-completion package loads by itself. Without that package, add `eval "$(cx completion bash)"` to `~/.bashrc` (`--shell-setup` writes an equivalent line). |
+| **zsh** | `source <(cx completion zsh)` in `~/.zshrc`, after `compinit` — or put it on your `$fpath` as a file: `cx completion zsh > ~/.zfunc/_cx` with `fpath=(~/.zfunc $fpath)` before `compinit`. |
+| **oh-my-zsh** | `install.sh` links the plugin into `$ZSH_CUSTOM/plugins/cx`; add `cx` to `plugins=(...)` in `~/.zshrc` and open a new shell. By hand: `ln -s ~/.local/share/cx/completions/omz/cx "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/cx"`. The plugin also defines `cxl`, `cxo`, `cxp` and `cxs` (`cx ls`, `open`, `peek`, `status`); `zstyle ':omz:plugins:cx' aliases no` turns them off. |
+| **fish** | `cx completion fish > ~/.config/fish/completions/cx.fish` |
+
 ---
 
 ## Commands
@@ -103,6 +120,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx provision <host>` / `--all` | install or update the agent (idempotent) |
 | `cx login <host>` | one-time Claude Code sign-in |
 | `cx doctor` | check this machine and every server |
+| `cx completion bash` / `zsh` / `fish` | print the shell completion script — see [Shell completion](#shell-completion) |
 
 ### Projects
 

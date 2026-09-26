@@ -29,6 +29,9 @@ all the judgment, because cx holds none — see invariant 11.
 
 bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
+bash test/unit/completion.test.sh          # bash completion, driven the way readline drives it
+bash test/unit/completion-zsh.test.sh      # zsh + oh-my-zsh completion in a real pty (skips without zsh)
+bash test/unit/completion-fish.test.sh     # fish completion via complete -C (skips without fish)
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
@@ -263,6 +266,70 @@ against a pre-0.2.0 agent. When a target does need the new flags,
 `cx_target_needs_units` gates on `cx_agent_units_ok`, which tells the user to
 re-provision instead of surfacing "unknown option: --worktree".
 
+## Shell completion
+
+`completions/cx.bash` (and `cx.zsh`, `cx.fish`) do **no network work, ever** —
+not even a background refresh. A tab that hangs on an unreachable server is
+worse than any stale list. They read only local files that cx writes as a side
+effect of commands the user ran anyway: `~/.cache/cx/targets` (any listing),
+`~/.cache/cx/state` (`cx peek`, `cx bar`, seeded by `cx open` — this is where `@label`s and
+the live/dead state come from), `~/.cache/cx/goals` (`cx goal ls`, `new`,
+`rm`), and `~/.config/cx/ssh.d/*.conf`. All of them are caches under invariant
+4: completion must degrade to fewer candidates, never to an error.
+
+**Adding a command or a flag is a table edit**, not code: `_cx_commands`,
+`_cx_subverbs`, `_cx_flags` (`--flag` is a switch, `--flag=KIND` takes a value
+completed as KIND) and `_cx_positional` in `cx.bash`; `_cx_cmd_desc`,
+`_cx_sub_desc` and `_cx_specs` (one `_arguments` spec per flag) in `cx.zsh`.
+The target tree walk is one awk program duplicated in both files — keep them
+in step. The word
+scanner skips global flags wherever they sit and lets a value-taking flag
+swallow the next word — `COMP_WORDS[1]` is *not* the subcommand, which is the
+bug `cx --json ls <TAB>` used to have.
+
+**`:` and `@` are in bash's default `COMP_WORDBREAKS`**, so `web1:api@re`
+reaches `_cx` as five words, and whatever it returns replaces only the text
+after the last break — return `web1:api@review` and the line becomes
+`web1:web1:api@review`. `_cx_reassemble` glues the words back using
+`COMP_LINE` (what bash-completion's `_get_comp_words_by_ref -n :` does) and
+`_cx_reply` strips the prefix up to the last break (its
+`__ltrim_colon_completions`). Neither depends on bash-completion being
+installed, and there is no `compopt` (bash 3.2): the function is registered
+`-o nospace` and every final candidate carries its own trailing space, so
+`web1:` and `web1:api/` can stop without one. The unit test reproduces
+readline's splitting rather than setting whole words, because only then does
+this bug show up.
+
+Targets complete as a tree: a node is offered once its parent is typed in
+full, so `cx open <TAB>` lists projects and `cx open web1:api<TAB>` adds its
+worktrees and sessions. Which kinds a command gets is a choice per command —
+`stop`/`nudge` prefer live sessions from the state cache (and fall back to
+everything when that cache is absent, which means "not looked yet", not
+"nothing running"), `new` gets `host:` only, `wt add` gets `host:project/`.
+
+`cx completion bash|zsh|fish` prints the script (`eval "$(cx completion
+bash)"`). `install.sh` *links* rather than copies — into bash-completion's
+per-user directory, and the oh-my-zsh plugin into `$ZSH_CUSTOM/plugins/cx`
+when oh-my-zsh exists — so re-running it updates them; it only ever replaces
+or removes a link that points into its own tree, never a user's file.
+
+`cx.zsh` is also `completions/omz/cx/_cx` (a symlink), so one file is
+autoloaded from `$fpath` — where the file *is* `_cx`'s body — and sourced or
+eval'd from `cx completion zsh`, where it must `compdef` instead. It tells the
+two apart by `zsh_eval_context[-1] == loadautofunc`. An `_arguments` action
+such as `_cx_target live` is called with `_arguments`' own compadd options
+added, so `$1` is not the kind — `_cx_target` scans for it. The zsh test
+drives a real interactive zsh through `zsh/zpty` and records what `compadd`
+receives; the fish one uses `complete -C`. Both skip when their shell is
+missing, so run them in a container:
+
+```sh
+docker build -t cx-shells - <<<'FROM alpine:3.22
+RUN apk add --no-cache zsh fish bash'
+docker run --rm -v "$PWD":/w -w /w cx-shells bash test/unit/completion-zsh.test.sh
+docker run --rm -v "$PWD":/w -w /w cx-shells bash test/unit/completion-fish.test.sh
+```
+
 ## Driving sessions
 
 Five commands, and the split between them is invariant 11 made concrete:
@@ -439,7 +506,9 @@ Five commands, and the split between them is invariant 11 made concrete:
 
 Create `lib/cmd/<name>.sh` defining `cmd_<name>`, source what it needs from
 `$CX_HOME/lib/`, and add a line to the usage text in `bin/cx`. Dispatch is
-automatic — `load_cmd` sources the file on demand. `resume.sh` and `shell.sh`
+automatic — `load_cmd` sources the file on demand. Then give it a line in
+each completion table (see **Shell completion**) — the command and its flags
+are invisible to TAB until you do. `resume.sh` and `shell.sh`
 are symlinks to `open.sh`; the same command in three modes. `worktree.sh` is a
 symlink to `wt.sh` the same way, and so is `pick.sh` to `find.sh` (which is
 why `lib/cmd/pick.sh` defines `cmd_find`, not the picker — that is

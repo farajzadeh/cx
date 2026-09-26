@@ -279,6 +279,13 @@ check_requirements() {
   row info "tree" "$HOME/.local/share/cx$([ -d "$HOME/.local/share/cx" ] && echo ' (exists, will update)')"
   row info "shim" "$prefix/bin/cx$([ -e "$prefix/bin/cx" ] && echo ' (exists, will replace)')"
   row info "config" "$HOME/.config/cx/config$([ -e "$HOME/.config/cx/config" ] && echo ' (exists, will keep)')"
+  row info "completion" "$(completion_preview "$(bash_completion_dir)/cx")"
+  local omz
+  if omz=$(omz_custom_dir); then
+    row info "oh-my-zsh" "$(completion_preview "$omz/plugins/cx")"
+  else
+    row info "oh-my-zsh" "not found — zsh completion comes from the rc line"
+  fi
 
   if [ -e "$HOME/.ssh/config" ]; then
     if grep -q 'cx/ssh.d' "$HOME/.ssh/config" 2>/dev/null; then
@@ -477,6 +484,98 @@ install_ssh_include() {
   row ok "ssh config" "Include added (backup: $backup)"
 }
 
+# ---------------------------------------------------------------------------
+# Completions
+# ---------------------------------------------------------------------------
+#
+# Linked, never copied, so re-running the installer (which replaces the tree)
+# updates them too. Only links cx made are ever replaced or removed: a real
+# file at one of these paths is someone's own and is left alone.
+
+# bash_completion_dir — where bash-completion 2.x looks for a user's own
+# completions. It loads them on the first TAB after `cx`, with no rc line; a
+# shell without bash-completion ignores the directory and uses the rc line.
+bash_completion_dir() {
+  printf '%s/completions' \
+    "${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion}"
+}
+
+# omz_custom_dir — oh-my-zsh's custom directory; fails when there is none.
+omz_custom_dir() {
+  if [ -n "${ZSH_CUSTOM:-}" ] && [ -d "$ZSH_CUSTOM" ]; then
+    printf '%s' "$ZSH_CUSTOM"
+    return 0
+  fi
+  local omz="${ZSH:-$HOME/.oh-my-zsh}"
+  [ -f "$omz/oh-my-zsh.sh" ] || return 1
+  printf '%s/custom' "$omz"
+}
+
+# ours PATH — is PATH a symlink this installer made?
+ours() {
+  [ -L "$1" ] || return 1
+  case "$(readlink "$1" 2>/dev/null)" in
+    "$CX_SHARE"/*) return 0 ;;
+  esac
+  return 1
+}
+
+# completion_preview DEST — what install would do at DEST, for --check.
+completion_preview() {
+  if ours "$1"; then
+    printf '%s (linked, will update)' "$1"
+  elif [ -e "$1" ] || [ -L "$1" ]; then
+    printf '%s (exists, not cx'"'"'s — will leave alone)' "$1"
+  else
+    printf '%s (will link)' "$1"
+  fi
+}
+
+# link_into SRC DEST NAME — point DEST at SRC unless DEST is someone else's.
+link_into() {
+  local src="$1" dest="$2" name="$3"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    if ! ours "$dest"; then
+      row info "$name" "$dest exists and is not cx's — left alone"
+      return 1
+    fi
+  fi
+  mkdir -p "$(dirname "$dest")" 2>/dev/null &&
+    ln -sfn "$src" "$dest" 2>/dev/null || {
+    row opt "$name" "could not link $dest"
+    return 1
+  }
+  return 0
+}
+
+install_completions() {
+  local dir omz
+  dir=$(bash_completion_dir)
+  if link_into "$CX_SHARE/completions/cx.bash" "$dir/cx" "completion"; then
+    row ok "completion" "$dir/cx"
+  fi
+  if omz=$(omz_custom_dir); then
+    if link_into "$CX_SHARE/completions/omz/cx" "$omz/plugins/cx" "oh-my-zsh"; then
+      row ok "oh-my-zsh" "plugin at $omz/plugins/cx" "add cx to plugins=(...) in ~/.zshrc"
+    fi
+  fi
+  return 0
+}
+
+uninstall_completions() {
+  local p omz
+  for p in "$(bash_completion_dir)/cx" "$(omz_custom_dir 2>/dev/null)/plugins/cx"; do
+    if ours "$p"; then
+      rm -f "$p"
+      row ok "completion" "removed $p"
+    fi
+  done
+  if omz_custom_dir >/dev/null 2>&1; then
+    note "  Remove cx from plugins=(...) in ~/.zshrc if you added it."
+  fi
+  return 0
+}
+
 # rc_file — the shell rc file to advise editing, per shell and platform.
 rc_file() {
   case "$(basename "${SHELL:-sh}")" in
@@ -508,6 +607,11 @@ shell_lines() {
     printf '# added by cx\n'
     printf 'set -gx PATH %s/bin $PATH\n' "$CX_PREFIX"
     printf 'test -f %s; and source %s\n' "$comp" "$comp"
+  elif [ "$shell_name" = zsh ] && omz_custom_dir >/dev/null 2>&1; then
+    # oh-my-zsh loads completion from the plugin; sourcing cx.zsh as well
+    # would only register it twice.
+    printf '# added by cx (completion: add cx to plugins=(...) above)\n'
+    printf 'export PATH="%s/bin:$PATH"\n' "$CX_PREFIX"
   else
     printf '# added by cx\n'
     printf 'export PATH="%s/bin:$PATH"\n' "$CX_PREFIX"
@@ -554,6 +658,7 @@ setup_shell() {
 do_install() {
   install_tree || return 1
   install_shim
+  install_completions
   install_config
   install_ssh_include || true
   setup_shell
@@ -593,6 +698,8 @@ do_uninstall() {
   else
     row info "shim" "not present"
   fi
+
+  uninstall_completions
 
   local cfg="$HOME/.ssh/config"
   if [ -e "$cfg" ] && grep -q 'cx/ssh.d' "$cfg" 2>/dev/null; then
