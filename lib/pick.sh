@@ -84,8 +84,16 @@ _cx_pick_align() {
 #
 # --preview is an fzf preview command; {1} in it is the candidate's value.
 # The built-in menu has nowhere to show one and ignores it.
+#
+# --query Q starts with Q already typed: fzf's own --query, the built-in
+# menu's filter. --always-ask shows the menu even when there is only one
+# candidate (or the query leaves only one), for a caller whose next step acts
+# without asking again — "there was only one, so I stopped it" is not an
+# acceptable surprise.
 cx_pick() {
   local prompt="select" header="" preview="" rows
+  _CX_PICK_QUERY=""
+  _CX_PICK_ALWAYS=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --prompt)
@@ -97,6 +105,10 @@ cx_pick() {
       --preview)
         preview="$2"; shift
         ;;
+      --query)
+        _CX_PICK_QUERY="$2"; shift
+        ;;
+      --always-ask) _CX_PICK_ALWAYS=1 ;;
     esac
     shift
   done
@@ -113,7 +125,9 @@ cx_pick() {
 _cx_pick_fzf() {
   local prompt="$1" header="$2" preview="$3" rows="$4" out rc=0
   set -- --delimiter="$(printf '\t')" --with-nth=2.. --height=~50% --reverse \
-    --no-multi --select-1 --exit-0 --prompt="$prompt> "
+    --no-multi --exit-0 --prompt="$prompt> "
+  [ "${_CX_PICK_ALWAYS:-0}" = 1 ] || set -- "$@" --select-1
+  [ -n "${_CX_PICK_QUERY:-}" ] && set -- "$@" --query="$_CX_PICK_QUERY"
   [ -n "$header" ] && set -- "$@" --header="$header"
   [ -n "$preview" ] && set -- "$@" --preview="$preview" --preview-window=right,50%,wrap
   out=$(printf '%s\n' "$rows" | fzf "$@") || rc=$?
@@ -134,11 +148,15 @@ _cx_pick_fzf() {
 # no terminal; the input is opened once on fd 3 so successive reads advance
 # through it rather than each re-reading its first line.
 _cx_pick_builtin() {
-  local prompt="$1" header="$2" rows="$3" filter="" shown n answer max=20 total pick
+  local prompt="$1" header="$2" rows="$3" filter="${_CX_PICK_QUERY:-}" shown n answer max=20 total pick
   local tty_in="${CX_PICK_TTY_IN:-/dev/tty}" tty="${CX_PICK_TTY_OUT:-/dev/tty}"
+  # Whether a single match may choose itself. Typing is always a choice; a
+  # pre-seeded query only is when the caller did not ask for --always-ask.
+  local auto=1
+  [ "${_CX_PICK_ALWAYS:-0}" = 1 ] && auto=0
 
   # When there is only one candidate, there is no question to ask.
-  if [ "$(printf '%s\n' "$rows" | wc -l | tr -d ' ')" = 1 ]; then
+  if [ "$auto" = 1 ] && [ "$(printf '%s\n' "$rows" | wc -l | tr -d ' ')" = 1 ]; then
     printf '%s\n' "${rows%%	*}"
     return 0
   fi
@@ -155,7 +173,7 @@ _cx_pick_builtin() {
     total=0
     [ -n "$shown" ] && total=$(printf '%s\n' "$shown" | wc -l | tr -d ' ')
 
-    if [ -n "$filter" ] && [ "$total" = 1 ]; then
+    if [ -n "$filter" ] && [ "$total" = 1 ] && [ "$auto" = 1 ]; then
       exec 3<&-
       printf '%s\n' "${shown%%	*}"
       return 0
@@ -189,7 +207,10 @@ _cx_pick_builtin() {
         return "$CX_PICK_CANCEL"
         ;;
       '') filter="" ;;
-      *[!0-9]*) filter="$answer" ;;
+      *[!0-9]*)
+        filter="$answer"
+        auto=1
+        ;;
       *)
         n="$answer"
         if [ "$n" -ge 1 ] && [ "$n" -le "$total" ] && [ "$n" -le "$max" ]; then
@@ -220,12 +241,23 @@ cx_pick_host() {
 #
 #   project   host:project only
 #   unit      projects and their worktrees — anything `cx open` takes
+#   worktree  worktrees only
+#   session   live tmux sessions, @label ones included (asks the servers)
+#   any       unit + session, one row per target
+#   finished  sessions the state cache last saw dead, then every unit
 #
 # Built from the same listing `cx ls` shows, through the same cache, so a
 # warm picker costs what a warm `cx ls` does. Split from cx_pick_target so a
-# test can check what would be offered without a terminal.
+# test can check what would be offered without a terminal. The kinds after
+# unit are built in _cx_pick_candidates_more, below.
 cx_pick_candidates() {
   local kind="$1" only="${2:-}"
+  case "$kind" in
+    worktree | session | any | finished)
+      _cx_pick_candidates_more "$kind" "$only"
+      return
+      ;;
+  esac
   # shellcheck source=projects.sh
   . "$CX_HOME/lib/projects.sh"
   cx_projects_flat | jq -r --arg kind "$kind" --arg only "$only" '
@@ -242,19 +274,346 @@ cx_pick_candidates() {
        else empty end)'
 }
 
-# cx_pick_target KIND [PROMPT] [HOST] — choose a target interactively.
+# cx_pick_target KIND [PROMPT] [HOST] [CX_PICK_OPTIONS...] — choose a target
+# interactively.
 #
-# Prints host:project[/worktree]. Returns CX_PICK_CANCEL on cancel and 2 when
-# there is nothing to choose from.
+# Prints host:project[/worktree][@label]. Returns CX_PICK_CANCEL on cancel and
+# 2 when there is nothing to choose from. Anything after HOST goes to cx_pick
+# as it is (--always-ask, --query, --header); pass "" for HOST to mean all.
 cx_pick_target() {
   local kind="$1" prompt="${2:-target}" only="${3:-}" rows
+  if [ $# -ge 3 ]; then shift 3; else set --; fi
   cx_spinner_start "querying servers" 2>/dev/null || true
   rows=$(cx_pick_candidates "$kind" "$only")
   cx_spinner_stop 2>/dev/null || true
   [ -n "$rows" ] || {
-    err "no projects to choose from"
-    hint "create one with: cx new <host>:<name>"
+    _cx_pick_none "$kind"
     return 2
   }
-  printf '%s\n' "$rows" | cx_pick --prompt "$prompt"
+  printf '%s\n' "$rows" |
+    cx_pick --prompt "$prompt" --preview "$(cx_pick_preview_cmd)" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+# cx_pick_live [HOST] — every live session, as "host:target<TAB>attached".
+#
+# The agent's `sessions` verb on every host at once, which is the question cx
+# tabs asks and for the same reason: "is there a tmux session" is one
+# list-sessions per host, where observe reads a transcript per session and
+# takes several times as long. Live sessions are the one candidate the cached
+# listing cannot supply — a label exists only in tmux — so this is the one
+# place a picker goes to the network.
+#
+# A host the cache already remembers as unreachable is skipped rather than
+# waited on, and one that fails now is simply absent: a menu of what could be
+# reached is more use than an error about what could not.
+cx_pick_live() {
+  local only="${1:-}" hosts h safe dir
+  # shellcheck source=projects.sh
+  . "$CX_HOME/lib/projects.sh"
+  hosts=$(cx_hosts_list)
+  [ -n "$hosts" ] || return 0
+  dir=$(cx_mktempdir) || return 0
+
+  for h in $hosts; do
+    [ -z "$only" ] || [ "$h" = "$only" ] || continue
+    cx_cache_is_down "$h" && continue
+    safe=$(cx_sanitize "$h")
+    (cx_agent "$h" sessions >"$dir/$safe.json" 2>/dev/null ||
+      rm -f "$dir/$safe.json") &
+  done
+  wait
+
+  for h in $hosts; do
+    safe=$(cx_sanitize "$h")
+    [ -s "$dir/$safe.json" ] || continue
+    jq -r --arg h "$h" '
+      .sessions[]? | select(.target != null)
+      | "\($h):\(.target)\t\(.attached)"' "$dir/$safe.json" 2>/dev/null || true
+  done
+  rm -rf "$dir"
+}
+
+# _cx_pick_state — append each row's cached state as a last column.
+#
+# From the state file cx bar and cx peek keep (cx_state_rows), so it costs no
+# network and is allowed to be missing: no state is an empty column, never a
+# guess. The states and the rows travel through one awk as tagged lines,
+# because bash 3.2 has no process substitution worth relying on and awk -v
+# cannot carry newlines portably.
+_cx_pick_state() {
+  local states
+  states=$(cx_state_rows 2>/dev/null) || states=""
+  {
+    [ -n "$states" ] && printf '%s\n' "$states" | awk '{ print "S\t" $0 }'
+    awk '{ print "R\t" $0 }'
+  } | awk -F'\t' '
+    $1 == "S" { s[$2] = $3; next }
+    { line = $2
+      for (i = 3; i <= NF; i++) line = line "\t" $i
+      print line "\t" (($2 in s) ? s[$2] : "") }'
+}
+
+# _cx_pick_dedupe — keep the first row for each value.
+_cx_pick_dedupe() { awk -F'\t' '$1 != "" && !seen[$1]++'; }
+
+# _cx_pick_session_rows [HOST] — live sessions as candidate rows.
+_cx_pick_session_rows() {
+  cx_pick_live "${1:-}" | awk -F'\t' '$1 != "" {
+    printf "%s\t%s\tsession\t%s\n", $1, $1, ($2 == "true" ? "● attached" : "●") }'
+}
+
+# _cx_pick_candidates_more KIND HOST — the kinds cx_pick_candidates hands on.
+_cx_pick_candidates_more() {
+  local kind="$1" only="$2"
+  case "$kind" in
+    worktree)
+      cx_pick_candidates unit "$only" | awk -F'\t' 'index($1, "/")'
+      ;;
+    session)
+      _cx_pick_session_rows "$only" | _cx_pick_state
+      ;;
+    any)
+      # Units first, so a project's default session — the same target as the
+      # project itself — shows once, with its branch.
+      {
+        cx_pick_candidates unit "$only"
+        _cx_pick_session_rows "$only"
+      } | _cx_pick_dedupe | _cx_pick_state
+      ;;
+    finished)
+      # What cx forget is for: a session last seen dead, which only the state
+      # cache knows without asking every server to read every transcript.
+      # Then every unit, because that cache is often cold and forget takes a
+      # unit's default session too.
+      {
+        cx_state_rows 2>/dev/null | awk -F'\t' -v only="$only" '
+          $2 == "dead" && (only == "" || index($1, only ":") == 1) {
+            printf "%s\t%s\tfinished\n", $1, $1 }'
+        cx_pick_candidates unit "$only"
+      } | _cx_pick_dedupe
+      ;;
+  esac
+  return 0
+}
+
+# _cx_pick_none KIND — say that there was nothing to offer, and what to do.
+_cx_pick_none() {
+  case "$1" in
+    session)
+      err "no live sessions to choose from"
+      hint "start one with: cx open -d <host>:<project>"
+      ;;
+    worktree)
+      err "no worktrees to choose from"
+      hint "make one with: cx wt add <host>:<project>/<name>"
+      ;;
+    *)
+      err "no projects to choose from"
+      hint "create one with: cx new <host>:<name>"
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# The fzf preview
+# ---------------------------------------------------------------------------
+#
+# fzf runs the preview command for every row the cursor lands on, so it must
+# be quick and it must never wait on a server: a preview that hangs freezes
+# the cursor. It therefore reads cache files and nothing else — the cached
+# listing (any age) and the state file — and says how old they are. A cold
+# cache gives a short preview, never a slow one.
+
+# cx_pick_preview_cmd — the --preview string: this installation's cx, asked
+# for a preview of fzf's {1}. Empty (no preview) when there is no bin/cx to
+# run, which is only ever a partial checkout.
+cx_pick_preview_cmd() {
+  [ -x "$CX_HOME/bin/cx" ] || return 0
+  printf "'%s' find --preview {1}" \
+    "$(printf '%s' "$CX_HOME/bin/cx" | sed "s/'/'\\\\''/g")"
+}
+
+# cx_pick_preview TARGET — what fzf shows beside the highlighted row.
+cx_pick_preview() {
+  # fzf hands over the field with its delimiter on some versions; a target
+  # never contains whitespace, so dropping all of it is safe.
+  local t host rest label="" wt="" project unit f age json now
+  t=$(printf '%s' "${1:-}" | tr -d ' \t\r\n')
+
+  case "$t" in
+    +new)
+      printf 'A new session: its own conversation, on the same files.\n\n'
+      printf 'Choose the project or worktree next, then name the session\n'
+      printf '(letters, digits, _ and -). It opens as <target>@<name>.\n'
+      return 0
+      ;;
+    *:*) ;;
+    *)
+      printf '%s\n' "$t"
+      return 0
+      ;;
+  esac
+
+  host="${t%%:*}"
+  rest="${t#*:}"
+  case "$rest" in *@*)
+    label="${rest#*@}"
+    rest="${rest%%@*}"
+    ;;
+  esac
+  project="${rest%%/*}"
+  case "$rest" in */*) wt="${rest#*/}" ;; esac
+  unit="$host:$rest"
+
+  printf '%s\n' "$t"
+  [ -n "$label" ] && printf '  session @%s on %s\n' "$label" "$unit"
+  printf '\n'
+
+  # Sessions of this unit the state cache has seen, whatever its age: a
+  # preview labels old data rather than hiding it.
+  f=$(cx_state_file)
+  if [ -s "$f" ] && awk -F'\t' -v u="$unit" '
+    $1 == u || index($1, u "@") == 1 { found = 1 } END { exit !found }' "$f"; then
+    awk -F'\t' -v u="$unit" '
+      $1 == u || index($1, u "@") == 1 {
+        printf "  %-10s %-30s %s\n", (n++ ? "" : "sessions"), $1, $2 }' "$f"
+    age=$(cx_age "$f" 2>/dev/null) || age=""
+    [ -n "$age" ] && printf '  (states seen %s ago — cx peek refreshes)\n' "$(cx_human_age "$age")"
+    printf '\n'
+  fi
+
+  json=$(cx_cache_read "$host" 2>/dev/null) || json=""
+  if [ -z "$json" ]; then
+    printf '  nothing cached for %s yet — cx ls fetches it\n' "$host"
+    return 0
+  fi
+  now=$(cx_now)
+  printf '%s' "$json" | jq -r --arg p "$project" --arg w "$wt" --argjson now "$now" '
+    def ago: ($now - .) as $s
+      | if $s < 60 then "\($s)s" elif $s < 3600 then "\($s / 60 | floor)m"
+        elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end
+      | . + " ago";
+    ([ .projects[]? | select(.name == $p) ] | first // null) as $proj
+    | if $proj == null then "  not in the cached listing — cx ls -r refreshes it"
+      else
+        (if $w == "" then $proj
+         else ([ ($proj.worktrees // [])[] | select(.name == $w) ] | first // null) end)
+        | if . == null then "  no worktree \($w) in the cached listing"
+          else
+            "  branch     \(.branch // "—")\(if .dirty == true then "  (uncommitted changes)" else "" end)",
+            "  tmux       \(.tmux_count // 0) live",
+            (if .sessions != null then "  history    \(.sessions) conversation(s)" else empty end),
+            (if .last_active != null then "  active     \(.last_active | ago)" else empty end),
+            (if .path != null then "  path       \(.path)" else empty end),
+            (if $w == "" and ($proj.repo // "") != "" then "  repo       \($proj.repo)" else empty end),
+            (if $w == "" and (($proj.worktrees // []) | length) > 0
+             then "  worktrees  \($proj.worktrees | map(.name) | join(", "))" else empty end)
+          end
+      end' 2>/dev/null || true
+  age=$(cx_cache_age "$host" 2>/dev/null) || age=""
+  [ -n "$age" ] && printf '\n  (listing cached %s ago — cx ls -r refreshes)\n' "$(cx_human_age "$age")"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Target or pick
+# ---------------------------------------------------------------------------
+
+# cx_pick_readline PROMPT — one line of text from the human, on stdout.
+#
+# From the terminal rather than stdin, for the same reason the menu is.
+# Returns CX_PICK_CANCEL on end of input or an empty answer: an empty label
+# or an empty prompt is never what was meant.
+cx_pick_readline() {
+  local tty_in="${CX_PICK_TTY_IN:-/dev/tty}" tty="${CX_PICK_TTY_OUT:-/dev/tty}" line=""
+  { printf '%s%s>%s ' "$C_BOLD" "$1" "$C_RESET" >"$tty"; } 2>/dev/null || true
+  { IFS= read -r line <"$tty_in"; } 2>/dev/null || return "$CX_PICK_CANCEL"
+  [ -n "$line" ] || return "$CX_PICK_CANCEL"
+  printf '%s\n' "$line"
+}
+
+# cx_pick_new_session — "+ new session…": a unit, then a label for it.
+#
+# Prints unit@label. The label is checked with the rule the target grammar
+# uses, so a bad one is refused before anything reaches a server.
+cx_pick_new_session() {
+  local unit label
+  # shellcheck source=target.sh
+  . "$CX_HOME/lib/target.sh"
+  unit=$(cx_pick_target unit "new session on") || return $?
+  label=$(cx_pick_readline "name for the new session on $unit") || return $?
+  _cx_target_label_ok "$label" || {
+    err "invalid session label: $label"
+    hint "labels may use letters, digits, underscore and hyphen"
+    return 3
+  }
+  printf '%s@%s\n' "${unit%%@*}" "$label"
+}
+
+# cx_target_or_pick [--always-ask] [--new] KIND VERB [HINT...] — the target a
+# command was not given, chosen by the human; on stdout.
+#
+# The one place the rule is written: with nobody at a terminal (cx_pick_ok),
+# this is exactly the "no target given" error every command already had —
+# same message, the command's own HINTs, exit 3 — so a script sees no change.
+# With someone there, it offers KIND (see cx_pick_candidates) under the
+# prompt VERB, and --new adds a "+ new session…" row at the end.
+#
+# Returns 130 (after a dim "cancelled") when the human backs out, so callers
+# can simply `|| return $?`: a cancel is not an error to report again.
+cx_target_or_pick() {
+  local always="" new=0 kind verb rows pick rc=0 h
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --always-ask) always=--always-ask ;;
+      --new) new=1 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  kind="$1"
+  verb="$2"
+  shift 2
+
+  if ! cx_pick_ok; then
+    err "no target given"
+    for h in "$@"; do hint "$h"; done
+    return 3
+  fi
+
+  cx_spinner_start "looking for targets" 2>/dev/null || true
+  rows=$(cx_pick_candidates "$kind") || rows=""
+  cx_spinner_stop 2>/dev/null || true
+  [ -n "$rows" ] || {
+    _cx_pick_none "$kind"
+    return 2
+  }
+  if [ "$new" = 1 ]; then
+    # Never the only row, so it can never be chosen by default.
+    rows="$rows
++new	+ new session…"
+  fi
+
+  pick=$(printf '%s\n' "$rows" |
+    cx_pick --prompt "$verb" --preview "$(cx_pick_preview_cmd)" ${always:+"$always"}) || rc=$?
+  if [ "$rc" = 0 ] && [ "$pick" = +new ]; then
+    pick=$(cx_pick_new_session) || rc=$?
+  fi
+  case "$rc" in
+    0) ;;
+    "$CX_PICK_CANCEL")
+      info "cancelled"
+      return "$rc"
+      ;;
+    *) return "$rc" ;;
+  esac
+
+  # The menu is gone from the screen by now (fzf clears it), so say what was
+  # chosen: the rest of the command's output is about it.
+  info "$verb $pick"
+  printf '%s\n' "$pick"
 }

@@ -460,7 +460,34 @@ not a usage error.
 
 The built-in menu reads from `/dev/tty` on fd 3, opened once — stdin is where
 the candidates came from, and reopening the file per read would re-read its
-first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`).
+first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`). Once per
+*question*, though: a flow that asks twice (a menu, then a label) reads the
+test file from its first line each time, so those tests choose keys that mean
+the right thing to every question — see `--new` in `test/unit/pick.test.sh`.
+
+`cx_pick_candidates KIND` builds rows without asking, so tests can check what
+would be offered. Kinds: `project`, `unit` (projects + worktrees), `worktree`,
+`session` (live tmux sessions, `@label` ones included), `any` (unit + session,
+one row per target), `finished` (sessions the state cache last saw `dead`,
+then every unit — what `cx forget` takes). Everything comes from the cached
+listing and the state cache **except live sessions**: a label exists only in
+tmux, so `session`/`any` fan the agent's `sessions` verb out in parallel (as
+`cx tabs` does), skipping hosts the cache remembers as down.
+
+**The fzf preview never touches the network.** fzf re-runs it on every cursor
+move, so a slow one freezes the menu. `cx_pick_preview` (reached as the hidden
+`cx find --preview TARGET`) reads the cached listing at any age and the state
+file, and labels how old each is. It strips whitespace from its argument
+because some fzf versions hand `{1}` over with the delimiter still attached.
+
+`cx_target_or_pick [--always-ask] [--new] KIND VERB [HINT...]` is the one
+place a command's missing target becomes a menu: not interactive → the same
+`no target given` + the command's own hints + exit 3 as before; cancel → a dim
+`cancelled` and 130. `--always-ask` suppresses the "only one candidate, so
+take it" shortcut for commands that act without confirming (`cx stop`); a
+query or typed filter that leaves one row still chooses it unless the query
+was pre-seeded. `--new` appends `+ new session…`, which asks for a unit and
+then a label checked by `_cx_target_label_ok`.
 
 ## Exit codes
 
