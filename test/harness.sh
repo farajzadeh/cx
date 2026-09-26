@@ -19,6 +19,14 @@ CX_AGENT_VERSION_EXPECTED=$(
     "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/server/cx-agent" | head -1
 )
 
+# CX_VERSION_EXPECTED — the client's version, read from bin/cx for the same
+# reason: a release bump should change one line, not one line and a test.
+# shellcheck disable=SC2034  # read by the test files that source this harness
+CX_VERSION_EXPECTED=$(
+  sed -n 's/^CX_VERSION="\([^"]*\)".*/\1/p' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/bin/cx" | head -1
+)
+
 _T_PASS=0
 _T_FAIL=0
 _T_NAME=""
