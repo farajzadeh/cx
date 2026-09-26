@@ -793,6 +793,26 @@ the environment forms of the global flags undocumented, and `cx new` followed
 by `cx wt add` failing because a fresh project has no commit to branch from.
 Run it when the docs change.
 
+## Releasing
+
+- **Two version strings, one number.** `CX_VERSION` in `bin/cx` (the client)
+  and `CX_AGENT_VERSION` in `server/cx-agent` (the agent). A release sets both
+  to the same number, because `cx doctor` compares them for equality and
+  flags any server whose agent differs. Between releases the agent may run
+  ahead: bump it with each protocol change, since `cx_agent_supports` gates
+  on it. Tests read both versions from source (`test/harness.sh`), so never
+  hardcode one.
+- **`CHANGELOG.md`** (Keep a Changelog): add to `[Unreleased]` as you go, then
+  rename it to `[X.Y.Z] - date` and update the compare links at the bottom.
+  Behaviour changes go first — they are what breaks someone's script.
+- **Release notes** go in `.github/release-notes/vX.Y.Z.md`: the GitHub
+  Release body, under `.github/` so `install.sh` never ships it. Link media
+  at the tag (`raw.githubusercontent.com/farajzadeh/cx/vX.Y.Z/docs/media/…`),
+  not `main`.
+- Run `./test/run.sh --all`, `--bash32`, shellcheck and shfmt, then tag
+  `vX.Y.Z` on `main`, push the tag, and
+  `gh release create vX.Y.Z --notes-file .github/release-notes/vX.Y.Z.md`.
+
 ## Conventions
 
 - Comments explain **why**, especially where the obvious approach is wrong.

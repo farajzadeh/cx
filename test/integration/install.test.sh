@@ -65,7 +65,7 @@ it "ships a runtime, not a working copy (no test/ directory)"
 assert_contains "$_out" 'TESTDIR=excluded'
 
 it "produces a runnable cx via the shim"
-assert_contains "$_out" 'VERSION=cx 0.1.0'
+assert_contains "$_out" "VERSION=cx $CX_VERSION_EXPECTED"
 
 it "links the bash completion where bash-completion finds it"
 assert_contains "$_out" 'BASHCOMP=/root/.local/share/cx/completions/cx.bash'
