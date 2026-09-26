@@ -3,6 +3,7 @@
 
 Output "/out/hero.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx ls"
 Sleep 400ms

@@ -196,7 +196,19 @@ cx peek                              # what each session is doing
 cx nudge web1:api/authfix@tests "the retry test still fails, fix it"
 ```
 
-The rest — a tmux status bar and a tab per session, notifications, goals with
+![A tab per session, with its state](docs/media/tabs.gif)
+
+If you live in tmux, `cx tabs` opens every live session as a tab of your own
+tmux, each titled with its state — `●` idle, `◐` working, `▲` blocked — and
+`prefix j` jumps to the one that needs you.
+
+```sh
+cx bar --setup >> ~/.tmux.conf       # the tab icons, a status line, prefix j
+tmux source-file ~/.tmux.conf
+cx tabs                              # a tab per live session; re-run for new ones
+```
+
+The rest — notifications, goals with
 a definition of done, and the driver subagent that pushes sessions towards
 them — is in [Driving Sessions](https://github.com/farajzadeh/cx/wiki/Driving-Sessions)
 and [Status Bar and Tabs](https://github.com/farajzadeh/cx/wiki/Status-Bar-and-Tabs).

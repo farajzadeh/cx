@@ -3,6 +3,7 @@
 
 Output "/out/find.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx find api"
 Sleep 300ms

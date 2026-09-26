@@ -5,9 +5,21 @@ real `cx` running against two real SSH servers, from a script in this
 directory. Re-record them whenever the output they show changes.
 
 ```sh
-docs/demo/record.sh              # every GIF (about 15 minutes)
+docs/demo/record.sh              # every GIF (about 20 minutes)
 docs/demo/record.sh hero find    # just these
 ```
+
+| GIF | shows |
+|---|---|
+| `hero` | `cx ls` across two servers, `cx find`, open a blocked session, answer it, detach |
+| `picker` | `cx open` with no target: the fzf menu and its preview |
+| `find` | `cx find` → action menu → peek; `cx find --print` inside `$(...)` |
+| `create-open` | bare `cx new` asking its questions, then `cx wt add --open -d` |
+| `ls-filter` | `cx ls` with a pattern, `--live`, `--group host --sort active`; `cx host ls` |
+| `completion` | bash tab completion down the target tree, and a flag's values |
+| `parallel` | `@label` and `/worktree` side by side, then `cx status` |
+| `peek-nudge` | `cx peek`, `cx nudge`, a nudge declined, peek again |
+| `tabs` | `cx tabs` in the laptop's own tmux with `cx bar --setup`: state icons in the tab titles changing, `prefix j` to the blocked one |
 
 **Requirements: Docker.** Nothing else is installed on your machine and
 nothing of yours is read — not `~/.ssh`, not `~/.config/cx`, not
@@ -28,7 +40,11 @@ nothing of yours is read — not `~/.ssh`, not `~/.config/cx`, not
    can be re-recorded on its own and comes out the same.
 3. **`tapes/<name>.tape`** is recorded by VHS, then squeezed by gifsicle,
    into `docs/media/<name>.gif`. `tapes/settings.tape` holds the size, font
-   and theme they share.
+   and theme they share, and `tapes/prelude.tape` the shell setup — two
+   files because VHS ignores a `Set` after any other command, so a tape
+   that changes a setting (`tabs` swaps the font for one with `◐`) does it
+   between them. `tabs` also runs a tmux on the laptop, configured by
+   `cx bar --setup` plus `laptop.tmux.conf`.
 4. **`teardown.sh`** removes the containers, network and volume. The images
    are kept; `docker rmi cx-demo-vhs cx-test-node` removes them.
 

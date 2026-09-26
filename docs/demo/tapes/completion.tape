@@ -4,6 +4,7 @@
 
 Output "/out/completion.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx op"
 Sleep 500ms

@@ -3,6 +3,7 @@
 
 Output "/out/ls-filter.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx ls"
 Sleep 300ms

@@ -3,6 +3,7 @@
 
 Output "/out/create-open.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx new"
 Sleep 300ms

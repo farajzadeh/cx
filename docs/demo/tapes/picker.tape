@@ -3,6 +3,7 @@
 
 Output "/out/picker.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx open"
 Sleep 300ms
