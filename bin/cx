@@ -132,7 +132,9 @@ ${C_BOLD}SERVERS${C_RESET}
 
 ${C_BOLD}PROJECTS${C_RESET}
   new <host>:<name> [--repo URL]          create and register a project
-  ls [host] [--git]                       list projects and worktrees
+  ls [host] [pattern] [--git]             list projects and worktrees
+    --live | --active D | --idle D        ...filtered (see cx ls --help)
+    --group host | --sort KEY             ...grouped by server, or sorted
   rm <target> [--purge]                   unregister (--purge deletes files)
 
 ${C_BOLD}PARALLEL WORK${C_RESET}

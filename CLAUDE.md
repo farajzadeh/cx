@@ -32,7 +32,7 @@ bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/filter.test.sh              # pattern matching and durations
-bash test/unit/ls.test.sh                  # cx ls output, pinned byte for byte
+bash test/unit/ls.test.sh                  # cx ls: pinned output, filters, --group, --sort
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
 bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux
@@ -272,6 +272,27 @@ matcher would cost a process per row (see "ONE jq for the whole table" in
 `*` is a glob over the whole field, and nothing else is special — branch names
 have dots in them. The glob is matched by splitting on `*`, not by building a
 regex, which would need escaping and leans on the least portable part of jq.
+
+**The positional word in `cx ls WORD` is a host if one by that name is
+configured, and a pattern otherwise.** It is tempting to make it always a
+pattern — a host's name matches its own projects anyway — but that is wrong
+twice: a pattern does not narrow the fan-out, so `cx ls web1` would contact
+every server and warn about every unreachable one; and a pattern also matches
+project names, so it would start listing another server's `web1-mirror`. `-f`
+is the escape hatch for text that happens to be a host's name. A host that is
+*not* configured is then silently a pattern, so an empty result says so.
+
+`--host` and a positional host narrow the fan-out itself
+(`cx_projects_fanout [--git] HOST...`), which is what keeps "a partial view
+must announce itself" honest: only servers that were asked are reported
+unreachable. A pattern does not narrow it, since an unreachable server might
+hold a match.
+
+With no filter and no sort, every step is the identity, and plain `cx ls` —
+table and `--json` — must stay byte-identical. `test/fixtures/ls/` holds
+output captured *before* filtering existed; never regenerate it from the
+current code, or it tests nothing. `--group` is a table layout and never
+changes `--json`.
 
 ## Driving sessions
 

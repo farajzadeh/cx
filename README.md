@@ -111,6 +111,9 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx new web1:api --repo <url>` | clone a repo into a new project |
 | `cx new web1:api` | create an empty git repository |
 | `cx ls [host] [--git]` | list projects and worktrees across servers |
+| `cx ls [host] <pattern>` | only what matches: project, worktree, branch, repo |
+| `cx ls --live` / `--active 2h` / `--idle 7d` | only what is running, recent, or stale |
+| `cx ls --group host --sort active` | a heading per server; most recent first |
 | `cx rm web1:api [--purge]` | unregister (`--purge` also deletes files) |
 
 ### Working
@@ -197,6 +200,29 @@ over SSH shows up in `cx ls`, and one you delete by hand disappears.
 
 And they nest: `cx open web1:api/authfix@tests` is a second conversation
 inside a worktree.
+
+### Finding things again
+
+Once there are a few of each, `cx ls` narrows down. The flags compose, and
+`--json` honours all of them in its usual shape:
+
+```sh
+cx ls auth                  # any project, worktree, branch or repo containing "auth"
+cx ls web1 'api*'           # on web1, names starting with api (* makes it a glob)
+cx ls --live                # something is running in it
+cx ls --active 2h           # touched in the last two hours
+cx ls --idle 30d            # not touched in a month: candidates for cx rm
+cx ls --dirty               # uncommitted changes (implies --git)
+cx ls --host web1,web2      # just these servers; the rest are never contacted
+cx ls --group host          # a heading per server instead of a HOST column
+cx ls --sort active         # most recent first; also name, sessions, host
+```
+
+A project that matches keeps all its worktrees; one that matches only through
+a worktree is shown as the heading for just that worktree. A single word is a
+host when a host by that name is configured and a pattern otherwise — use `-f`
+to search for text that happens to be a host's name. `CX_LS_GROUP` and
+`CX_LS_SORT` set the defaults.
 
 ---
 

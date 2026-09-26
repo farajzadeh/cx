@@ -43,6 +43,8 @@ never changes how your other SSH sessions behave.
 |---|---|---|
 | `CX_EDITOR` | *(empty)* | Editor for `cx host edit`. Falls back to `$VISUAL`, `$EDITOR`, then `vi`. |
 | `CX_NO_COLOR` | `0` | `1` disables color. The standard `NO_COLOR` variable works too. |
+| `CX_LS_GROUP` | `none` | How `cx ls` lays out its table. `host` puts a heading over each server's projects instead of a HOST column; `none` is the flat table. `--group` overrides it. `--json` is never grouped. |
+| `CX_LS_SORT` | `none` | The order `cx ls` lists projects in: `name`, `active` (most recent first), `sessions` (most first), `host`, or `none` for the order the servers keep them in. `active` and `sessions` count a project's worktrees as part of it. `--sort` overrides it. |
 
 ## Environment-only
 
