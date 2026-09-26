@@ -139,13 +139,16 @@ assert_eq "$(on_node 'tmux list-sessions -F "#{session_name}" | sort | tr "\n" "
   'cx-api cx-api@review cx-api@tests '
 
 it "pins a separate conversation id for each"
-assert_eq "$(on_node 'jq -r ".sessions | keys | sort | join(\",\")" ~/.local/share/cx/sessions.json')" \
+# Only entries holding a uuid are pins. The earlier resume-mode `web` session
+# is recorded too, as {hooks: true} with no id — the agent writes down how a
+# session was started — and counting it here made these two fail.
+assert_eq "$(on_node 'jq -r ".sessions | with_entries(select(.value.uuid)) | keys | sort | join(\",\")" ~/.local/share/cx/sessions.json')" \
   'api,api@review,api@tests'
 
 # Distinct ids are the entire point: equal ids would mean the three sessions
 # share one conversation, which is the bug this feature exists to fix.
 it "gives every session a DIFFERENT conversation id"
-assert_eq "$(on_node 'jq -r "[.sessions[].uuid] | unique | length" ~/.local/share/cx/sessions.json')" '3'
+assert_eq "$(on_node 'jq -r "[.sessions[].uuid | select(.)] | unique | length" ~/.local/share/cx/sessions.json')" '3'
 
 it "runs all three in the same project directory"
 assert_eq "$(on_node 'tmux capture-pane -pJ -t =cx-api@review: | grep -c "in /home/cxuser/projects/api"')" '1'
