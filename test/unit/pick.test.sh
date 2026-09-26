@@ -132,6 +132,17 @@ for v in CX_JSON=1 CX_ASSUME_YES=1 CX_PICKER=none; do
 done
 unset -f _cx_pick_tty
 
+# Everything below reads listings, and reading JSON means jq — which the
+# bash:3.2 image `test/run.sh --bash32` uses does not carry. That run is
+# asking about bash, not jq: skip rather than fail, as bar.test.sh does.
+if ! cx_have jq; then
+  describe "candidates"
+  it "need jq"
+  skip "jq unavailable"
+  summary
+  exit $?
+fi
+
 describe "candidates"
 
 # A cached listing, as the agent's `list` returns it.

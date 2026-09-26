@@ -108,6 +108,17 @@ answer 1
 CX_JSON=1 run cmd_open
 assert_eq "$RC" 3
 
+# Everything below builds candidates from JSON, which means jq — absent from
+# the bash:3.2 image `test/run.sh --bash32` uses. That run is asking about
+# bash: skip rather than fail, as bar.test.sh does.
+if ! cx_have jq; then
+  describe "at a terminal"
+  it "needs jq"
+  skip "jq unavailable"
+  summary
+  exit $?
+fi
+
 describe "at a terminal: each command offers its kind"
 
 it "open offers live sessions, @labels included"
