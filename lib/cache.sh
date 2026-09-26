@@ -297,3 +297,51 @@ cx_state_seed() {
   mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
 }
+
+# ---------------------------------------------------------------------------
+# Goal names
+# ---------------------------------------------------------------------------
+#
+# For shell completion only: `cx goal show <TAB>` has no other local source,
+# and completion does no network work. One line per goal:
+#
+#   host<TAB>name<TAB>state
+#
+# Rewritten per host by every unfiltered `cx goal ls`, and kept roughly
+# current by `goal new` and `goal rm` in between. Like the targets file it may
+# be stale — a wrong name costs one useless tab, never a wrong answer from cx,
+# because nothing but completion reads it.
+
+cx_goals_file() { printf '%s/goals' "$(cx_cache_dir)"; }
+
+# cx_goals_write HOST — "name<TAB>state" rows on stdin replace HOST's rows.
+# The temp-and-rename in cx_write_atomic is what makes reading the old file
+# in the same pipeline safe.
+cx_goals_write() {
+  local f rows
+  f=$(cx_goals_file)
+  rows=$(awk -F'\t' -v h="$1" '$1 != "" { printf "%s\t%s\t%s\n", h, $1, $2 }')
+  cx_cache_init
+  {
+    [ -f "$f" ] && awk -F'\t' -v h="$1" '$1 != h' "$f"
+    [ -n "$rows" ] && printf '%s\n' "$rows"
+  } | cx_write_atomic "$f" 2>/dev/null || true
+  return 0
+}
+
+# cx_goals_add HOST NAME / cx_goals_drop HOST NAME — one goal made or removed.
+cx_goals_add() {
+  cx_goals_drop "$1" "$2"
+  cx_cache_init
+  printf '%s\t%s\tactive\n' "$1" "$2" >>"$(cx_goals_file)" 2>/dev/null || true
+  return 0
+}
+
+cx_goals_drop() {
+  local f
+  f=$(cx_goals_file)
+  [ -f "$f" ] || return 0
+  awk -F'\t' -v h="$1" -v n="$2" '!($1 == h && $2 == n)' "$f" |
+    cx_write_atomic "$f" 2>/dev/null || true
+  return 0
+}

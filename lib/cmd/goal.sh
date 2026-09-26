@@ -158,6 +158,12 @@ EOF
     ls | list)
       local out=""
       out=$(_goal_agent "$host" ls "$@") || return $?
+      # The names shell completion offers. Only an unfiltered listing is the
+      # whole set; a --state one would drop every goal it did not show.
+      if [ $# = 0 ]; then
+        printf '%s' "$out" | jq -r '.goals[]? | [.name, .state] | @tsv' 2>/dev/null |
+          cx_goals_write "$host"
+      fi
       if [ "${CX_JSON:-0}" = 1 ]; then
         printf '%s\n' "$out" | jq -c --arg h "$host" '. + {host: $h}'
         return 0
@@ -230,6 +236,7 @@ EOF
         return 3
       }
       _goal_write "$host" "$dod" new "$name" $members || return $?
+      cx_goals_add "$host" "$name"
       ;;
 
     dod)
@@ -422,6 +429,7 @@ EOF
         }
       fi
       out=$(_goal_agent "$host" rm "$name") || return $?
+      cx_goals_drop "$host" "$name"
       if [ "${CX_JSON:-0}" = 1 ]; then
         printf '%s\n' "$out" | jq -c --arg h "$host" '. + {host: $h}'
       else
