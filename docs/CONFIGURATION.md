@@ -43,6 +43,7 @@ never changes how your other SSH sessions behave.
 |---|---|---|
 | `CX_EDITOR` | *(empty)* | Editor for `cx host edit`. Falls back to `$VISUAL`, `$EDITOR`, then `vi`. |
 | `CX_NO_COLOR` | `0` | `1` disables color. The standard `NO_COLOR` variable works too. |
+| `CX_OPEN_AFTER_CREATE` | `ask` | Whether `cx new` and `cx wt add` open a session in what they just created, when neither `--open` nor `--no-open` says. `ask` asks at a terminal and never otherwise — a script, `--json` and `-y` are never asked and never get a session they did not ask for. `always` opens whenever there is a terminal to attach. `never` does not. Anything else is a config error (exit 78). |
 
 ## Environment-only
 

@@ -44,6 +44,8 @@ bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/unit/pick.test.sh                # the interactive picker, fzf-less
 bash test/unit/find.test.sh                # cx find, and commands that pick a missing target
+bash test/unit/ask.test.sh                 # cx_ask_line / cx_ask_yn, the terminal questions
+bash test/unit/create.test.sh              # new / wt add: --open, and asking for what is missing
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -510,6 +512,41 @@ stays local to it). **Not** `peek`, where no target already means "all", and
 not `ask`, which is the scriptable entry point — `cx ask "$(cx find --print)"`
 covers it. A new command that takes an existing target should use
 `cx_target_or_pick` in place of its `no target given` block.
+
+`cx_ask_line` and `cx_ask_yn`, appended to the same file, ask for a line of
+text or a yes/no under the same gate and the same test hooks. They leave the
+answer in `CX_ASK_REPLY` instead of printing it, so they run in the caller's
+shell rather than a `$(...)` subshell — which is what keeps their input open
+on fd 4 from one question to the next. fd 4, because the picker closes 3 when
+it returns and a question asked after a pick must not find its input gone.
+End of input (Ctrl-D) is 130, like a cancelled pick.
+
+## Creating and opening in one step
+
+`cx new` and `cx wt add` take `--open` (and `-d`, `--label`, `--no-hooks` and
+cx open's Claude options, each of which implies it). The shared half lives in
+`lib/create.sh`, and it **calls `cmd_open` rather than re-implementing it**:
+the words the user typed are collected, validated early through the same
+`cx_claude_opt`, and handed to `cmd_open` verbatim. Opening is the subtle part
+of cx — version gates, the sign-in warning, recording the permission mode, the
+bypass warning, detaching, tagging the local tmux window, exec'ing ssh — and a
+second copy would drift from the first the next time either changed. Two
+consequences worth knowing: the created target is saved *before* opening,
+because `cmd_open` resolves into the same `CX_T_*` globals; and
+`cx_cache_invalidate` runs before opening, because an attached open execs ssh
+and never comes back (invariant 4). Contradictions (`--no-open -d`, `--json
+--open` without `-d`) are refused before anything is created, so a failed
+command never leaves a project behind. `--json -d` prints one object: what
+was created, with the session under `.session`.
+
+Without `--open`/`--no-open`, `CX_OPEN_AFTER_CREATE` (`ask` | `always` |
+`never`) decides. `ask` goes through `cx_pick_ok`, so scripts, `--json` and
+`-y` get exactly the old create-and-return; `always` still needs a terminal,
+since opening means handing one over. Run bare at a terminal, both commands
+ask for what is missing — `cx wt add web1:api`, a project with no `/name`,
+included — with the questions above, and validate names client-side
+(`cx_project_name_ok`, `cx_worktree_name_ok`) to re-ask before a round trip.
+The agent still validates; it cannot trust the client.
 
 ## Exit codes
 

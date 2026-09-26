@@ -132,11 +132,14 @@ ${C_BOLD}SERVERS${C_RESET}
 
 ${C_BOLD}PROJECTS${C_RESET}
   new <host>:<name> [--repo URL]          create and register a project
+    --open | -d                           ...then open a session in it (-d: detached)
+  new                                     at a terminal: asks for each part
   ls [host] [--git]                       list projects and worktrees
   rm <target> [--purge]                   unregister (--purge deletes files)
 
 ${C_BOLD}PARALLEL WORK${C_RESET}
   wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
+    --open | -d                           ...then open a session in it
   wt ls [host[:project]]                  list worktrees
   wt rm <target>/<name> [--force]         remove one (its branch is kept)
   wt rm <target> --merged                 remove every worktree that is merged
