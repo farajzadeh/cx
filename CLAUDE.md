@@ -42,6 +42,7 @@ bash test/unit/onstop.test.sh              # goals that drive themselves, and wh
 bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
+bash test/unit/pick.test.sh                # the interactive picker, fzf-less
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -444,10 +445,27 @@ stripped from anywhere in the argv before the subcommand is chosen, so
 `cx --json ls` and `cx ls --json` are equivalent. `-h`/`--help` is deliberately
 **not** global, so `cx host --help` documents `host`.
 
+## Interactive picking
+
+`lib/pick.sh` is the one place cx asks a human to choose. `cx_pick` takes
+`value<TAB>col<TAB>col...` rows on stdin and prints the chosen **value** on
+stdout; the menu itself goes to the terminal. fzf when installed, a built-in
+numbered menu with a word filter otherwise (`CX_PICKER=fzf|builtin|none`).
+
+A picker is a prompt, so `cx_pick_ok` gates it the way every prompt is gated:
+stdin and stderr must be terminals, and `--json`, `-y` and `CX_PICKER=none`
+all mean no. Without a human, a missing target is still exit 3 — scripts
+never see a menu. A cancel is **130**, not 3: backing out is an interrupt,
+not a usage error.
+
+The built-in menu reads from `/dev/tty` on fd 3, opened once — stdin is where
+the candidates came from, and reopening the file per read would re-read its
+first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`).
+
 ## Exit codes
 
 Stable, so scripts can branch on them: `0` success, `1` general error, `2` not
-found, `3` usage, `4` conflict, `5` ambiguous target, `78` config error.
+found, `3` usage, `4` conflict, `5` ambiguous target, `78` config error, `130` a picker was cancelled.
 `install.sh --check` uses `1` missing required, `2` missing optional, `3`
 unsupported platform, `64` bad usage.
 
