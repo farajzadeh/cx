@@ -248,15 +248,16 @@ _cx_targets() {
     '' | *:*) ;;
     *) bare=1 ;;
   esac
-  local out
-  out=$(_cx_items "$kind" | awk -F'\t' -v cur="$cur" -v depth="$depth" \
-    -v bare="$bare" -v slash="$slash" -v hosts="$hosts" "$_cx_tree_awk" | cut -f2)
+  local items out
+  items=$(_cx_items "$kind")
   # A stop or a nudge wants a running session, but a missing or empty state
   # cache is not "nothing is running" — it is "cx has not looked yet".
-  if [ -z "$out" ] && { [ "$kind" = live ] || [ "$kind" = known ]; }; then
+  if [ -z "$items" ] && { [ "$kind" = live ] || [ "$kind" = known ]; }; then
     _cx_targets all "$cur"
     return 0
   fi
+  out=$(printf '%s\n' "$items" | awk -F'\t' -v cur="$cur" -v depth="$depth" \
+    -v bare="$bare" -v slash="$slash" -v hosts="$hosts" "$_cx_tree_awk" | cut -f2)
   [ -n "$out" ] && printf '%s\n' "$out"
   if [ "$kind" = hostproj ]; then
     _cx_hosts | sed 's/$/ /'

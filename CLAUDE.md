@@ -30,6 +30,7 @@ all the judgment, because cx holds none — see invariant 11.
 bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/completion.test.sh          # bash completion, driven the way readline drives it
+bash test/unit/completion-zsh.test.sh      # zsh + oh-my-zsh completion in a real pty (skips without zsh)
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
@@ -274,7 +275,10 @@ the live/dead state come from), `~/.cache/cx/goals` (`cx goal ls`, `new`,
 
 **Adding a command or a flag is a table edit**, not code: `_cx_commands`,
 `_cx_subverbs`, `_cx_flags` (`--flag` is a switch, `--flag=KIND` takes a value
-completed as KIND) and `_cx_positional` in `cx.bash`. The word
+completed as KIND) and `_cx_positional` in `cx.bash`; `_cx_cmd_desc`,
+`_cx_sub_desc` and `_cx_specs` (one `_arguments` spec per flag) in `cx.zsh`.
+The target tree walk is one awk program duplicated in both files — keep them
+in step. The word
 scanner skips global flags wherever they sit and lets a value-taking flag
 swallow the next word — `COMP_WORDS[1]` is *not* the subcommand, which is the
 bug `cx --json ls <TAB>` used to have.
@@ -298,6 +302,21 @@ worktrees and sessions. Which kinds a command gets is a choice per command —
 `stop`/`nudge` prefer live sessions from the state cache (and fall back to
 everything when that cache is absent, which means "not looked yet", not
 "nothing running"), `new` gets `host:` only, `wt add` gets `host:project/`.
+
+`cx.zsh` is also `completions/omz/cx/_cx` (a symlink), so one file is
+autoloaded from `$fpath` — where the file *is* `_cx`'s body — and sourced or
+eval'd from `cx completion zsh`, where it must `compdef` instead. It tells the
+two apart by `zsh_eval_context[-1] == loadautofunc`. An `_arguments` action
+such as `_cx_target live` is called with `_arguments`' own compadd options
+added, so `$1` is not the kind — `_cx_target` scans for it. The zsh test
+drives a real interactive zsh through `zsh/zpty` and records what `compadd`
+receives; it skips without zsh, so run it in a container:
+
+```sh
+docker build -t cx-zsh - <<<'FROM alpine:3.22
+RUN apk add --no-cache zsh bash'
+docker run --rm -v "$PWD":/w -w /w cx-zsh bash test/unit/completion-zsh.test.sh
+```
 
 ## Driving sessions
 
