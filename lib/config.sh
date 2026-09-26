@@ -23,7 +23,8 @@ _cx_env_snapshot() {
   _CX_ENV_KEYS=""
   for k in CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
-    CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR; do
+    CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
+    CX_OPEN_AFTER_CREATE; do
     eval "_v=\${$k+set}"
     if [ "${_v:-}" = set ]; then
       _CX_ENV_KEYS="$_CX_ENV_KEYS $k"
@@ -67,18 +68,21 @@ cx_config_load() {
   : "${CX_BAR_COLOR:=0}"
   : "${CX_BAR_ICONS:=unicode}"
   : "${CX_SERVER_BAR:=1}"
+  : "${CX_OPEN_AFTER_CREATE:=ask}"
 
   # Guard against a malformed config turning into confusing arithmetic errors
   # deep inside the cache layer.
   _cx_require_int CX_CACHE_TTL "$CX_CACHE_TTL"
   _cx_require_int CX_UNREACHABLE_TTL "$CX_UNREACHABLE_TTL"
   _cx_require_int CX_CONNECT_TIMEOUT "$CX_CONNECT_TIMEOUT"
+  _cx_require_one_of CX_OPEN_AFTER_CREATE "$CX_OPEN_AFTER_CREATE" ask always never
 
   # Exported so a backgrounded cache refresh (a fresh `cx` process) resolves
   # the same configuration, config file, hosts, and cache directory.
   export CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
-    CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR
+    CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
+    CX_OPEN_AFTER_CREATE
   export CX_CONFIG_DIR CX_CONFIG_FILE CX_SSHD_DIR CX_CACHE_DIR
 }
 
@@ -90,6 +94,19 @@ _cx_require_int() {
       exit 78 # EX_CONFIG
       ;;
   esac
+}
+
+# _cx_require_one_of KEY VALUE CHOICE... — the same guard for a fixed list.
+# A typo here would otherwise read as the default and never be noticed.
+_cx_require_one_of() {
+  local key="$1" val="$2" c
+  shift 2
+  for c in "$@"; do
+    [ "$val" = "$c" ] && return 0
+  done
+  printf 'cx: %s must be one of: %s (got: %s)\n' "$key" "$*" "$val" >&2
+  printf '    check %s\n' "$CX_CONFIG_FILE" >&2
+  exit 78 # EX_CONFIG
 }
 
 # cx_editor — the editor for `cx host edit`.

@@ -12,12 +12,14 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../create.sh
+. "$CX_HOME/lib/create.sh"
 
 _wt_usage() {
   cat <<EOF
 ${C_BOLD}cx wt${C_RESET} — git worktrees, for working on several tasks at once
 
-  cx wt add <host>:<project>/<name> [--branch B] [--from REF]
+  cx wt add <host>:<project>/<name> [--branch B] [--from REF] [--open | -d]
   cx wt ls  [<host>[:<project>]]
   cx wt rm  <host>:<project>/<name> [--force]
   cx wt rm  <host>:<project> --merged
@@ -33,10 +35,21 @@ other's files:
   cx ls                               see both, with their branches
   cx wt rm  web1:api/authfix          done — the branch is kept
 
+Or in one step: cx wt add web1:api/authfix --open. At a terminal, cx wt add
+with no target, or with a project and no /name, asks for what is missing.
+
 OPTIONS
   --branch B    branch name, if it should differ from the worktree name.
                 An existing branch is checked out rather than recreated.
   --from REF    what to branch from (default: HEAD)
+  --open        for add: attach a Claude session in it once it exists
+  --no-open     for add: do not, and do not ask
+  -d, --detach  for add: start that session without attaching
+  --label L     for add: open the session as <target>/<name>@L
+                --dangerously-skip-permissions, --permission-mode, --model,
+                --effort and --no-hooks are passed to cx open as well.
+                Every option describing the session implies --open; without
+                any, CX_OPEN_AFTER_CREATE decides (default: ask at a terminal).
   --force       for rm: discard uncommitted changes in the worktree
   --merged      for rm: every worktree whose branch has nothing that is not
                 already in the project's branch, and that has no uncommitted
@@ -71,10 +84,45 @@ _wt_target() {
   cx_agent_units_ok "$CX_T_HOST" || return 1
 }
 
+# _wt_add_interactive [PROJECT] — ask for what `cx wt add` was not given.
+# Sets the caller's `target`, and `branch` unless --branch was given.
+#
+# `cx wt add web1:api` names a project but no worktree: a usage error without
+# a terminal, as it always was, and a question with one. With no target at
+# all, the project is picked first.
+_wt_add_interactive() {
+  local proj="${1:-}" name
+  if [ -z "$proj" ]; then
+    proj=$(cx_pick_target project "project") || return $?
+  fi
+
+  cx_ask_valid "worktree name in $proj" cx_worktree_name_ok || return $?
+  name="$CX_ASK_REPLY"
+  target="$proj/$name"
+
+  if [ -z "$branch" ]; then
+    cx_ask_line "branch" "$name" || return $?
+    # Accepting the default is the same as leaving --branch off, so send
+    # exactly what that sends.
+    [ "$CX_ASK_REPLY" = "$name" ] || branch="$CX_ASK_REPLY"
+  fi
+  return 0
+}
+
 _wt_add() {
   local target="" branch="" from=""
 
+  cx_create_opts_reset
   while [ $# -gt 0 ]; do
+    # --open and the session's options first, as in cx new.
+    local rc=0
+    cx_create_opt "$1" "${2:-}" || rc=$?
+    if [ "$rc" = 0 ]; then
+      shift "$CX_CREATE_USED"
+      continue
+    fi
+    [ "$rc" = 2 ] && return 3 # already said what was wrong
+
     case "$1" in
       --branch)
         shift
@@ -97,11 +145,22 @@ _wt_add() {
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx wt add <host>:<project>/<name> [--branch B] [--from REF]"
-    return 3
-  }
+  cx_create_check || return $?
+
+  # A missing target, or a project with no /name, is a question at a
+  # terminal. The split is only a peek — silent, because _wt_target below
+  # reports anything wrong with the target in full.
+  if [ -z "$target" ]; then
+    cx_pick_ok || {
+      err "no target given"
+      hint "usage: cx wt add <host>:<project>/<name> [--branch B] [--from REF]"
+      return 3
+    }
+    _wt_add_interactive || return $?
+  elif cx_target_split "$target" 2>/dev/null &&
+    [ -z "$CX_T_WORKTREE" ] && [ -z "$CX_T_SESSION" ] && cx_pick_ok; then
+    _wt_add_interactive "$target" || return $?
+  fi
 
   _wt_target "$target" add || return $?
 
@@ -131,11 +190,23 @@ _wt_add() {
     return "$rc"
   fi
 
-  # A new worktree changes what cx ls reports for this host.
+  # A new worktree changes what cx ls reports for this host. Before opening,
+  # too: an attached open never comes back to do it.
   cx_cache_invalidate "$CX_T_HOST" 2>/dev/null || true
 
+  # Kept aside: cmd_open resolves its own target into the same CX_T_* globals.
+  local created
+  created=$(cx_target_str)
+
   if [ "${CX_JSON:-0}" = 1 ]; then
-    printf '%s' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host:$h}' || printf '%s\n' "$out"
+    local j=""
+    j=$(printf '%s' "$out" | jq -c --arg h "$CX_T_HOST" '. + {host:$h}' 2>/dev/null) || true
+    [ -n "$j" ] && out="$j"
+    if cx_create_want_open; then
+      cx_create_open_json "$out" "$created"
+      return $?
+    fi
+    printf '%s\n' "$out"
     return 0
   fi
 
@@ -145,11 +216,18 @@ _wt_add() {
   wpath=$(printf '%s' "$out" | jq -r '.path // empty' 2>/dev/null) || true
   wbranch=$(printf '%s' "$out" | jq -r '.branch // empty' 2>/dev/null) || true
 
-  say "  $(ok_mark) created $(cx_target_str)"
+  say "  $(ok_mark) created $created"
   [ -n "$wbranch" ] && note "    branch $wbranch"
   [ -n "$wpath" ] && note "    $wpath"
   say ""
-  hint "start working: cx open $(cx_target_str)"
+
+  if cx_create_want_open; then
+    rc=0
+    cx_create_open "$created" || rc=$?
+    [ "$rc" = 0 ] || hint "the worktree exists; open it later with: cx open $created"
+    return "$rc"
+  fi
+  hint "start working: cx open $created"
 }
 
 _wt_ls() {

@@ -29,7 +29,7 @@ Need to work on two things at once? Give each task a worktree — its own branch
 and directory, so parallel Claude sessions can't overwrite each other:
 
 ```console
-$ cx wt add web1:api/authfix    # then: cx open web1:api/authfix
+$ cx wt add web1:api/authfix --open    # create it and start working in it
 ```
 
 ---
@@ -110,6 +110,8 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 |---|---|
 | `cx new web1:api --repo <url>` | clone a repo into a new project |
 | `cx new web1:api` | create an empty git repository |
+| `cx new web1:api --open` | ...and attach a session in it (`-d`: start one detached) |
+| `cx new` | at a terminal: asks for the server, the name and a repo |
 | `cx ls [host] [--git]` | list projects and worktrees across servers |
 | `cx rm web1:api [--purge]` | unregister (`--purge` also deletes files) |
 
@@ -147,6 +149,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 |---|---|
 | `cx open web1:api@review` | a second conversation on the **same files** |
 | `cx wt add web1:api/authfix` | a worktree: its own **branch and directory** |
+| `cx wt add web1:api/authfix --open` | ...and a session in it, in one step |
 | `cx wt ls [host[:project]]` | list worktrees |
 | `cx wt rm web1:api/authfix [--force]` | remove one (the branch is kept) |
 | `cx wt rm web1:api --merged` | remove every worktree that is merged, clean and idle |
