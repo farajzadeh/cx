@@ -141,17 +141,22 @@ takes a pane target and needs the trailing colon: `=name:`**. `send-keys -t
 "=name"` fails outright with "can't find pane".
 
 **9a. Permission mode is fixed at session creation, so it must be recorded.**
-`--dangerously-skip-permissions` is passed to the `claude` process the pane
-launches; reattaching cannot change it, and from inside an attached session
-there is no way to tell which mode you are in. So `cmd_open` records
-`dangerous: true` on the session entry and `cx status` shows a `no-perms`
-MODE. The negative is **deleted rather than stored** — absent already means
-guarded, and writing `false` would turn `sessions.json` from a list of pins
-into a list of every session ever opened. Clearing still happens explicitly on
-each creation, because a previous session under the same slug may have set it
-and a stale `true` makes `cx status` lie in the dangerous direction. Note
-`.sessions[$s] |= ...` on a missing key *creates* it holding null, so the
-clearing path is guarded with `has($s)`.
+`--permission-mode` (and `--dangerously-skip-permissions`, which is
+`bypassPermissions`) is passed to the `claude` process the pane launches;
+reattaching cannot change it, and from inside an attached session there is no
+way to tell which mode you are in. So `cmd_open` records `perm_mode` on the
+session entry (`_session_set_perm_mode`) and `cx status` shows it as MODE,
+with `bypassPermissions` rendered `no-perms`. Agents before 0.3.0 wrote a
+`dangerous: true` boolean instead; `cx status` still reads it, and clearing
+drops it too. Claude's own default is **deleted rather than stored** — absent
+already means default, and writing it would turn `sessions.json` from a list
+of pins into a list of every session ever opened. Clearing still happens
+explicitly on each creation, because a previous session under the same slug
+may have set a mode and a stale one makes `cx status` lie, possibly in the
+dangerous direction. Note `.sessions[$s] |= ...` on a missing key *creates* it
+holding null, so the clearing path is guarded with `has($s)`. The same rule
+covers `hooks: true` (`_session_set_hooks`), which is why an entry can exist
+with no `uuid` — anything counting pins must count only entries with one.
 
 **9. A cx session pins a Claude conversation id.** `claude --continue` means
 "the newest conversation in this directory", so two sessions on one project
