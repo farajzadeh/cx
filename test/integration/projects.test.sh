@@ -286,4 +286,46 @@ it "but cx peek with no target is valid — it means everything"
 run_rc cx_run "$HOME_DIR" peek
 assert_eq "$_T_RC" 0
 
+# cx_run has no terminal, so these must keep failing exactly as before the
+# interactive forms existed.
+it "cx new with no target is still a usage error without a terminal"
+run_rc cx_run "$HOME_DIR" new
+assert_eq "$_T_RC" 3
+
+# ---------------------------------------------------------------------------
+
+describe "cx new --open — create and start a session in one step"
+
+on_web1() { docker exec "${CX_NODE_PREFIX}web1" su - cxuser -c "$1" 2>&1; }
+
+_out=$(cx_run "$HOME_DIR" new cx-test-web1:quick -d --dangerously-skip-permissions)
+
+it "creates the project"
+assert_contains "$_out" 'created cx-test-web1:quick'
+
+it "and starts its session through cx open, warnings and all"
+assert_contains "$_out" 'ALL permission checks bypassed'
+assert_contains "$_out" 'started cx-test-web1:quick'
+
+it "really started it"
+assert_ok on_web1 'tmux has-session -t "=cx-quick"'
+
+it "with the permission mode recorded, as cx open records it"
+assert_eq "$(on_web1 'jq -r ".sessions.quick.perm_mode" ~/.local/share/cx/sessions.json')" \
+  bypassPermissions
+
+it "and cx ls sees the project at once, with no -r"
+assert_contains "$(cx_run "$HOME_DIR" ls cx-test-web1)" 'quick'
+
+_j=$(cx_run "$HOME_DIR" --json new cx-test-web1:quick2 -d --label impl | grep -E '^\{')
+
+it "--json -d reports the project and its session as one object"
+assert_eq "$(printf '%s' "$_j" | jq -r '.name + " " + .host + " " + .session.target')" \
+  'quick2 cx-test-web1 quick2@impl'
+
+it "--json --open without -d is refused before anything is created"
+run_rc cx_run "$HOME_DIR" --json new cx-test-web1:quick3 --open
+assert_eq "$_T_RC" 3
+assert_not_contains "$(cx_run "$HOME_DIR" -r ls cx-test-web1)" 'quick3' "and quick3 does not exist"
+
 summary

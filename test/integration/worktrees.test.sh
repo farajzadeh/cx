@@ -306,4 +306,35 @@ assert_ok on_node 'test -d ~/projects/.worktrees/lands/pending'
 it "kept the removed worktree's branch"
 assert_ok on_node 'cd ~/projects/lands && git show-ref --verify --quiet refs/heads/landed'
 
+# ---------------------------------------------------------------------------
+
+describe "cx wt add --open — create and start a session in one step"
+# Last, and in the lands project, so that the session it starts cannot change
+# what any count above sees.
+
+_out=$(cx_run "$HOME_DIR" wt add cx-test-web1:lands/quick -d --label impl)
+
+it "creates the worktree"
+assert_contains "$_out" 'created cx-test-web1:lands/quick'
+
+it "and says it started a session, through cx open"
+assert_contains "$_out" 'started cx-test-web1:lands/quick@impl'
+
+it "really started it, in its own tmux session"
+assert_ok on_node 'tmux has-session -t "=cx-lands/quick@impl"'
+
+it "in the worktree's directory"
+assert_contains "$(on_node 'tmux display-message -p -t "=cx-lands/quick@impl:" "#{pane_current_path}"')" \
+  '/home/cxuser/projects/.worktrees/lands/quick'
+
+_j=$(cx_run "$HOME_DIR" --json wt add cx-test-web1:lands/quicker -d | grep -E '^\{')
+
+it "--json -d reports the worktree and its session as one object"
+assert_eq "$(printf '%s' "$_j" | jq -r '.name + " " + .host + " " + .session.target')" \
+  'quicker cx-test-web1 lands/quicker'
+
+it "without a terminal, no target is still a usage error"
+run_rc cx_run "$HOME_DIR" wt add
+assert_eq "$_T_RC" 3
+
 summary
