@@ -4,9 +4,9 @@
 # Needs zsh with the zsh/zpty module; skipped without one. To run it where
 # zsh is not installed:
 #
-#   docker build -t cx-zsh - <<<'FROM alpine:3.22
-#   RUN apk add --no-cache zsh bash'
-#   docker run --rm -v "$PWD":/w -w /w cx-zsh bash test/unit/completion-zsh.test.sh
+#   docker build -t cx-shells - <<<'FROM alpine:3.22
+#   RUN apk add --no-cache zsh fish bash'
+#   docker run --rm -v "$PWD":/w -w /w cx-shells bash test/unit/completion-zsh.test.sh
 #
 # Each case runs a real interactive zsh in a pseudo-terminal, presses TAB and
 # records what compadd was given (test/fixtures/completion/capture.zsh), so it

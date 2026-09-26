@@ -31,6 +31,7 @@ bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/completion.test.sh          # bash completion, driven the way readline drives it
 bash test/unit/completion-zsh.test.sh      # zsh + oh-my-zsh completion in a real pty (skips without zsh)
+bash test/unit/completion-fish.test.sh     # fish completion via complete -C (skips without fish)
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/bar.test.sh                 # the status bar's one line
@@ -316,12 +317,14 @@ two apart by `zsh_eval_context[-1] == loadautofunc`. An `_arguments` action
 such as `_cx_target live` is called with `_arguments`' own compadd options
 added, so `$1` is not the kind — `_cx_target` scans for it. The zsh test
 drives a real interactive zsh through `zsh/zpty` and records what `compadd`
-receives; it skips without zsh, so run it in a container:
+receives; the fish one uses `complete -C`. Both skip when their shell is
+missing, so run them in a container:
 
 ```sh
-docker build -t cx-zsh - <<<'FROM alpine:3.22
-RUN apk add --no-cache zsh bash'
-docker run --rm -v "$PWD":/w -w /w cx-zsh bash test/unit/completion-zsh.test.sh
+docker build -t cx-shells - <<<'FROM alpine:3.22
+RUN apk add --no-cache zsh fish bash'
+docker run --rm -v "$PWD":/w -w /w cx-shells bash test/unit/completion-zsh.test.sh
+docker run --rm -v "$PWD":/w -w /w cx-shells bash test/unit/completion-fish.test.sh
 ```
 
 ## Driving sessions
