@@ -119,6 +119,9 @@ for mode in fpath source; do
   has "$(zc "cx wt add web1:api/x --no-")" "options --no-open -"
   it "find takes -p/--print"
   has "$(zc "cx find --p")" "options --print - print the target instead of opening it"
+  it "ls takes its filters, and --sort its keys"
+  has "$(zc "cx ls --so")" "options --sort - order"
+  has "$(zc "cx ls --sort a")" "option--sort-1 active -"
   it "wt add completes project/"
   has "$(zc "cx wt add web1:")" "projects web1:api/  project"
 done
