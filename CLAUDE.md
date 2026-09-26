@@ -482,15 +482,16 @@ one that does not answer — silently, a failed host read as "nothing running".
 move, so a slow one freezes the menu. `cx_pick_preview` (reached as the hidden
 `cx find --preview TARGET`) reads the cached listing at any age and the state
 file, and labels how old each is. It strips whitespace from its argument
-because some fzf versions hand `{1}` over with the delimiter still attached.
+defensively: fzf 0.62 hands `{1}` over clean, but field placeholders have
+carried their delimiter in some versions.
 
 `cx_target_or_pick [--always-ask] [--new] KIND VERB [HINT...]` is the one
 place a command's missing target becomes a menu: not interactive → the same
 `no target given` + the command's own hints + exit 3 as before; cancel → a dim
 `cancelled` and 130. `--always-ask` suppresses the "only one candidate, so
-take it" shortcut for commands that act without confirming (`cx stop`); a
-query or typed filter that leaves one row still chooses it unless the query
-was pre-seeded. `--new` appends `+ new session…`, which asks for a unit and
+take it" shortcut for commands that act without confirming (`cx stop`) — and
+so does a pre-seeded `--query` that leaves one row, though text the human
+types still chooses a sole match. `--new` appends `+ new session…`, which asks for a unit and
 then a label checked by `_cx_target_label_ok`.
 
 `cx find [query]` (alias `cx pick`) offers `any`, then an action menu; each
