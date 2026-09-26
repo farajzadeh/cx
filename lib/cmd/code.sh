@@ -3,6 +3,8 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 cmd_code() {
   local target="${1:-}"
@@ -20,7 +22,7 @@ happens on the server. Claude Code still runs there too — run it from VS
 Code's integrated terminal, or keep using cx open in a separate window.
 
 A worktree target opens that worktree's directory, so each parallel task can
-have its own editor window.
+have its own editor window. Omit the target at a terminal to pick one.
 
 Requires VS Code and the Remote-SSH extension:
   https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh
@@ -29,11 +31,10 @@ EOF
       ;;
   esac
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx code <host>:<project>"
-    return 3
-  }
+  if [ -z "$target" ]; then
+    target=$(cx_target_or_pick unit code "usage: cx code <host>:<project>") ||
+      return $?
+  fi
 
   local editor="code"
   cx_have "$editor" || {

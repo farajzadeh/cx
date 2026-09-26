@@ -153,6 +153,8 @@ ${C_BOLD}WORKING${C_RESET}
   status                                  live sessions across servers
   stop <target> [--all]                   end a session (--all: the project's)
   forget <target>                         drop a finished session from the lists
+  find [query] [--print]                  choose any target from a menu, then act
+                                          (pick is the same command)
 
 ${C_BOLD}DRIVING${C_RESET}
   peek [target] [--all | --goal G]        what each session is doing now
@@ -189,6 +191,10 @@ ${C_BOLD}TARGETS${C_RESET}
     web1:api/authfix@tests   a named session inside that worktree
 
   Use ${C_BOLD}@label${C_RESET} for parallel conversations, ${C_BOLD}/worktree${C_RESET} for parallel branches.
+
+  ${C_BOLD}INTERACTIVE${C_RESET}: at a terminal, leave the target out of open, resume, shell,
+  code, stop, nudge, forget, rm or wt rm to choose it from a menu (fzf when
+  installed). CX_PICKER=none turns that off; scripts are never asked.
 
 Docs: $CX_HOME/docs/
 EOF

@@ -7,6 +7,8 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 cmd_rm() {
   local target="" purge=0
@@ -25,6 +27,9 @@ Without --purge this only removes the registry entry, so the project stops
 appearing in cx ls. Nothing on disk changes and you can re-add it later.
 
 --purge deletes the project directory on the server. That is not reversible.
+
+Omit the name at a terminal to choose the project from a menu; the same
+confirmation follows.
 EOF
         return 0
         ;;
@@ -37,11 +42,12 @@ EOF
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx rm <host>:<name> [--purge]"
-    return 3
-  }
+  # Projects only: rm refuses a worktree or a session anyway. The
+  # confirmation below still stands between the menu and the change.
+  if [ -z "$target" ]; then
+    target=$(cx_target_or_pick project rm "usage: cx rm <host>:<name> [--purge]") ||
+      return $?
+  fi
 
   cx_target_resolve "$target" || return $?
 

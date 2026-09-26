@@ -126,6 +126,8 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx open -d web1:api` | start a session without attaching to it |
 | `cx status` | what's running right now, everywhere |
 | `cx stop web1:api [--all]` | end a session (`--all`: every one of the project's) |
+| `cx find [query]` | choose any project, worktree or session from a menu, then what to do |
+| `cx find --print` | ...and just print it: `cx ask "$(cx find --print api)" "..."` |
 
 ### Driving
 
@@ -154,6 +156,14 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 Targets are `host:project[/worktree][@session]`. A bare `project` resolves
 against `CX_DEFAULT_HOST`, or across every server when the name is unique —
 and if it's ambiguous, `cx` tells you rather than guessing.
+
+At a terminal the target is optional: `cx open`, `cx stop`, `cx nudge`,
+`cx code`, `cx forget`, `cx rm` and `cx wt rm` with no target offer a menu of
+what fits — live sessions for `stop` and `nudge`, projects for `rm`, and for
+`open` everything plus a "+ new session" entry. It is fzf when installed (with
+a preview read from the cache) and a numbered menu with a text filter when
+not. Scripts, pipes, `--json` and `-y` never see a menu: a missing target is
+still exit 3. `CX_PICKER=none` turns it off, `CX_PICKER=builtin` skips fzf.
 
 ---
 

@@ -11,6 +11,8 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 cmd_forget() {
   local target=""
@@ -23,6 +25,9 @@ ${C_BOLD}cx forget${C_RESET} — drop a finished session from cx peek, cx bar an
 
   cx forget <host>:<project>[/<worktree>]@<label>
   cx forget <host>:<project>[/<worktree>]          the unit's default session
+  cx forget                                        choose from a menu (at a terminal):
+                                                   sessions cx peek last saw finished,
+                                                   then every project and worktree
 
 A finished session stays in cx's lists for as long as its conversation exists,
 because that is how a driver knows there is work to revive. ${C_BOLD}forget${C_RESET} removes
@@ -49,12 +54,13 @@ EOF
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx forget <host>:<project>[@<label>]"
-    hint "see what has finished with: cx peek --all"
-    return 3
-  }
+  # Offers what the state cache last saw finished, then every unit; the
+  # confirmation below still stands between the menu and the change.
+  if [ -z "$target" ]; then
+    target=$(cx_target_or_pick finished forget \
+      "usage: cx forget <host>:<project>[@<label>]" \
+      "see what has finished with: cx peek --all") || return $?
+  fi
 
   cx_target_resolve "$target" || return $?
 

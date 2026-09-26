@@ -21,6 +21,7 @@ ${C_BOLD}cx wt${C_RESET} — git worktrees, for working on several tasks at once
   cx wt ls  [<host>[:<project>]]
   cx wt rm  <host>:<project>/<name> [--force]
   cx wt rm  <host>:<project> --merged
+  cx wt rm  [--merged]                at a terminal: choose from a menu
 
 A worktree is a separate checkout of the same repository on its own branch.
 Each one gets its own directory, so parallel Claude sessions never touch each
@@ -322,12 +323,17 @@ _wt_rm() {
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx wt rm <host>:<project>/<name> [--force]"
-    hint "   or: cx wt rm <host>:<project> --merged"
-    return 3
-  }
+  # At a terminal, offer the worktrees — or, for --merged, the projects.
+  # Sourced here rather than at the top so the picker stays local to rm.
+  if [ -z "$target" ]; then
+    # shellcheck source=../pick.sh
+    . "$CX_HOME/lib/pick.sh"
+    local kind=worktree
+    [ "$merged" = 1 ] && kind=project
+    target=$(cx_target_or_pick "$kind" "wt rm" \
+      "usage: cx wt rm <host>:<project>/<name> [--force]" \
+      "   or: cx wt rm <host>:<project> --merged") || return $?
+  fi
 
   if [ "$merged" = 1 ]; then
     [ "$force" = 1 ] && {

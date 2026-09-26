@@ -3,6 +3,8 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 cmd_stop() {
   local target="" all=0
@@ -19,6 +21,7 @@ ${C_BOLD}cx stop${C_RESET} — end a Claude session
   cx stop <host>:<project>/<worktree>     a worktree's default session
   cx stop <host>:<project> --all          every session of the project,
                                           its labelled ones and its worktrees'
+  cx stop                                 choose a live session from a menu
 
 Kills the tmux session. Anything Claude was doing stops; the conversation
 history is kept, so cx open resumes where it left off.
@@ -39,12 +42,16 @@ EOF
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx stop <host>:<project>[@<label>]"
-    hint "see what is running with: cx status"
-    return 3
-  }
+  # At a terminal, offer what is running — or, for --all, the projects and
+  # worktrees whose sessions it would end. Always asked, even with one
+  # candidate: stop does not confirm, so the menu is the confirmation.
+  if [ -z "$target" ]; then
+    local kind=session
+    [ "$all" = 1 ] && kind=unit
+    target=$(cx_target_or_pick --always-ask "$kind" stop \
+      "usage: cx stop <host>:<project>[@<label>]" \
+      "see what is running with: cx status") || return $?
+  fi
 
   cx_target_resolve "$target" || return $?
 

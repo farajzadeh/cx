@@ -43,6 +43,7 @@ bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/unit/pick.test.sh                # the interactive picker, fzf-less
+bash test/unit/find.test.sh                # cx find, and commands that pick a missing target
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -438,7 +439,9 @@ Create `lib/cmd/<name>.sh` defining `cmd_<name>`, source what it needs from
 `$CX_HOME/lib/`, and add a line to the usage text in `bin/cx`. Dispatch is
 automatic — `load_cmd` sources the file on demand. `resume.sh` and `shell.sh`
 are symlinks to `open.sh`; the same command in three modes. `worktree.sh` is a
-symlink to `wt.sh` the same way.
+symlink to `wt.sh` the same way, and so is `pick.sh` to `find.sh` (which is
+why `lib/cmd/pick.sh` defines `cmd_find`, not the picker — that is
+`lib/pick.sh`).
 
 Global flags (`-r`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`) are
 stripped from anywhere in the argv before the subcommand is chosen, so
@@ -460,7 +463,53 @@ not a usage error.
 
 The built-in menu reads from `/dev/tty` on fd 3, opened once — stdin is where
 the candidates came from, and reopening the file per read would re-read its
-first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`).
+first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`). Once per
+*question*, though: a flow that asks twice (a menu, then a label) reads the
+test file from its first line each time, so those tests choose keys that mean
+the right thing to every question — see `--new` in `test/unit/pick.test.sh`.
+
+`cx_pick_candidates KIND` builds rows without asking, so tests can check what
+would be offered. Kinds: `project`, `unit` (projects + worktrees), `worktree`,
+`session` (live tmux sessions, `@label` ones included), `any` (unit + session,
+one row per target), `finished` (sessions the state cache last saw `dead`,
+then every unit — what `cx forget` takes). Everything comes from the cached
+listing and the state cache **except live sessions**: a label exists only in
+tmux, so `session`/`any` fan the agent's `sessions` verb out in parallel (as
+`cx tabs` does), skipping hosts the cache remembers as down and warning about
+one that does not answer — silently, a failed host read as "nothing running".
+
+**The fzf preview never touches the network.** fzf re-runs it on every cursor
+move, so a slow one freezes the menu. `cx_pick_preview` (reached as the hidden
+`cx find --preview TARGET`) reads the cached listing at any age and the state
+file, and labels how old each is. It strips whitespace from its argument
+defensively: fzf 0.62 hands `{1}` over clean, but field placeholders have
+carried their delimiter in some versions.
+
+`cx_target_or_pick [--always-ask] [--new] KIND VERB [HINT...]` is the one
+place a command's missing target becomes a menu: not interactive → the same
+`no target given` + the command's own hints + exit 3 as before; cancel → a dim
+`cancelled` and 130. `--always-ask` suppresses the "only one candidate, so
+take it" shortcut for commands that act without confirming (`cx stop`) — and
+so does a pre-seeded `--query` that leaves one row, though text the human
+types still chooses a sole match. `--new` appends `+ new session…`, which asks for a unit and
+then a label checked by `_cx_target_label_ok`.
+
+`cx find [query]` (alias `cx pick`) offers `any`, then an action menu; each
+action is the ordinary `cmd_*` run through `load_cmd`, so find has no
+behaviour of its own to drift. `--print` prints only the target on stdout —
+the menu is on the terminal and every message on stderr, which is what makes
+`$(cx find --print)` work. It still needs `cx_pick_ok`: stdout being a pipe is
+fine, stdin and stderr must be the terminal.
+
+Which commands pick, and what they offer: `open`/`resume`/`shell` → `any` +
+`--new`; `code` → `unit`; `stop` → `session` (`unit` with `--all`), always
+asked; `nudge` → `session`, and then asks for the prompt on the terminal when
+stdin is one; `forget` → `finished`; `rm` → `project`; `wt rm` → `worktree`
+(`project` with `--merged`; pick.sh is sourced inside `_wt_rm` so the change
+stays local to it). **Not** `peek`, where no target already means "all", and
+not `ask`, which is the scriptable entry point — `cx ask "$(cx find --print)"`
+covers it. A new command that takes an existing target should use
+`cx_target_or_pick` in place of its `no target given` block.
 
 ## Exit codes
 
