@@ -24,7 +24,7 @@ _cx_env_snapshot() {
   for k in CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
     CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
-    CX_OPEN_AFTER_CREATE; do
+    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT; do
     eval "_v=\${$k+set}"
     if [ "${_v:-}" = set ]; then
       _CX_ENV_KEYS="$_CX_ENV_KEYS $k"
@@ -69,6 +69,8 @@ cx_config_load() {
   : "${CX_BAR_ICONS:=unicode}"
   : "${CX_SERVER_BAR:=1}"
   : "${CX_OPEN_AFTER_CREATE:=ask}"
+  : "${CX_LS_GROUP:=none}"
+  : "${CX_LS_SORT:=none}"
 
   # Guard against a malformed config turning into confusing arithmetic errors
   # deep inside the cache layer.
@@ -82,7 +84,7 @@ cx_config_load() {
   export CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
     CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
-    CX_OPEN_AFTER_CREATE
+    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT
   export CX_CONFIG_DIR CX_CONFIG_FILE CX_SSHD_DIR CX_CACHE_DIR
 }
 

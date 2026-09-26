@@ -14,13 +14,15 @@
 . "$CX_HOME/lib/target.sh"
 # shellcheck source=../create.sh
 . "$CX_HOME/lib/create.sh"
+# shellcheck source=../filter.sh
+. "$CX_HOME/lib/filter.sh"
 
 _wt_usage() {
   cat <<EOF
 ${C_BOLD}cx wt${C_RESET} — git worktrees, for working on several tasks at once
 
   cx wt add <host>:<project>/<name> [--branch B] [--from REF] [--open | -d]
-  cx wt ls  [<host>[:<project>]]
+  cx wt ls  [<host>[:<project>]] [-f PATTERN]
   cx wt rm  <host>:<project>/<name> [--force]
   cx wt rm  <host>:<project> --merged
   cx wt rm  [--merged]                at a terminal: choose from a menu
@@ -55,6 +57,8 @@ OPTIONS
   --merged      for rm: every worktree whose branch has nothing that is not
                 already in the project's branch, and that has no uncommitted
                 changes and no running session. Nothing unmerged is touched.
+  -f PATTERN    for ls: only worktrees whose name, branch, project or host
+                matches — case-insensitive text, or a glob with *, as in cx ls
 
 Removing a worktree never deletes its branch, so nothing committed is lost.
 Use plain git on the server if you want the branch gone too.
@@ -232,10 +236,18 @@ _wt_add() {
 }
 
 _wt_ls() {
-  local filter="" only_host="" only_project=""
+  local filter="" only_host="" only_project="" pattern=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
+      -f | --filter)
+        [ $# -ge 2 ] || {
+          err "$1 needs a pattern"
+          return 3
+        }
+        shift
+        pattern="$1"
+        ;;
       -h | --help)
         _wt_usage
         return 0
@@ -286,13 +298,25 @@ _wt_ls() {
   fi
   cx_spinner_stop
 
+  # The pattern sees the same fields a worktree row in `cx ls` offers, so
+  # `cx wt ls -f auth` and `cx ls auth` agree about which worktrees match.
+  local sel
+  # shellcheck disable=SC2016  # jq program text
+  sel="$CX_FILTER_JQ"'
+    def wts:
+      select(.ok) as $h
+      | .projects[]?
+      | select($p == "" or .name == $p)
+      | . as $proj
+      | .worktrees[]?
+      | select([$h.host, $proj.name, .name, .branch, "\($proj.name)/\(.name)",
+                "\($h.host):\($proj.name)/\(.name)"] | cx_any($pat))
+      | {h: $h, proj: $proj, w: .};
+  '
+
   local rows
-  rows=$(printf '%s\n' "$raw" | jq -r --arg p "$only_project" '
-    select(.ok) as $h
-    | .projects[]?
-    | select($p == "" or .name == $p)
-    | . as $proj
-    | .worktrees[]?
+  rows=$(printf '%s\n' "$raw" | jq -r --arg p "$only_project" --arg pat "$pattern" "$sel"'
+    wts | .h as $h | .proj as $proj | .w
     | [ $h.host,
         ($proj.name + "/" + .name),
         (.branch // "—"),
@@ -303,16 +327,17 @@ _wt_ls() {
       ] | @tsv' 2>/dev/null)
 
   if [ "${CX_JSON:-0}" = 1 ]; then
-    printf '%s\n' "$raw" | jq -s --arg p "$only_project" '{
-      worktrees: [ .[] | select(.ok) as $h | .projects[]?
-                   | select($p == "" or .name == $p) | . as $proj
-                   | .worktrees[]? | . + {host: $h.host, project: $proj.name} ]
+    printf '%s\n' "$raw" | jq -s --arg p "$only_project" --arg pat "$pattern" "$sel"'{
+      worktrees: [ .[] | wts | .w + {host: .h.host, project: .proj.name} ]
     }'
     return 0
   fi
 
   if [ -z "$rows" ]; then
-    if [ -n "$only_project" ]; then
+    if [ -n "$pattern" ]; then
+      note "No worktrees match $pattern."
+      return 0
+    elif [ -n "$only_project" ]; then
       note "No worktrees for $only_project."
     else
       note "No worktrees yet."

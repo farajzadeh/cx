@@ -111,20 +111,31 @@ cx_projects_get() {
   return 1
 }
 
-# cx_projects_fanout [--git] — every host, concurrently.
+# cx_projects_fanout [--git] [HOST...] — every host (or just these), concurrently.
 #
 # Emits one JSON object per line: the payload with a `host` field added, or an
 # `error` field for hosts that could not be reached. Errors are reported
 # rather than dropped so `cx ls` can show a partial view and say which servers
 # are missing from it — a silently short list would look authoritative.
 #
+# Naming hosts narrows the fan-out rather than filtering its result, so
+# `cx ls --host web1,web2` never connects to web3 — and never reports web3
+# unreachable either, since it was not asked about.
+#
 # Concurrency uses background jobs writing to per-host files, then a plain
 # `wait`. `wait -n` would be tidier but is bash 4.3+, and this must run on 3.2.
 cx_projects_fanout() {
   local git_flag="" hosts h tmp safe down_note
-  [ "${1:-}" = "--git" ] && git_flag="--git"
+  if [ "${1:-}" = "--git" ]; then
+    git_flag="--git"
+    shift
+  fi
 
-  hosts=$(cx_hosts_list)
+  if [ $# -gt 0 ]; then
+    hosts=$(printf '%s\n' "$@")
+  else
+    hosts=$(cx_hosts_list)
+  fi
   [ -n "$hosts" ] || return 0
 
   tmp=$(cx_mktempdir)

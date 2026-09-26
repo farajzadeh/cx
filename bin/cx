@@ -125,7 +125,8 @@ ${C_BOLD}USAGE${C_RESET}
 ${C_BOLD}SERVERS${C_RESET}
   host add [--alias A --hostname H ...]   add a server (interactive by default)
   host import <ssh-alias>                 adopt a host from your ~/.ssh/config
-  host ls | rm | edit | test <alias>      manage servers
+  host ls [pattern] [--down]              list servers
+  host rm | edit | test <alias>           manage servers
   provision <host> | --all                install or update the agent
   login <host>                            one-time Claude Code sign-in
   doctor [host]                           check requirements and connectivity
@@ -134,13 +135,15 @@ ${C_BOLD}PROJECTS${C_RESET}
   new <host>:<name> [--repo URL]          create and register a project
     --open | -d                           ...then open a session in it (-d: detached)
   new                                     at a terminal: asks for each part
-  ls [host] [--git]                       list projects and worktrees
+  ls [host] [pattern] [--git]             list projects and worktrees
+    --live | --active D | --idle D        ...filtered (see cx ls --help)
+    --group host | --sort KEY             ...grouped by server, or sorted
   rm <target> [--purge]                   unregister (--purge deletes files)
 
 ${C_BOLD}PARALLEL WORK${C_RESET}
   wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
     --open | -d                           ...then open a session in it
-  wt ls [host[:project]]                  list worktrees
+  wt ls [host[:project]] [-f PATTERN]     list worktrees
   wt rm <target>/<name> [--force]         remove one (its branch is kept)
   wt rm <target> --merged                 remove every worktree that is merged
                                           (worktree is the long spelling of wt)

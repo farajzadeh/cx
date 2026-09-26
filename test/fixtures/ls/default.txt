@@ -1,0 +1,12 @@
+HOST  PROJECT          BRANCH                SESSIONS  ACTIVE  LIVE  REPO
+web1  api              main                  3         10m     ●2    gh:me/api
+        api/authfix    authfix               1         2h      ●     
+        api/docs       docs-update (merged)  0         —             
+web1  site             dev                   0         —             —
+web1  legacy           master                5         10d           gl:x/legacy
+web2  blog             main                  1         3h            —
+        blog/redesign  redesign              2         1m      ●     
+web2  Api-Gateway      main                  0         —             —
+
+cx: web3 unreachable — its projects are not shown
+    → diagnose with: cx host test <host>

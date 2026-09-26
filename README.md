@@ -117,6 +117,7 @@ show it. It never touches the network: it reads what cx last saw, so run
 | `cx host add` | add a server, with connection diagnosis and key setup |
 | `cx host import <alias>` | adopt a host already in your `~/.ssh/config` |
 | `cx host ls` / `test` / `edit` / `rm` | manage servers |
+| `cx host ls --down` | which servers did not answer last time (from cache) |
 | `cx provision <host>` / `--all` | install or update the agent (idempotent) |
 | `cx login <host>` | one-time Claude Code sign-in |
 | `cx doctor` | check this machine and every server |
@@ -131,6 +132,9 @@ show it. It never touches the network: it reads what cx last saw, so run
 | `cx new web1:api --open` | ...and attach a session in it (`-d`: start one detached) |
 | `cx new` | at a terminal: asks for the server, the name and a repo |
 | `cx ls [host] [--git]` | list projects and worktrees across servers |
+| `cx ls [host] <pattern>` | only what matches: project, worktree, branch, repo |
+| `cx ls --live` / `--active 2h` / `--idle 7d` | only what is running, recent, or stale |
+| `cx ls --group host --sort active` | a heading per server; most recent first |
 | `cx rm web1:api [--purge]` | unregister (`--purge` also deletes files) |
 
 ### Working
@@ -228,6 +232,30 @@ over SSH shows up in `cx ls`, and one you delete by hand disappears.
 
 And they nest: `cx open web1:api/authfix@tests` is a second conversation
 inside a worktree.
+
+### Finding things again
+
+Once there are a few of each, `cx ls` narrows down. The flags compose, and
+`--json` honours all of them in its usual shape:
+
+```sh
+cx ls auth                  # any project, worktree, branch or repo containing "auth"
+cx ls web1 'api*'           # on web1, names starting with api (* makes it a glob)
+cx ls --live                # something is running in it
+cx ls --active 2h           # touched in the last two hours
+cx ls --idle 30d            # not touched in a month: candidates for cx rm
+cx ls --dirty               # uncommitted changes (implies --git)
+cx ls --host web1,web2      # just these servers; the rest are never contacted
+cx ls --group host          # a heading per server instead of a HOST column
+cx ls --sort active         # most recent first; also name, sessions, host
+cx wt ls -f fix             # the same pattern, over worktrees only
+```
+
+A project that matches keeps all its worktrees; one that matches only through
+a worktree is shown as the heading for just that worktree. A single word is a
+host when a host by that name is configured and a pattern otherwise — use `-f`
+to search for text that happens to be a host's name. `CX_LS_GROUP` and
+`CX_LS_SORT` set the defaults.
 
 ---
 

@@ -117,6 +117,27 @@ cx_cache_down_age() {
   cx_age "$(_cc_down "$1")" 2>/dev/null || printf ''
 }
 
+# cx_cache_state HOST — what the last contact said: up, down, or unknown.
+#
+# Read from the files alone, with no TTL and no side effects: this answers
+# "how did it go last time", for `cx host ls`, and must never connect. The
+# down mark outranks a listing because a listing outlives the failure after
+# it — a server that answered yesterday and not an hour ago is down.
+#
+# It is a report, not a probe. An expired mark is usually removed on the way
+# to a fresh fetch, which leaves a new mark or a new listing behind; but
+# cx_cache_is_down also drops it when only checking (`cx cache status`,
+# `cx bar`), and then the older listing speaks again. `cx ls -r` settles it.
+cx_cache_state() {
+  if [ -f "$(_cc_down "$1")" ]; then
+    printf 'down'
+  elif [ -s "$(_cc_list "$1")" ]; then
+    printf 'up'
+  else
+    printf 'unknown'
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Freshness
 # ---------------------------------------------------------------------------
