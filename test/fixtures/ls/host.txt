@@ -1,0 +1,4 @@
+HOST  PROJECT          BRANCH    SESSIONS  ACTIVE  LIVE  REPO
+web2  blog             main      1         3h            —
+        blog/redesign  redesign  2         1m      ●     
+web2  Api-Gateway      main      0         —             —

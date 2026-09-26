@@ -31,6 +31,7 @@ bash test/unit/compat.test.sh              # a single test file
 bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
+bash test/unit/ls.test.sh                  # cx ls output, pinned byte for byte
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
 bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux

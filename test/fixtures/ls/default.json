@@ -1,0 +1,103 @@
+{
+  "servers": [
+    {
+      "host": "web1",
+      "ok": true,
+      "error": null
+    },
+    {
+      "host": "web2",
+      "ok": true,
+      "error": null
+    },
+    {
+      "host": "web3",
+      "ok": false,
+      "error": "unreachable (remembered; retrying in <60s)"
+    }
+  ],
+  "projects": [
+    {
+      "name": "api",
+      "branch": "main",
+      "repo": "git@github.com:me/api.git",
+      "sessions": 3,
+      "last_active": M10,
+      "tmux_live": true,
+      "tmux_count": 2,
+      "worktrees": [
+        {
+          "name": "authfix",
+          "branch": "authfix",
+          "sessions": 1,
+          "last_active": H2,
+          "tmux_live": true,
+          "tmux_count": 1,
+          "merged": false
+        },
+        {
+          "name": "docs",
+          "branch": "docs-update",
+          "sessions": 0,
+          "last_active": null,
+          "tmux_live": false,
+          "tmux_count": 0,
+          "merged": true
+        }
+      ],
+      "host": "web1"
+    },
+    {
+      "name": "site",
+      "branch": "dev",
+      "repo": null,
+      "sessions": 0,
+      "last_active": null,
+      "tmux_live": false,
+      "tmux_count": 0,
+      "worktrees": [],
+      "host": "web1"
+    },
+    {
+      "name": "legacy",
+      "branch": "master",
+      "repo": "https://gitlab.com/x/legacy.git",
+      "sessions": 5,
+      "last_active": D10,
+      "tmux_live": false,
+      "tmux_count": 0,
+      "worktrees": [],
+      "host": "web1"
+    },
+    {
+      "name": "blog",
+      "branch": "main",
+      "repo": null,
+      "sessions": 1,
+      "last_active": H3,
+      "tmux_live": false,
+      "tmux_count": 0,
+      "worktrees": [
+        {
+          "name": "redesign",
+          "branch": "redesign",
+          "sessions": 2,
+          "last_active": M1,
+          "tmux_live": true,
+          "tmux_count": 1
+        }
+      ],
+      "host": "web2"
+    },
+    {
+      "name": "Api-Gateway",
+      "branch": "main",
+      "repo": null,
+      "sessions": 0,
+      "last_active": null,
+      "tmux_live": false,
+      "tmux_count": 0,
+      "host": "web2"
+    }
+  ]
+}
