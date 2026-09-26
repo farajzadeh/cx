@@ -318,18 +318,25 @@ cx_pick_live() {
   [ -n "$hosts" ] || return 0
   dir=$(cx_mktempdir) || return 0
 
+  local asked=""
   for h in $hosts; do
     [ -z "$only" ] || [ "$h" = "$only" ] || continue
     cx_cache_is_down "$h" && continue
+    asked="$asked $h"
     safe=$(cx_sanitize "$h")
     (cx_agent "$h" sessions >"$dir/$safe.json" 2>/dev/null ||
       rm -f "$dir/$safe.json") &
   done
   wait
 
-  for h in $hosts; do
+  for h in $asked; do
     safe=$(cx_sanitize "$h")
-    [ -s "$dir/$safe.json" ] || continue
+    # Said, not hidden: otherwise one server failing to answer reads as
+    # "nothing is running", which is a different and wrong statement.
+    [ -s "$dir/$safe.json" ] || {
+      warn "$h did not answer — its live sessions are not listed"
+      continue
+    }
     jq -r --arg h "$h" '
       .sessions[]? | select(.target != null)
       | "\($h):\(.target)\t\(.attached)"' "$dir/$safe.json" 2>/dev/null || true

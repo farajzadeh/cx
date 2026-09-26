@@ -263,8 +263,9 @@ assert_contains "$(cat "$TMP/agent.log")" "web1 sessions" "...while the others a
 
 it "a host that fails is left out, not fatal"
 cx_cache_clear_down web2
-got=$(cx_pick_candidates session | cut -f1 | tr '\n' ' ')
+got=$(cx_pick_candidates session 2>"$TMP/err" | cut -f1 | tr '\n' ' ')
 assert_eq "$got" "web1:api web1:api@review web1:api/authfix "
+assert_contains "$(cat "$TMP/err")" "web2 did not answer" "...and said so"
 rm -f "$CX_SSHD_DIR/web2.conf"
 
 describe "the preview"

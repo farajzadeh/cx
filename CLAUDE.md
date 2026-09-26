@@ -475,7 +475,8 @@ one row per target), `finished` (sessions the state cache last saw `dead`,
 then every unit — what `cx forget` takes). Everything comes from the cached
 listing and the state cache **except live sessions**: a label exists only in
 tmux, so `session`/`any` fan the agent's `sessions` verb out in parallel (as
-`cx tabs` does), skipping hosts the cache remembers as down.
+`cx tabs` does), skipping hosts the cache remembers as down and warning about
+one that does not answer — silently, a failed host read as "nothing running".
 
 **The fzf preview never touches the network.** fzf re-runs it on every cursor
 move, so a slow one freezes the menu. `cx_pick_preview` (reached as the hidden
