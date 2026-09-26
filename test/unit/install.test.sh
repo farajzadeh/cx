@@ -135,4 +135,36 @@ assert_contains "$_out" "own=mine"
 it "and never removes one"
 assert_contains "$_out" "kept=mine"
 
+describe "install_tree"
+
+# A source tree with the shape of the repository, copied into a throwaway
+# CX_SHARE. The demo GIFs live under docs/, which ships; they must not.
+_itmp=$(mktemp -d "${TMPDIR:-/tmp}/cx-inst.XXXXXX")
+(
+  _isrc="$_itmp/src"
+  mkdir -p "$_isrc/bin" "$_isrc/lib" "$_isrc/server" "$_isrc/completions" \
+    "$_isrc/docs/media" "$_isrc/docs/demo/tapes" "$_isrc/test"
+  : >"$_isrc/bin/cx"
+  : >"$_isrc/config.example"
+  : >"$_isrc/docs/cx-driver.agent.md"
+  : >"$_isrc/docs/media/hero.gif"
+  : >"$_isrc/docs/demo/record.sh"
+  : >"$_isrc/test/run.sh"
+  CX_SHARE="$_itmp/share"
+  script_dir() { printf '%s' "$_isrc"; }
+  install_tree >/dev/null
+  cd "$CX_SHARE" && find . -type f | sort
+) >"$_itmp/out" 2>&1
+_out=$(cat "$_itmp/out")
+rm -rf "$_itmp"
+
+it "ships the docs a user needs"
+assert_contains "$_out" "./docs/cx-driver.agent.md"
+it "does not ship the demo GIFs"
+assert_not_contains "$_out" "docs/media"
+it "does not ship the pipeline that records them"
+assert_not_contains "$_out" "docs/demo"
+it "does not ship the tests"
+assert_not_contains "$_out" "./test/"
+
 summary

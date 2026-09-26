@@ -371,6 +371,12 @@ install_tree() {
       [ -d "$src/docs" ] && paths="$paths docs"
       # shellcheck disable=SC2086
       (cd "$src" && tar -cf - $paths) | (cd "$CX_SHARE" && tar -xf -)
+      # docs/ ships for the driver subagent and the reference pages, but not
+      # the README's GIFs (several MB) or the pipeline that records them —
+      # a runtime has no use for either. Removed after the copy rather than
+      # excluded from it, because tar's --exclude matches differently in GNU
+      # and BSD tar. Only ever in the copy: $CX_SHARE is never $src here.
+      rm -rf "$CX_SHARE/docs/media" "$CX_SHARE/docs/demo"
       row ok "source" "copied from $src"
     fi
   else

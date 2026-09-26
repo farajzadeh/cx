@@ -61,6 +61,8 @@ docker run --rm -v "$PWD":/w -w /w bash:3.2 bash test/unit/compat.test.sh
 
 ./test/doc-audit.sh                        # run what the docs promise, on a REAL server
 CX_AUDIT_HOST=web1 ./test/doc-audit.sh     # ...against a different one
+
+docs/demo/record.sh [name...]              # re-record docs/media/*.gif (Docker only; see docs/demo/README.md)
 ```
 
 CI additionally runs `shellcheck` and `shfmt -d -i 2 -ci`. Run them through

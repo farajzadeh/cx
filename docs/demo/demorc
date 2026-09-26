@@ -1,0 +1,25 @@
+# docs/demo/demorc — the shell the demo GIFs are recorded in.
+#
+# Sourced by a hidden line at the top of every tape (VHS starts bash with no
+# rc file). A short prompt, cx on PATH, and bash completion the way
+# install.sh sets it up: the bash-completion package, plus cx's own script.
+# shellcheck shell=bash
+
+export CX_HOME=/cx
+export PATH="/cx/bin:$PATH"
+export LANG=C.UTF-8
+export HISTFILE=/dev/null
+
+PS1='\[\e[38;5;114m\]laptop\[\e[0m\] \[\e[38;5;110m\]~\[\e[0m\] \$ '
+
+# Muted colours for fzf that sit with the terminal theme.
+export FZF_DEFAULT_OPTS='--color=bg+:#2a2f3a,hl:#e5c07b,hl+:#e5c07b,pointer:#98c379,prompt:#61afef,info:#5c6370,border:#3e4452'
+
+if [ -f /usr/share/bash-completion/bash_completion ]; then
+  # shellcheck disable=SC1091
+  . /usr/share/bash-completion/bash_completion
+fi
+eval "$(cx completion bash)"
+# List the choices on the first TAB rather than the second: a GIF cannot show
+# the bell a first, ambiguous TAB rings.
+bind 'set show-all-if-ambiguous on'
