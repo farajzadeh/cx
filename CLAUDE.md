@@ -43,6 +43,7 @@ bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/unit/pick.test.sh                # the interactive picker, fzf-less
+bash test/unit/ask.test.sh                 # cx_ask_line / cx_ask_yn, the terminal questions
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -461,6 +462,14 @@ not a usage error.
 The built-in menu reads from `/dev/tty` on fd 3, opened once — stdin is where
 the candidates came from, and reopening the file per read would re-read its
 first line in the tests (`CX_PICK_TTY_IN` / `CX_PICK_TTY_OUT`).
+
+`cx_ask_line` and `cx_ask_yn`, appended to the same file, ask for a line of
+text or a yes/no under the same gate and the same test hooks. They leave the
+answer in `CX_ASK_REPLY` instead of printing it, so they run in the caller's
+shell rather than a `$(...)` subshell — which is what keeps their input open
+on fd 4 from one question to the next. fd 4, because the picker closes 3 when
+it returns and a question asked after a pick must not find its input gone.
+End of input (Ctrl-D) is 130, like a cancelled pick.
 
 ## Exit codes
 

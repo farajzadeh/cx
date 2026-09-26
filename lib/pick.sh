@@ -258,3 +258,105 @@ cx_pick_target() {
   }
   printf '%s\n' "$rows" | cx_pick --prompt "$prompt"
 }
+
+# ---------------------------------------------------------------------------
+# Questions
+# ---------------------------------------------------------------------------
+#
+# cx_ask_line and cx_ask_yn — a line of text, or a yes or no, from the human.
+# The same rule as the picker: callers ask only when cx_pick_ok says someone
+# is there, and a script keeps getting exit 3 for whatever it left out.
+#
+# The answer is left in CX_ASK_REPLY rather than printed, so the functions run
+# in the caller's shell instead of a command substitution's subshell. That is
+# what lets the input stay open on fd 4 from one question to the next: a
+# terminal does not care, but CX_PICK_TTY_IN — the tests' stand-in for one —
+# is a plain file, and reopening it for every question would answer each of
+# them with its first line.
+#
+# fd 4, not the picker's 3: the picker closes 3 when it returns, and a
+# question asked after a pick must not find its input gone.
+
+CX_ASK_REPLY=""
+_CX_ASK_IN=""
+
+_cx_ask_open() {
+  local tty_in="${CX_PICK_TTY_IN:-/dev/tty}"
+  [ "$_CX_ASK_IN" = "$tty_in" ] && return 0
+  cx_ask_reset
+  # Braces, so the 2>/dev/null does not outlive the exec (see the picker).
+  { exec 4<"$tty_in"; } 2>/dev/null || return 1
+  _CX_ASK_IN="$tty_in"
+}
+
+# cx_ask_reset — let go of the input. Called before cx hands the terminal to
+# something else, and by a test that has just rewritten its answers.
+cx_ask_reset() {
+  if [ -n "$_CX_ASK_IN" ]; then
+    exec 4<&-
+    _CX_ASK_IN=""
+  fi
+  return 0
+}
+
+# _cx_ask_read — one line from the terminal into CX_ASK_REPLY, trimmed.
+# A last line with no newline still counts; only a true end of input fails.
+_cx_ask_read() {
+  local line=""
+  IFS= read -r line <&4 || [ -n "$line" ] || return 1
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  CX_ASK_REPLY="$line"
+}
+
+# cx_ask_line PROMPT [DEFAULT] — ask for a line of text.
+#
+# An empty answer takes DEFAULT, which is shown in brackets. Returns
+# CX_PICK_CANCEL at end of input (Ctrl-D), the same "backed out" a picker
+# gives, so a caller can treat every way of saying no alike.
+cx_ask_line() {
+  local prompt="$1" def="${2:-}" tty="${CX_PICK_TTY_OUT:-/dev/tty}"
+  CX_ASK_REPLY=""
+  _cx_ask_open || return "$CX_PICK_CANCEL"
+  if [ -n "$def" ]; then
+    printf '%s%s%s [%s]: ' "$C_BOLD" "$prompt" "$C_RESET" "$def" >>"$tty"
+  else
+    printf '%s%s%s: ' "$C_BOLD" "$prompt" "$C_RESET" >>"$tty"
+  fi
+  _cx_ask_read || {
+    printf '\n' >>"$tty"
+    return "$CX_PICK_CANCEL"
+  }
+  [ -n "$CX_ASK_REPLY" ] || CX_ASK_REPLY="$def"
+  return 0
+}
+
+# cx_ask_yn PROMPT DEFAULT — yes (0) or no (1). DEFAULT is y or n, and is
+# what an empty answer means; the capital in [Y/n] says which. Anything else
+# is asked again rather than guessed at. End of input is CX_PICK_CANCEL.
+cx_ask_yn() {
+  local prompt="$1" def="${2:-n}" tty="${CX_PICK_TTY_OUT:-/dev/tty}" choices="y/N"
+  case "$def" in
+    y | Y)
+      def=y
+      choices="Y/n"
+      ;;
+    *) def=n ;;
+  esac
+  _cx_ask_open || return "$CX_PICK_CANCEL"
+  while :; do
+    printf '%s%s%s [%s] ' "$C_BOLD" "$prompt" "$C_RESET" "$choices" >>"$tty"
+    _cx_ask_read || {
+      printf '\n' >>"$tty"
+      return "$CX_PICK_CANCEL"
+    }
+    case "$CX_ASK_REPLY" in
+      '') [ "$def" = y ] && return 0 ;;
+      y | Y | yes | YES | Yes) return 0 ;;
+    esac
+    case "$CX_ASK_REPLY" in
+      '' | n | N | no | NO | No) return 1 ;;
+    esac
+    printf '  %splease answer y or n%s\n' "$C_YELLOW" "$C_RESET" >>"$tty"
+  done
+}
