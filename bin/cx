@@ -125,7 +125,8 @@ ${C_BOLD}USAGE${C_RESET}
 ${C_BOLD}SERVERS${C_RESET}
   host add [--alias A --hostname H ...]   add a server (interactive by default)
   host import <ssh-alias>                 adopt a host from your ~/.ssh/config
-  host ls | rm | edit | test <alias>      manage servers
+  host ls [pattern] [--down]              list servers
+  host rm | edit | test <alias>           manage servers
   provision <host> | --all                install or update the agent
   login <host>                            one-time Claude Code sign-in
   doctor [host]                           check requirements and connectivity

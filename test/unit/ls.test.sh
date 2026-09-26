@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for `cx ls`: its plain output, pinned, and its filters,
-# grouping and sorting.
+# Unit tests for narrowing listings: `cx ls` filters, grouping and sorting,
+# and the filters on `cx host ls`.
 #
 # Everything is served from cached listings under CX_FORCE_STALE=1, as in
 # test/unit/pick.test.sh, so no server is contacted: web3 is marked down,
@@ -313,5 +313,37 @@ assert_eq "$(cxo ls web1 a --live --sort name --group host | names)" "[web1] api
 it "every filter must pass"
 assert_eq "$(cxo ls blog --live --active 5m | names)" "blog blog/redesign "
 assert_eq "$(cxo ls blog --live --idle 5m | names)" "" "a contradiction leaves nothing"
+
+describe "cx host ls"
+
+if cx_have ssh; then
+  it "shows each server's project count and state from the cache"
+  out=$(cxo host ls | tr -s ' ')
+  assert_contains "$out" "web1 managed me@192.0.2.1 projects 3 up"
+  assert_contains "$out" "web3 managed me@192.0.2.3 projects — down" \
+    "an unreachable one"
+
+  it "a pattern narrows it"
+  assert_eq "$(cxo host ls 'web[12]' | wc -l | tr -d ' ')" 1 "[ is literal: no match, no table"
+  assert_eq "$(cxo --json host ls 192.0.2.2 | jq -r '[.[].alias] | join(" ")')" "web2" "by address"
+  assert_eq "$(cxo --json host ls -f 'w*1' | jq -r '[.[].alias] | join(" ")')" "web1" "a glob"
+
+  it "--reachable and --down"
+  assert_eq "$(cxo --json host ls --reachable | jq -r '[.[].alias] | join(" ")')" "web1 web2"
+  assert_eq "$(cxo --json host ls --down | jq -r '[.[].alias] | join(" ")')" "web3" "--down"
+
+  it "--json gains state and projects, and keeps the rest"
+  assert_eq "$(cxo --json host ls web1 | jq -c '.[0] | [.alias, .hostname, .user, .port, .state, .projects]')" \
+    '["web1","192.0.2.1","me","22","up",3]'
+
+  it "says so when nothing matches"
+  assert_contains "$(cx host ls zzz)" "No servers match"
+
+  it "--reachable and --down do not mix, 3"
+  assert_eq "$(rc_of host ls --reachable --down)" 3
+else
+  it "cx host ls needs ssh -G"
+  skip "ssh unavailable"
+fi
 
 summary

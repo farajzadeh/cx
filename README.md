@@ -100,6 +100,7 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx host add` | add a server, with connection diagnosis and key setup |
 | `cx host import <alias>` | adopt a host already in your `~/.ssh/config` |
 | `cx host ls` / `test` / `edit` / `rm` | manage servers |
+| `cx host ls --down` | which servers did not answer last time (from cache) |
 | `cx provision <host>` / `--all` | install or update the agent (idempotent) |
 | `cx login <host>` | one-time Claude Code sign-in |
 | `cx doctor` | check this machine and every server |

@@ -9,6 +9,8 @@
 . "$CX_HOME/lib/hosts.sh"
 # shellcheck source=../remote.sh
 . "$CX_HOME/lib/remote.sh"
+# shellcheck source=../filter.sh
+. "$CX_HOME/lib/filter.sh"
 
 host_usage() {
   cat <<EOF
@@ -16,7 +18,7 @@ ${C_BOLD}cx host${C_RESET} — manage servers
 
   cx host add [OPTIONS]        add a server (interactive when no options given)
   cx host import <ssh-alias>   adopt a host already in your ~/.ssh/config
-  cx host ls                   list servers
+  cx host ls [pattern]         list servers (--reachable, --down; see --help)
   cx host test <alias>         check connectivity and agent status
   cx host edit <alias>         edit the definition in \$EDITOR
   cx host rm <alias>           remove (the server itself is untouched)
@@ -304,8 +306,80 @@ _host_import() {
 # ls
 # ---------------------------------------------------------------------------
 
+_host_ls_usage() {
+  cat <<EOF
+${C_BOLD}cx host ls${C_RESET} — list servers
+
+  cx host ls              every configured server
+  cx host ls <pattern>    only those matching (also: -f PATTERN)
+  cx host ls --reachable  only those that answered last time
+  cx host ls --down       only those that did not
+
+The pattern is matched against the alias, the address (user@hostname), the
+kind and the project root, case-insensitively: plain text anywhere, or a glob
+with ${C_BOLD}*${C_RESET} over the whole field — as in cx ls.
+
+PROJECTS and STATE come from the cache and never cost a connection: the
+project count from the last listing, and whether the last contact succeeded
+(${C_BOLD}up${C_RESET}), failed (${C_BOLD}down${C_RESET}), or has not happened since the cache was cleared (—).
+They report the last attempt rather than probing — cx ls -r asks again, and
+cx host test <alias> diagnoses one.
+EOF
+}
+
+# _host_addr ALIAS — "hostname<TAB>user<TAB>port" from ONE `ssh -G`.
+# cx_host_field costs an ssh process per field, and a listing wants three.
+_host_addr() {
+  local fflag=""
+  [ -n "${CX_SSH_CONFIG:-}" ] && fflag="-F $CX_SSH_CONFIG"
+  # shellcheck disable=SC2086
+  ssh $fflag -G "$1" 2>/dev/null | awk '
+    tolower($1) == "hostname" && h == "" { h = $2 }
+    tolower($1) == "user"     && u == "" { u = $2 }
+    tolower($1) == "port"     && p == "" { p = $2 }
+    END { printf "%s\t%s\t%s", h, u, p }'
+}
+
 _host_ls() {
-  local hosts
+  local pattern="" want="" hosts h counts
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f | --filter)
+        [ $# -ge 2 ] || {
+          err "$1 needs a pattern"
+          return 3
+        }
+        shift
+        pattern="$1"
+        ;;
+      --reachable | --down)
+        [ -z "$want" ] || {
+          err "--reachable and --down do not mix"
+          return 3
+        }
+        want=up
+        [ "$1" = --down ] && want=down
+        ;;
+      -h | --help)
+        _host_ls_usage
+        return 0
+        ;;
+      -*)
+        err "unknown option: $1"
+        return 3
+        ;;
+      *)
+        [ -z "$pattern" ] || {
+          err "only one pattern at a time (have: $pattern)"
+          return 3
+        }
+        pattern="$1"
+        ;;
+    esac
+    shift
+  done
+
   hosts=$(cx_hosts_list)
 
   if [ -z "$hosts" ]; then
@@ -314,30 +388,45 @@ _host_ls() {
     return 0
   fi
 
-  if [ "${CX_JSON:-0}" = 1 ]; then
-    printf '%s\n' "$hosts" | while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      jq -n --arg alias "$h" \
-        --arg kind "$(cx_host_kind "$h")" \
-        --arg hostname "$(cx_host_field "$h" hostname)" \
-        --arg user "$(cx_host_field "$h" user)" \
-        --arg port "$(cx_host_field "$h" port)" \
-        --arg root "$(cx_host_root "$h")" \
-        '{alias:$alias, kind:$kind, hostname:$hostname, user:$user, port:$port, root:$root}'
-    done | jq -s .
-    return 0
-  fi
+  # Every cached listing in one jq rather than one jq per host. Each entry
+  # names its own host, so the file names need no decoding. With no listing
+  # at all the glob stays literal, which jq reports and 2>/dev/null drops.
+  counts=$(jq -n '[inputs | {(.host): (.projects | length)}] | add // {}' \
+    "$(cx_cache_dir)"/list/*.json 2>/dev/null) || counts='{}'
+  [ -n "$counts" ] || counts='{}'
 
-  {
-    printf 'HOST\tKIND\tADDRESS\tROOT\n'
-    printf '%s\n' "$hosts" | while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      printf '%s\t%s\t%s@%s\t%s\n' \
-        "$h" "$(cx_host_kind "$h")" \
-        "$(cx_host_field "$h" user)" "$(cx_host_field "$h" hostname)" \
-        "$(cx_host_root "$h")"
-    done
-  } | cx_table
+  # One TSV line per host from the shell, then one jq that filters and
+  # formats both the JSON and the table, so the two cannot disagree.
+  local out
+  out=$(printf '%s\n' "$hosts" | while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$h" "$(cx_host_kind "$h")" "$(_host_addr "$h")" \
+      "$(cx_host_root "$h")" "$(cx_cache_state "$h")"
+  done | jq -Rrs --arg pat "$pattern" --arg want "$want" --argjson counts "$counts" \
+    --argjson json "$([ "${CX_JSON:-0}" = 1 ] && printf true || printf false)" \
+    "$CX_FILTER_JQ"'
+    [ split("\n")[] | select(. != "") | split("\t")
+      | { alias: .[0], kind: .[1], hostname: .[2], user: .[3], port: .[4],
+          root: .[5], state: .[6], projects: $counts[.[0]] } ]
+    | map(select([.alias, .kind, .hostname, "\(.user)@\(.hostname)", .root]
+                 | cx_any($pat))
+          | select($want == "" or .state == $want))
+    | if $json then .
+      elif length == 0 then empty
+      else
+        (["HOST", "KIND", "ADDRESS", "ROOT", "PROJECTS", "STATE"] | @tsv),
+        (.[] | [ .alias, .kind, "\(.user)@\(.hostname)", .root,
+                 (if .projects == null then "—" else (.projects | tostring) end),
+                 (if .state == "unknown" then "—" else .state end) ] | @tsv)
+      end')
+
+  if [ "${CX_JSON:-0}" = 1 ]; then
+    printf '%s\n' "$out"
+  elif [ -z "$out" ]; then
+    note "No servers match."
+  else
+    printf '%s\n' "$out" | cx_table
+  fi
 }
 
 # ---------------------------------------------------------------------------

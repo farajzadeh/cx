@@ -32,7 +32,7 @@ bash test/unit/target.test.sh              # the target grammar, pure and fast
 bash test/unit/activity.test.sh            # session state + the transcript reader
 bash test/unit/goal.test.sh                # the goal store
 bash test/unit/filter.test.sh              # pattern matching and durations
-bash test/unit/ls.test.sh                  # cx ls: pinned output, filters, --group, --sort
+bash test/unit/ls.test.sh                  # cx ls filters, --group, --sort; host ls
 bash test/unit/bar.test.sh                 # the status bar's one line
 bash test/unit/open.test.sh                # what cx open does to your tmux
 bash test/unit/tabs.test.sh                # cx tabs, against a stubbed tmux
