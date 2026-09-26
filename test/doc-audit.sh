@@ -101,7 +101,7 @@ rc 3 "$CX" open
 rc 3 "$CX" nudge
 rc 3 "$CX" goal
 
-grp "the target grammar (README: Targets)"
+grp "the target grammar (README: Commands — targets)"
 "$CX" -y rm "$T" --purge >/dev/null 2>&1
 rc 0 "$CX" new "$T"
 rc 4 "$CX" new "$T"
@@ -116,7 +116,7 @@ rc 0 "$CX" wt add "$T/authfix"
 out "authfix" "$CX" wt ls "$H:$P"
 rc 0 "$CX" wt rm "$T/authfix" --force
 
-grp "goals (README: Definitions of done)"
+grp "goals (wiki: Driving-Sessions)"
 printf 'the tests pass' | "$CX" goal new docaudit-goal --member "$P" >/dev/null 2>&1
 js '.dod' 'the tests pass' "$CX" --json goal show docaudit-goal
 js '.state' 'active' "$CX" --json goal show docaudit-goal
@@ -129,13 +129,13 @@ js '.state' 'paused' "$CX" --json goal show docaudit-goal
 js '.state' 'active' "$CX" --json goal show docaudit-goal
 rc 2 "$CX" goal show no-such-goal
 
-grp "open -d and peek (README: Letting them run themselves)"
+grp "open -d and peek (README: Watching and steering; wiki: Driving-Sessions)"
 rc 0 "$CX" open -d --dangerously-skip-permissions "$T@t1"
 sleep 12
 out "$P@t1" "$CX" peek "$T"
 js "([.sessions[].target]|sort|join(\",\"))" "$P,$P@t1" "$CX" --json peek "$T"
 
-grp "nudge (README) — declines and delivers"
+grp "nudge (wiki: Driving-Sessions) — declines and delivers"
 js '.sent' 'false' "$CX" --json nudge "$T@nosuch" hello
 js '.reason' 'dead' "$CX" --json nudge "$T@nosuch" hello
 rc 0 "$CX" nudge "$T@nosuch" hello
@@ -143,7 +143,7 @@ out "sent to" "$CX" nudge "$T@t1" "Reply with exactly DOCAUDIT-OK and nothing el
 sleep 14
 out "DOCAUDIT-OK" tmux capture-pane -pJ -S -200 -t "=cx-$P@t1:"
 
-grp "bar (README: In the status bar)"
+grp "bar (wiki: Status-Bar-and-Tabs)"
 # The session above has had a turn by now, so it is one the bar should name.
 # The states are spelled out rather than left to the default: whether it reads
 # idle or is still finishing is a race, and neither answer is the point here.
@@ -159,7 +159,7 @@ out "PONG" "$CX" ask "$T" "reply with exactly PONG and nothing else"
 rc 4 "$CX" ask "$T@t1" "hi"
 rc 3 "$CX" shell "$T" --permission-mode plan
 
-grp "cache (README: Cache)"
+grp "cache (README: Commands — cache)"
 rc 0 "$CX" cache refresh "$H"
 out "$H" "$CX" cache status
 rc 0 "$CX" cache clear "$H"
