@@ -126,6 +126,8 @@ installs `tmux`, `git`, `jq`, `curl` and Claude Code itself. `install.sh
 | `cx open -d web1:api` | start a session without attaching to it |
 | `cx status` | what's running right now, everywhere |
 | `cx stop web1:api [--all]` | end a session (`--all`: every one of the project's) |
+| `cx find [query]` | choose any project, worktree or session from a menu, then what to do |
+| `cx find --print` | ...and just print it: `cx ask "$(cx find --print api)" "..."` |
 
 ### Driving
 

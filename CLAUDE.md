@@ -43,6 +43,7 @@ bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/unit/pick.test.sh                # the interactive picker, fzf-less
+bash test/unit/find.test.sh                # cx find / cx pick
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -438,7 +439,9 @@ Create `lib/cmd/<name>.sh` defining `cmd_<name>`, source what it needs from
 `$CX_HOME/lib/`, and add a line to the usage text in `bin/cx`. Dispatch is
 automatic — `load_cmd` sources the file on demand. `resume.sh` and `shell.sh`
 are symlinks to `open.sh`; the same command in three modes. `worktree.sh` is a
-symlink to `wt.sh` the same way.
+symlink to `wt.sh` the same way, and so is `pick.sh` to `find.sh` (which is
+why `lib/cmd/pick.sh` defines `cmd_find`, not the picker — that is
+`lib/pick.sh`).
 
 Global flags (`-r`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`) are
 stripped from anywhere in the argv before the subcommand is chosen, so
@@ -488,6 +491,13 @@ take it" shortcut for commands that act without confirming (`cx stop`); a
 query or typed filter that leaves one row still chooses it unless the query
 was pre-seeded. `--new` appends `+ new session…`, which asks for a unit and
 then a label checked by `_cx_target_label_ok`.
+
+`cx find [query]` (alias `cx pick`) offers `any`, then an action menu; each
+action is the ordinary `cmd_*` run through `load_cmd`, so find has no
+behaviour of its own to drift. `--print` prints only the target on stdout —
+the menu is on the terminal and every message on stderr, which is what makes
+`$(cx find --print)` work. It still needs `cx_pick_ok`: stdout being a pipe is
+fine, stdin and stderr must be the terminal.
 
 ## Exit codes
 

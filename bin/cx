@@ -153,6 +153,8 @@ ${C_BOLD}WORKING${C_RESET}
   status                                  live sessions across servers
   stop <target> [--all]                   end a session (--all: the project's)
   forget <target>                         drop a finished session from the lists
+  find [query] [--print]                  choose any target from a menu, then act
+                                          (pick is the same command)
 
 ${C_BOLD}DRIVING${C_RESET}
   peek [target] [--all | --goal G]        what each session is doing now
