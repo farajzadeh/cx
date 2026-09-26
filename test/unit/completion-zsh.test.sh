@@ -128,6 +128,16 @@ has "$(zc "cxo web1:api@")" "sessions web1:api@review - working"
 it "zstyle ... aliases no leaves them out"
 assert_eq "$(zsh -fc "zstyle ':omz:plugins:cx' aliases no; source '$ROOT/completions/omz/cx/cx.plugin.zsh'; alias cxo")" ""
 
+it "copied without its _cx, falls back to cx completion zsh"
+mkdir -p "$TMP/plugins" "$TMP/bin" "$TMP/omzcache"
+cp -RP "$ROOT/completions/omz/cx" "$TMP/plugins/cx" # _cx now dangles
+ln -s "$ROOT/bin/cx" "$TMP/bin/cx"
+out=$(PATH="$TMP/bin:$PATH" ZSH_CACHE_DIR="$TMP/omzcache" CX_ZTEST_PLUGIN="$TMP/plugins/cx" \
+  zc "cx open web1:api@")
+has "$out" "sessions web1:api@review - working"
+it "writing it once into oh-my-zsh's completion cache"
+assert_ok test -s "$TMP/omzcache/completions/_cx"
+
 describe "without any cache or server"
 
 export CX_ZTEST_MODE=fpath

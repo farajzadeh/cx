@@ -268,7 +268,7 @@ re-provision instead of surfacing "unknown option: --worktree".
 not even a background refresh. A tab that hangs on an unreachable server is
 worse than any stale list. They read only local files that cx writes as a side
 effect of commands the user ran anyway: `~/.cache/cx/targets` (any listing),
-`~/.cache/cx/state` (any peek/bar/status fan-out — this is where `@label`s and
+`~/.cache/cx/state` (`cx peek`, `cx bar`, seeded by `cx open` — this is where `@label`s and
 the live/dead state come from), `~/.cache/cx/goals` (`cx goal ls`, `new`,
 `rm`), and `~/.config/cx/ssh.d/*.conf`. All of them are caches under invariant
 4: completion must degrade to fewer candidates, never to an error.
@@ -302,6 +302,12 @@ worktrees and sessions. Which kinds a command gets is a choice per command —
 `stop`/`nudge` prefer live sessions from the state cache (and fall back to
 everything when that cache is absent, which means "not looked yet", not
 "nothing running"), `new` gets `host:` only, `wt add` gets `host:project/`.
+
+`cx completion bash|zsh|fish` prints the script (`eval "$(cx completion
+bash)"`). `install.sh` *links* rather than copies — into bash-completion's
+per-user directory, and the oh-my-zsh plugin into `$ZSH_CUSTOM/plugins/cx`
+when oh-my-zsh exists — so re-running it updates them; it only ever replaces
+or removes a link that points into its own tree, never a user's file.
 
 `cx.zsh` is also `completions/omz/cx/_cx` (a symlink), so one file is
 autoloaded from `$fpath` — where the file *is* `_cx`'s body — and sourced or
@@ -494,7 +500,9 @@ Five commands, and the split between them is invariant 11 made concrete:
 
 Create `lib/cmd/<name>.sh` defining `cmd_<name>`, source what it needs from
 `$CX_HOME/lib/`, and add a line to the usage text in `bin/cx`. Dispatch is
-automatic — `load_cmd` sources the file on demand. `resume.sh` and `shell.sh`
+automatic — `load_cmd` sources the file on demand. Then give it a line in
+each completion table (see **Shell completion**) — the command and its flags
+are invisible to TAB until you do. `resume.sh` and `shell.sh`
 are symlinks to `open.sh`; the same command in three modes. `worktree.sh` is a
 symlink to `wt.sh` the same way.
 

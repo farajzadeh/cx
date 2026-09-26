@@ -9,7 +9,7 @@
 # effect of commands the user ran anyway:
 #
 #   ~/.cache/cx/targets     host:project and host:project/worktree, per listing
-#   ~/.cache/cx/state       host:target<TAB>state, per peek/bar/status fan-out
+#   ~/.cache/cx/state       host:target<TAB>state, per cx peek or cx bar
 #   ~/.cache/cx/goals       host<TAB>goal<TAB>state, per cx goal ls
 #   ~/.config/cx/ssh.d/     one <alias>.conf per server
 #
