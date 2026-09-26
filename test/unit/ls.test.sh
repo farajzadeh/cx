@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unit tests for narrowing listings: `cx ls` filters, grouping and sorting,
-# and the filters on `cx host ls`.
+# and the pattern filters on `cx host ls` and `cx wt ls`.
 #
 # Everything is served from cached listings under CX_FORCE_STALE=1, as in
 # test/unit/pick.test.sh, so no server is contacted: web3 is marked down,
@@ -345,5 +345,26 @@ else
   it "cx host ls needs ssh -G"
   skip "ssh unavailable"
 fi
+
+describe "cx wt ls -f"
+
+it "narrows the worktrees"
+assert_eq "$(cxo wt ls -f auth | awk 'NR > 1 { print $2 }')" "api/authfix"
+
+it "matches branches and globs"
+assert_eq "$(cxo wt ls -f 'docs-*' | awk 'NR > 1 { print $2 }')" "api/docs"
+
+it "matches the project, like cx ls"
+assert_eq "$(cxo wt ls -f blog | awk 'NR > 1 { print $2 }')" "blog/redesign"
+
+it "combines with a host"
+assert_eq "$(cxo wt ls web1 -f blog | awk 'NR > 1 { print $2 }')" ""
+
+it "filters --json"
+assert_eq "$(cxo --json wt ls -f auth | jq -r '[.worktrees[] | .project + "/" + .name] | join(" ")')" \
+  "api/authfix"
+
+it "says so when nothing matches"
+assert_contains "$(cx wt ls -f zzz)" "No worktrees match"
 
 summary

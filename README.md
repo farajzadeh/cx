@@ -217,6 +217,7 @@ cx ls --dirty               # uncommitted changes (implies --git)
 cx ls --host web1,web2      # just these servers; the rest are never contacted
 cx ls --group host          # a heading per server instead of a HOST column
 cx ls --sort active         # most recent first; also name, sessions, host
+cx wt ls -f fix             # the same pattern, over worktrees only
 ```
 
 A project that matches keeps all its worktrees; one that matches only through

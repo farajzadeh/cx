@@ -140,7 +140,7 @@ ${C_BOLD}PROJECTS${C_RESET}
 
 ${C_BOLD}PARALLEL WORK${C_RESET}
   wt add <target>/<name> [--branch B]     a worktree: own branch, own directory
-  wt ls [host[:project]]                  list worktrees
+  wt ls [host[:project]] [-f PATTERN]     list worktrees
   wt rm <target>/<name> [--force]         remove one (its branch is kept)
   wt rm <target> --merged                 remove every worktree that is merged
                                           (worktree is the long spelling of wt)
