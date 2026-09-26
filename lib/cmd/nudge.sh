@@ -16,6 +16,8 @@
 . "$CX_HOME/lib/target.sh"
 # shellcheck source=../activity.sh
 . "$CX_HOME/lib/activity.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 cmd_nudge() {
   local target="" prompt="" force=0
@@ -29,6 +31,8 @@ ${C_BOLD}cx nudge${C_RESET} — send a prompt to a session that is already runni
   cx nudge <target> "what to do next"
   echo "what to do next" | cx nudge <target>
   cx nudge <target> --force "..."     send it even if the session is busy
+  cx nudge                            at a terminal: choose a live session,
+                                      then type the prompt
 
 The prompt is typed into that session's Claude, exactly as if you had attached
 and typed it. The reply appears in the session — attach with cx open to read
@@ -65,22 +69,34 @@ EOF
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint 'usage: cx nudge <host>:<project>[@<label>] "what to do next"'
-    hint "see what is running with: cx peek"
-    return 3
-  }
+  # Only live sessions can be nudged, so only they are offered. A prompt on
+  # stdin means stdin is not a terminal, which is exactly when this errors as
+  # it always did rather than asking.
+  if [ -z "$target" ]; then
+    target=$(cx_target_or_pick session nudge \
+      'usage: cx nudge <host>:<project>[@<label>] "what to do next"' \
+      "see what is running with: cx peek") || return $?
+  fi
 
   cx_target_resolve "$target" || return $?
 
   if [ -z "$prompt" ]; then
     if [ -t 0 ]; then
-      err "no prompt given"
-      hint "usage: cx nudge $(cx_target_str) \"what to do next\""
-      return 3
+      # A human at a terminal who named no prompt: ask for it, the same way a
+      # missing target is asked for.
+      if cx_pick_ok; then
+        prompt=$(cx_pick_readline "prompt for $(cx_target_str)") || {
+          info "cancelled"
+          return "$CX_PICK_CANCEL"
+        }
+      else
+        err "no prompt given"
+        hint "usage: cx nudge $(cx_target_str) \"what to do next\""
+        return 3
+      fi
+    else
+      prompt=$(cat)
     fi
-    prompt=$(cat)
   fi
   [ -n "$prompt" ] || {
     err "empty prompt"

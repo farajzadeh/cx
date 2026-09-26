@@ -192,6 +192,10 @@ ${C_BOLD}TARGETS${C_RESET}
 
   Use ${C_BOLD}@label${C_RESET} for parallel conversations, ${C_BOLD}/worktree${C_RESET} for parallel branches.
 
+  ${C_BOLD}INTERACTIVE${C_RESET}: at a terminal, leave the target out of open, resume, shell,
+  code, stop, nudge, forget, rm or wt rm to choose it from a menu (fzf when
+  installed). CX_PICKER=none turns that off; scripts are never asked.
+
 Docs: $CX_HOME/docs/
 EOF
 }

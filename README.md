@@ -157,6 +157,14 @@ Targets are `host:project[/worktree][@session]`. A bare `project` resolves
 against `CX_DEFAULT_HOST`, or across every server when the name is unique —
 and if it's ambiguous, `cx` tells you rather than guessing.
 
+At a terminal the target is optional: `cx open`, `cx stop`, `cx nudge`,
+`cx code`, `cx forget`, `cx rm` and `cx wt rm` with no target offer a menu of
+what fits — live sessions for `stop` and `nudge`, projects for `rm`, and for
+`open` everything plus a "+ new session" entry. It is fzf when installed (with
+a preview read from the cache) and a numbered menu with a text filter when
+not. Scripts, pipes, `--json` and `-y` never see a menu: a missing target is
+still exit 3. `CX_PICKER=none` turns it off, `CX_PICKER=builtin` skips fzf.
+
 ---
 
 ## Two ways to work on several things at once

@@ -43,7 +43,7 @@ bash test/unit/worktree.test.sh            # merged worktrees, against real git
 bash test/unit/jump.test.sh                # cx jump, against a stubbed tmux
 bash test/unit/statusbar.test.sh           # the server's tmux bar: statusline and tmux-status
 bash test/unit/pick.test.sh                # the interactive picker, fzf-less
-bash test/unit/find.test.sh                # cx find / cx pick
+bash test/unit/find.test.sh                # cx find, and commands that pick a missing target
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -498,6 +498,16 @@ behaviour of its own to drift. `--print` prints only the target on stdout —
 the menu is on the terminal and every message on stderr, which is what makes
 `$(cx find --print)` work. It still needs `cx_pick_ok`: stdout being a pipe is
 fine, stdin and stderr must be the terminal.
+
+Which commands pick, and what they offer: `open`/`resume`/`shell` → `any` +
+`--new`; `code` → `unit`; `stop` → `session` (`unit` with `--all`), always
+asked; `nudge` → `session`, and then asks for the prompt on the terminal when
+stdin is one; `forget` → `finished`; `rm` → `project`; `wt rm` → `worktree`
+(`project` with `--merged`; pick.sh is sourced inside `_wt_rm` so the change
+stays local to it). **Not** `peek`, where no target already means "all", and
+not `ask`, which is the scriptable entry point — `cx ask "$(cx find --print)"`
+covers it. A new command that takes an existing target should use
+`cx_target_or_pick` in place of its `no target given` block.
 
 ## Exit codes
 

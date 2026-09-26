@@ -28,7 +28,7 @@ export CX_CONFIG_FILE="$TMP/no-such-config"
 . "$ROOT/lib/cache.sh"
 cx_config_load
 
-for c in find; do
+for c in open code stop nudge forget rm wt find; do
   # shellcheck disable=SC1090
   . "$ROOT/lib/cmd/$c.sh"
 done
@@ -93,7 +93,119 @@ run() {
   RESOLVED=$(cat "$TMP/resolved" 2>/dev/null || true)
 }
 
+describe "without a terminal: exactly as before"
+
+for c in open resume shell code stop nudge forget rm "wt rm"; do
+  # shellcheck disable=SC2086  # "wt rm" is two words on purpose
+  run cmd_$c
+  assert_eq "$RC" 3 "cx $c exits 3"
+  assert_contains "$(cat "$TMP/err")" "no target given" "cx $c says no target was given"
+done
+
+it "--json never picks, even at a terminal"
 _cx_pick_tty() { return 0; }
+answer 1
+CX_JSON=1 run cmd_open
+assert_eq "$RC" 3
+
+describe "at a terminal: each command offers its kind"
+
+it "open offers live sessions, @labels included"
+answer review
+run cmd_open
+assert_eq "$RC:$RESOLVED" "42:web1:api@review"
+
+it "open offers worktrees"
+answer authfix
+run cmd_open
+assert_eq "$RESOLVED" "web1:api/authfix"
+
+it "open offers a new session on any unit"
+# One file, read from the top by each question: "new" picks the new-session
+# row, matches no unit (so "site" is read next), and is the label.
+answer new site
+run cmd_open
+assert_eq "$RESOLVED" "web1:site@new"
+
+it "open keeps its options when it picks"
+answer site
+run cmd_open -d --model opus
+assert_eq "$RC:$RESOLVED" "42:web1:site"
+
+it "resume and shell pick the same way"
+answer site
+run cmd_resume
+assert_eq "$RESOLVED" "web1:site" "resume"
+answer site
+run cmd_shell
+assert_eq "$RESOLVED" "web1:site" "shell"
+
+it "code offers projects and worktrees"
+answer authfix
+run cmd_code
+assert_eq "$RESOLVED" "web1:api/authfix"
+
+it "stop offers live sessions"
+answer review
+run cmd_stop
+assert_eq "$RESOLVED" "web1:api@review"
+
+it "stop --all offers projects and worktrees instead"
+answer site
+run cmd_stop --all
+assert_eq "$RESOLVED" "web1:site"
+
+it "stop asks even when one session is running"
+cp "$TMP/sessions.json" "$TMP/sessions.bak"
+printf '{"sessions":[{"target":"api","attached":false}]}' >"$TMP/sessions.json"
+answer q
+run cmd_stop
+assert_eq "$RC:$RESOLVED" "130:"
+mv "$TMP/sessions.bak" "$TMP/sessions.json"
+
+it "nudge offers live sessions"
+answer review
+run cmd_nudge
+assert_eq "$RESOLVED" "web1:api@review"
+
+it "forget offers what was last seen finished"
+answer old
+run cmd_forget
+assert_eq "$RESOLVED" "web1:site@old"
+
+it "rm offers projects only"
+answer authfix q
+run cmd_rm
+assert_eq "$RC" 130 "...so a worktree is not there to match"
+answer site
+run cmd_rm --purge
+assert_eq "$RESOLVED" "web1:site"
+
+it "wt rm offers worktrees only, and one needs no question"
+: >"$TMP/keys"
+run cmd_wt rm
+assert_eq "$RESOLVED" "web1:api/authfix"
+
+it "wt rm --merged offers projects"
+answer site
+run cmd_wt rm --merged
+# _wt_rm_merged resolves through the same function.
+assert_eq "$RESOLVED" "web1:site"
+
+it "a cancel is 130 and nothing is resolved"
+answer q
+run cmd_open
+assert_eq "$RC:$RESOLVED" "130:"
+assert_contains "$(cat "$TMP/err")" "cancelled"
+
+it "nothing to choose from is 2"
+printf '{"sessions":[]}' >"$TMP/sessions.json.empty"
+cp "$TMP/sessions.json" "$TMP/sessions.bak"
+cp "$TMP/sessions.json.empty" "$TMP/sessions.json"
+run cmd_stop
+assert_eq "$RC" 2
+assert_contains "$(cat "$TMP/err")" "no live sessions"
+mv "$TMP/sessions.bak" "$TMP/sessions.json"
 
 describe "cx find"
 

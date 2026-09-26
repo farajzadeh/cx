@@ -7,10 +7,14 @@
 
 # shellcheck source=../target.sh
 . "$CX_HOME/lib/target.sh"
+# shellcheck source=../pick.sh
+. "$CX_HOME/lib/pick.sh"
 
 _open_common() {
-  local mode="$1" target="" detach=0 nohooks=0
+  local mode="$1" target="" detach=0 nohooks=0 verb="$1"
   shift
+  # The command as the user typed it, for messages: mode "continue" is cx open.
+  [ "$mode" != continue ] || verb=open
 
   cx_claude_opts_reset
   local passthru=()
@@ -54,12 +58,13 @@ _open_common() {
     shift
   done
 
-  [ -n "$target" ] || {
-    err "no target given"
-    hint "usage: cx $mode <host>:<project>"
-    hint "see what exists with: cx ls"
-    return 3
-  }
+  # No target at a terminal: offer everything this can open — projects,
+  # worktrees, live sessions — plus a new @label on any of them.
+  if [ -z "$target" ]; then
+    target=$(cx_target_or_pick --new any "$verb" \
+      "usage: cx $verb <host>:<project>" \
+      "see what exists with: cx ls") || return $?
+  fi
 
   if [ "$mode" = shell ] &&
     { cx_claude_needs_agent || [ ${#passthru[@]} -gt 0 ]; }; then
@@ -257,6 +262,10 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open <host>:<project>/<worktree>@<label>
   cx open -d <target>                       start it, do not attach
   cx open --no-hooks <target>               without the hooks that report its state
+  cx open                                   choose from a menu (at a terminal)
+
+Omit the target at a terminal to pick one: projects, worktrees and live
+sessions, plus "+ new session…" to start another @label on any of them.
 
 Creates a persistent tmux session on the server and starts Claude Code in it,
 resuming that session's own conversation. If it is already running, this
@@ -335,6 +344,7 @@ goes back to that session's own conversation. To keep a second thread you can
 return to by name, use a label — cx open <target>@<label>.
 
 Takes --dangerously-skip-permissions as cx open does; see cx open --help.
+Omit the target at a terminal to pick one from a menu.
 EOF
       return 0
       ;;
@@ -351,7 +361,8 @@ ${C_BOLD}cx shell${C_RESET} — a plain shell in the project directory
   cx shell <host>:<project>[/<worktree>][@<label>]
 
 Same persistent tmux session as cx open, without starting Claude Code. A
-worktree target opens a shell in that worktree's directory.
+worktree target opens a shell in that worktree's directory. Omit the target
+at a terminal to pick one from a menu.
 EOF
       return 0
       ;;
