@@ -44,25 +44,29 @@ _cx_subverbs() {
 # _cx_values). KIND "word" means free text: nothing is offered, but the scanner
 # still knows the next word is a value rather than a positional argument.
 _cx_flags() {
+  # What cx passes on to Claude Code (lib/target.sh cx_claude_opt), and what
+  # `new` and `wt add` take to open the thing they just made.
+  local claude="--permission-mode=permmode --dangerously-skip-permissions --model=model --effort=effort"
+  local open_after="--open --no-open -d --detach --label=word --no-hooks $claude"
   case "$1${2:+ $2}" in
     "host add") printf '%s' "--alias=word --hostname=word --user=word --port=word --identity=file --root=word --no-test" ;;
     "host import") printf '%s' "--root=word" ;;
     provision) printf '%s' "--all -a" ;;
-    new) printf '%s' "--repo=word --root=word --open -d --detach" ;;
+    new) printf '%s' "--repo=word --root=word $open_after" ;;
     ls) printf '%s' "--git" ;;
     rm) printf '%s' "--purge" ;;
-    "wt add") printf '%s' "--branch=word --from=word --open -d --detach" ;;
+    "wt add") printf '%s' "--branch=word --from=word $open_after" ;;
     "wt rm") printf '%s' "--force --merged" ;;
-    open | resume) printf '%s' "-d --detach --no-hooks --permission-mode=permmode --dangerously-skip-permissions --model=model --effort=effort" ;;
+    open | resume) printf '%s' "-d --detach --no-hooks $claude" ;;
     shell) printf '%s' "-d --detach --no-hooks" ;;
-    ask) printf '%s' "--permission-mode=permmode --dangerously-skip-permissions --model=model --effort=effort --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
+    ask) printf '%s' "$claude --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
     stop) printf '%s' "--all" ;;
     peek) printf '%s' "--all --tail=word --goal=goal" ;;
     nudge) printf '%s' "--force" ;;
     bar) printf '%s' "--setup --plain --attached --color --icons=icons --window=all --max=word --states=states --label=word" ;;
     tabs) printf '%s' "-n --dry-run --no-attach --take -s --session=word" ;;
     jump) printf '%s' "--states=states" ;;
-    find | pick) printf '%s' "--print" ;;
+    find | pick) printf '%s' "-p --print" ;; # not the hidden --preview
     goal | "goal "*)
       printf '%s' "--host=host"
       case "${2:-}" in
@@ -92,7 +96,8 @@ _cx_positional() {
     "wt add:1") printf projslash ;;
     "wt ls:1") printf hostproj ;;
     "wt rm:1" | code:1) printf units ;;
-    open:1 | resume:1 | shell:1 | ask:1 | peek:1 | find:1 | pick:1) printf all ;;
+    open:1 | resume:1 | shell:1 | ask:1 | peek:1) printf all ;;
+    find:* | pick:*) printf all ;; # query words; a target is a fine one
     stop:1 | nudge:1) printf live ;;
     forget:1) printf known ;;
     completion:1) printf shell ;;

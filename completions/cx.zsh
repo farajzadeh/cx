@@ -108,6 +108,16 @@ _cx_specs() {
     '--model[model]:model:(opus sonnet haiku)'
     '--effort[reasoning effort]:level:(low medium high xhigh max)'
   )
+  # What `new` and `wt add` take to open the thing they have just made.
+  local -a open_after
+  open_after=(
+    '(--no-open)--open[open it once created]'
+    '(--open)--no-open[do not open it, and do not ask]'
+    '(-d --detach)'{-d,--detach}'[open it, but do not attach]'
+    '--label[open it as a named session]:label: '
+    '--no-hooks[without the hooks that report its state]'
+    $claude
+  )
   reply=()
   case "$1${2:+ $2}" in
     'host add') reply=(
@@ -126,15 +136,13 @@ _cx_specs() {
     new) reply=(
       '--repo[clone this repository]:url: '
       '--root[project root on the server]:directory: '
-      '--open[open it once created]'
-      '(-d --detach)'{-d,--detach}'[with --open: start it, do not attach]'
+      $open_after
       '1:host\:name:_cx_target hostcolon') ;;
     rm) reply=('--purge[also delete the files]' '1:project:_cx_target projects') ;;
     'wt add') reply=(
       '--branch[branch name]:branch: '
       '--from[what to branch from]:ref: '
-      '--open[open it once created]'
-      '(-d --detach)'{-d,--detach}'[with --open: start it, do not attach]'
+      $open_after
       '1:project/worktree:_cx_target projslash') ;;
     'wt ls') reply=('1:server or project:_cx_target hostproj') ;;
     'wt rm') reply=(
@@ -182,7 +190,8 @@ _cx_specs() {
       '--take[open sessions held elsewhere too]'
       '(-s --session)'{-s,--session}'[tmux session name]:name: ') ;;
     jump) reply=('--states[which states to go to, in order]:states:_cx_states') ;;
-    find | pick) reply=('--print[print the choice instead of acting on it]' '1:filter:_cx_target all') ;;
+    # Not the hidden --preview, which is the picker talking to itself.
+    find | pick) reply=('(-p --print)'{-p,--print}'[print the target instead of opening it]' '*:query:_cx_target all') ;;
     completion) reply=('1:shell:(bash zsh fish)') ;;
     goal | 'goal '*)
       reply=('--host[the server holding the goal]:server:_cx_hosts')

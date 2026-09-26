@@ -114,6 +114,11 @@ for mode in fpath source; do
   assert_eq "$(zc "cx rm web1:api")" "projects web1:api - idle|"
   it "stop offers the live sessions, and no servers"
   assert_eq "$(zc "cx stop ")" "projects web1:api  idle|"
+  it "new and wt add take what opening the result takes"
+  has "$(zc "cx new web1:x --l")" "options --label - open it as a named session"
+  has "$(zc "cx wt add web1:api/x --no-")" "options --no-open -"
+  it "find takes -p/--print"
+  has "$(zc "cx find --p")" "options --print - print the target instead of opening it"
   it "wt add completes project/"
   has "$(zc "cx wt add web1:")" "projects web1:api/  project"
 done
