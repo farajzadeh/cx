@@ -3,6 +3,7 @@
 
 Output "/out/parallel.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx open web1:api@review -d"
 Sleep 400ms

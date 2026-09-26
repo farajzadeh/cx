@@ -19,10 +19,3 @@ Set Margin 0
 Set TypingSpeed 55ms
 Set Framerate 24
 Set CursorBlink false
-
-# The shell the recording happens in, set up off camera.
-Hide
-Type "source /cx/docs/demo/demorc && clear"
-Enter
-Sleep 500ms
-Show

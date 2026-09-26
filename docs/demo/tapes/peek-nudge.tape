@@ -3,6 +3,7 @@
 
 Output "/out/peek-nudge.gif"
 Source "settings.tape"
+Source "prelude.tape"
 
 Type "cx peek"
 Sleep 300ms
