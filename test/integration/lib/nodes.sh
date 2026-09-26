@@ -6,7 +6,10 @@
 # never touch the developer's own ~/.ssh, ~/.config/cx or ~/.cache/cx.
 
 CX_NODE_IMAGE="cx-test-node"
-CX_NODE_PREFIX="cx-test-node-"
+# Overridable so suites can run in parallel from different worktrees:
+# nodes_cleanup removes every container matching the prefix, so two runs
+# sharing one would tear down each other's servers mid-test.
+CX_NODE_PREFIX="${CX_NODE_PREFIX:-cx-test-node-}"
 
 # nodes_build [BASE_IMAGE]
 nodes_build() {
