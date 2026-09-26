@@ -134,6 +134,14 @@ unset -f _cx_pick_tty
 
 describe "candidates"
 
+# Built with jq, which the bash 3.2 image does not have.
+if ! cx_have jq; then
+  it "candidates"
+  skip "jq unavailable"
+  summary
+  exit $?
+fi
+
 # A cached listing, as the agent's `list` returns it.
 mkdir -p "$CX_SSHD_DIR" "$CX_CACHE_DIR/list"
 printf 'Host web1\n' >"$CX_SSHD_DIR/web1.conf"
