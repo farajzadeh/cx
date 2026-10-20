@@ -201,6 +201,7 @@ complete -c cx -n '__cx_using ask' -l output-format -x -a 'text json stream-json
 complete -c cx -n '__cx_using ask' -l json-schema -x -d 'JSON Schema for structured output'
 complete -c cx -n '__cx_using ask' -l max-budget-usd -x -d 'cap what this call may spend'
 complete -c cx -n '__cx_using chat' -l allowed-tools -x -d 'tools that run without asking'
+complete -c cx -n '__cx_using chat' -l ask-tools -x -d 'tools that always ask first, even in auto mode'
 complete -c cx -n '__cx_using chat' -l append-system-prompt-file -r -F -d 'add this file to the system prompt'
 complete -c cx -n '__cx_using stop' -l all -d 'every session of the project'
 complete -c cx -n '__cx_using peek' -l all -d 'list finished sessions too'

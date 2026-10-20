@@ -2540,6 +2540,15 @@ _launch_settings() {
 # _hook_settings AGENT — the hooks alone.
 _hook_settings() { _launch_settings "$1" 1 0; }
 
+# _ask_settings SETTINGS LIST — SETTINGS with LIST's comma-separated rules
+# ("Bash(git push:*), Bash(sudo:*)") added to permissions.ask: Claude asks
+# before those tools whatever its permission mode.
+_ask_settings() {
+  jq -c --arg a "$2" '
+    ($a | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $rules
+    | .permissions = ((.permissions // {}) | .ask = (((.ask // []) + $rules) | unique))' <<<"$1"
+}
+
 # _event_state EVENT NOTIFICATION_TYPE SOURCE — the state an event means, or
 # nothing for an event that says nothing about state.
 _event_state() {
@@ -4465,7 +4474,7 @@ _chat_cleanup() {
 # cmd_chat NAME [--worktree W] [--session L] [OPTIONS] [-- ARGS] — JSON lines
 # in on stdin, JSON lines out on stdout, until stdin closes.
 cmd_chat() {
-  local name="" wt="" label="" perm_mode="" model="" effort="" allowed=""
+  local name="" wt="" label="" perm_mode="" model="" effort="" allowed="" ask=""
   local dangerous=0 sp_stdin=0
   local passthru=()
   while [ $# -gt 0 ]; do
@@ -4494,6 +4503,10 @@ cmd_chat() {
       --allowed-tools)
         shift
         allowed="${1:-}"
+        ;;
+      --ask-tools)
+        shift
+        ask="${1:-}"
         ;;
       # The first stdin line is {"type":"cx","op":"system_prompt","append":…}.
       # Text the user wrote travels on stdin, never as an argument (invariant 1).
@@ -4606,9 +4619,17 @@ cmd_chat() {
     --mcp-config "$run/mcp.json"
     --permission-prompt-tool mcp__cx_chat__permission)
   # The hooks cx open installs, so cx peek reports a chat like any session.
+  # --ask-tools rides in the same --settings: a second one would replace it,
+  # and Claude's ask rules hold even in auto mode.
   if _claude_supports "$claude_bin" --settings; then
     settings=$(_launch_settings "$agent_bin" 1 0 2>/dev/null) || settings=""
+    if [ -n "$ask" ]; then
+      settings=$(_ask_settings "${settings:-"{}"}" "$ask") ||
+        _chat_fail 1 "could not add --ask-tools to Claude's settings"
+    fi
     if [ -n "$settings" ]; then args=("${args[@]+"${args[@]}"}" --settings "$settings"); fi
+  elif [ -n "$ask" ]; then
+    _chat_fail 1 "the Claude Code on this server has no --settings, so --ask-tools cannot be kept; upgrade it"
   fi
   if [ -n "$perm_mode" ]; then
     args=("${args[@]+"${args[@]}"}" --permission-mode "$perm_mode")
@@ -5355,7 +5376,7 @@ cx-agent — server-side helper for cx (not intended for direct use)
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
   chat <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
-              [--effort E] [--allowed-tools T] [--system-prompt-stdin]
+              [--effort E] [--allowed-tools T] [--ask-tools T] [--system-prompt-stdin]
               [--dangerous] [-- CLAUDE_ARGS...]
                                 a conversation as JSON lines on stdin and
                                 stdout, until stdin closes (docs/chat.md)

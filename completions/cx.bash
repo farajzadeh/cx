@@ -62,7 +62,7 @@ _cx_flags() {
     open | resume) printf '%s' "-d --detach --no-hooks $claude" ;;
     shell) printf '%s' "-d --detach --no-hooks" ;;
     ask) printf '%s' "$claude --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
-    chat) printf '%s' "$claude --allowed-tools=word --append-system-prompt-file=file" ;;
+    chat) printf '%s' "$claude --allowed-tools=word --ask-tools=word --append-system-prompt-file=file" ;;
     stop) printf '%s' "--all" ;;
     peek) printf '%s' "--all --tail=word --goal=goal" ;;
     usage) printf '%s' "--days=word" ;;

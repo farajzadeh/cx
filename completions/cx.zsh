@@ -189,6 +189,7 @@ _cx_specs() {
     chat) reply=(
       $claude
       '--allowed-tools[tools that run without asking]:tools: '
+      '--ask-tools[tools that always ask first, even in auto mode]:tools: '
       '--append-system-prompt-file[add this file to the system prompt]:file:_files'
       '1:target:_cx_target all') ;;
     stop) reply=('--all[every session of the project]' '1:session:_cx_target live') ;;

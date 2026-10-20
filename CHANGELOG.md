@@ -26,6 +26,12 @@ release sets both to the same number. After upgrading the client, run
   The agent remembers what it has read of each transcript (a cache under
   `~/.local/share/cx/usage/`), so only the first run on a busy server is slow.
   Needs agent 0.7.0: `cx provision <host>`.
+- **`cx chat --ask-tools "Bash(git push:*),Bash(sudo:*)"`** (2026-10-20): tools
+  Claude must always ask about first, even in auto mode, whose safety check
+  lets such steps through when the conversation asks for them. They go into
+  the `--settings` cx already passes, as `permissions.ask` rules, so cx's
+  hooks stay. An agent older than 0.7.0 or a Claude Code without `--settings`
+  refuses the chat instead of dropping them.
 
 ## [0.6.0] - 2026-10-20
 

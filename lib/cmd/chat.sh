@@ -50,6 +50,7 @@ ${C_BOLD}cx chat${C_RESET} — a conversation with Claude, as JSON lines, for a 
 
   cx chat <target> [--model M] [--permission-mode MODE]
                    [--allowed-tools "Read,Edit,Bash(npm test:*)"]
+                   [--ask-tools "Bash(git push:*),Bash(sudo:*)"]
                    [--append-system-prompt-file FILE]
 
 What cx open is to a person, cx chat is to a program: the same session — the
@@ -78,6 +79,8 @@ ${C_BOLD}OPTIONS${C_RESET}
   --permission-mode <mode>   default, acceptEdits, plan (and cx open's others)
   --allowed-tools <list>     tools that run without asking, as Claude Code
                              spells them: "Read,Edit,Bash(npm test:*)"
+  --ask-tools <list>         tools that always ask first, even in auto mode,
+                             spelled the same way (needs agent 0.7.0)
   --append-system-prompt-file <file>
                              a file here whose text is added to Claude's system
                              prompt; it travels over stdin, not the command line
@@ -93,7 +96,7 @@ EOF
       ;;
   esac
 
-  local target="" allowed="" sp_file="" rc=0
+  local target="" allowed="" ask="" sp_file="" rc=0
   local passthru=()
   cx_claude_opts_reset
 
@@ -126,7 +129,7 @@ EOF
     fi
 
     case "$1" in
-      --allowed-tools | --allowedTools | --append-system-prompt-file)
+      --allowed-tools | --allowedTools | --ask-tools | --append-system-prompt-file)
         if [ -z "${2:-}" ]; then
           err "$1 needs a value"
           _chat_exit 3 "$1 needs a value"
@@ -134,6 +137,7 @@ EOF
         fi
         case "$1" in
           --append-system-prompt-file) sp_file="$2" ;;
+          --ask-tools) ask="$2" ;;
           *) allowed="$2" ;;
         esac
         shift
@@ -189,6 +193,11 @@ EOF
     _chat_exit 1 "the cx agent on $CX_T_HOST is too old for cx chat"
     return 1
   fi
+  # Refused rather than dropped: a program asks for these to stay safe.
+  if [ -n "$ask" ] && ! cx_agent_supports "$CX_T_HOST" "cx chat --ask-tools" 0.7.0 "$ver"; then
+    _chat_exit 1 "the cx agent on $CX_T_HOST is too old for --ask-tools"
+    return 1
+  fi
 
   if [ "$CX_CLAUDE_PERM_MODE" = bypassPermissions ]; then
     warn "chatting with ALL permission checks bypassed: nothing will ask"
@@ -200,6 +209,7 @@ EOF
   cx_target_args
   local extra=() sep=()
   if [ -n "$allowed" ]; then extra=(--allowed-tools "$allowed"); fi
+  if [ -n "$ask" ]; then extra=("${extra[@]+"${extra[@]}"}" --ask-tools "$ask"); fi
   if [ -n "$sp_file" ]; then
     extra=("${extra[@]+"${extra[@]}"}" --system-prompt-stdin)
   fi

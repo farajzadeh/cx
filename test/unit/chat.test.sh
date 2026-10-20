@@ -274,6 +274,17 @@ chat_end
 it "treats --permission-mode default as Claude's own default"
 assert_not_contains "$(grep '^ARGS' "$FAKE_LOG")" "--permission-mode"
 
+chat_start api --permission-mode auto --ask-tools 'Bash(sudo:*), Bash(git push:*)'
+chat_end
+_args=$(grep '^ARGS' "$FAKE_LOG" | tail -1)
+it "puts --ask-tools into the settings it passes, as ask rules"
+assert_contains "$_args" '"permissions":{"ask":["Bash(git push:*)","Bash(sudo:*)"]}'
+it "...beside the hooks, in one --settings"
+assert_contains "$_args" '"PermissionRequest":[{"hooks":[{"type":"command","command":"'
+assert_eq "$(printf '%s' "$_args" | tr '\t' '\n' | grep -c '^--settings$')" 1
+it "...whatever the permission mode"
+assert_contains "$_args" "--permission-mode	auto"
+
 describe "cx-agent chat — approvals"
 
 chat_start api
@@ -623,6 +634,21 @@ assert_eq "$(cat "$TMP/remote")" "\$HOME/.local/bin/cx-agent 'chat' 'api'"
 _o=$(printf '' | cmd_chat web1:api@review --model 'opus' --allowed-tools "Bash(git log:*),Read" 2>/dev/null)
 it "sends the label, the model and the allowed tools as separate words"
 assert_eq "$(cat "$TMP/remote")" "\$HOME/.local/bin/cx-agent 'chat' 'api' '--session' 'review' '--model' 'opus' '--allowed-tools' 'Bash(git log:*),Read'"
+
+_o=$(printf '' | cmd_chat web1:api --ask-tools "Bash(git push:*),Bash(sudo:*)" 2>/dev/null)
+it "sends the ask tools as one word"
+assert_eq "$(cat "$TMP/remote")" "\$HOME/.local/bin/cx-agent 'chat' 'api' '--ask-tools' 'Bash(git push:*),Bash(sudo:*)'"
+
+_saved_ver=$CX_AGENT_VERSION_EXPECTED
+CX_AGENT_VERSION_EXPECTED=0.6.0
+: >"$TMP/remote"
+_o=$(printf '' | cmd_chat web1:api --ask-tools "Bash(sudo:*)" 2>/dev/null)
+_rc=$?
+CX_AGENT_VERSION_EXPECTED=$_saved_ver
+it "refuses --ask-tools on an agent too old to keep them, without starting"
+assert_eq "$_rc $(cat "$TMP/remote")" "1 "
+it "...and says so on the exit line"
+assert_contains "$(printf '%s\n' "$_o" | tail -1)" "too old for --ask-tools"
 
 : >"$FAKE_DIR/append.seen"
 printf "It's \$(fine).\n" >"$TMP/sys2.md"

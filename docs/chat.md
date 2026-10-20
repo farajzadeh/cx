@@ -10,11 +10,20 @@ started here carries on in tmux with `cx open`, and the other way round.
 ```sh
 cx chat web1:api [--model M] [--permission-mode default|acceptEdits|plan]
                  [--allowed-tools "Read,Edit,Bash(npm test:*)"]
+                 [--ask-tools "Bash(git push:*),Bash(sudo:*)"]
                  [--append-system-prompt-file FILE] [--effort E] [-- ARGS]
 ```
 
 Every option applies to this one chat. `--permission-mode` also takes cx
 open's other modes; `default` is Claude's own and passes nothing.
+`--ask-tools` lists tools Claude must always ask about first, spelled like
+`--allowed-tools`: they become `permissions.ask` rules in the `--settings` cx
+already passes (a second `--settings` would replace cx's hooks), and Claude's
+ask rules hold even under `--permission-mode auto`, whose own safety check
+would otherwise let a `git push` or `sudo` through when asked for in plain
+words. Each such request then arrives as a `permission_request`. It needs
+agent 0.7.0; an older agent, or a Claude Code without `--settings`, refuses the
+chat (exit 1) rather than drop the rules.
 `--append-system-prompt-file` names a file on the machine running `cx chat`;
 its text travels to the server over stdin, ahead of your own lines, never on a
 command line.
