@@ -4981,6 +4981,13 @@ cx-agent — server-side helper for cx (not intended for direct use)
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
+  chat <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
+              [--effort E] [--allowed-tools T] [--system-prompt-stdin]
+              [--dangerous] [-- CLAUDE_ARGS...]
+                                a conversation as JSON lines on stdin and
+                                stdout, until stdin closes (docs/chat.md)
+  chat-mcp <rundir>             the permission tool chat hands Claude, an MCP
+                                server on stdio; run by Claude
   goal new <name> [--member T]...           definition of done on stdin
   goal ls [--state S] | show <name> | rm <name>
   goal dod <name>                           replace it (stdin), keeping history
