@@ -245,6 +245,7 @@ line: `-r`/`--refresh`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`.
 | `cx provision <host>` / `--all` | install or update the agent (idempotent) |
 | `cx login <host>` | one-time Claude Code sign-in |
 | `cx doctor [host]` | check this machine and every server |
+| `cx usage [host] [--days N]` | each account's usage limits, and tokens per day and per project |
 
 | Projects | |
 |---|---|

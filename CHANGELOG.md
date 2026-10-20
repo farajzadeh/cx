@@ -13,6 +13,20 @@ release sets both to the same number. After upgrading the client, run
 
 ## [Unreleased]
 
+### Added
+
+- **`cx usage [host] [--days N]`** (2026-10-20): how much of Claude each
+  server's account has used. The five-hour and weekly limits as Claude last
+  reported them — its status line in a cx session, or its own copy of its
+  `/usage` screen — with their reset times and how old the reading is; and
+  tokens per day and per project over the last N days (1-90, default 30),
+  counted from the transcripts on the server, subagents included and each
+  message once. `--json` gives one object per host, with `ok` and `error` for
+  a server that could not answer. Nothing reads a login or calls Anthropic.
+  The agent remembers what it has read of each transcript (a cache under
+  `~/.local/share/cx/usage/`), so only the first run on a busy server is slow.
+  Needs agent 0.7.0: `cx provision <host>`.
+
 ## [0.6.0] - 2026-10-20
 
 ### Behaviour changes

@@ -52,6 +52,7 @@ bash test/unit/find.test.sh                # cx find, and commands that pick a m
 bash test/unit/ask.test.sh                 # cx_ask_line / cx_ask_yn, the terminal questions
 bash test/unit/create.test.sh              # new / wt add: --open, and asking for what is missing
 bash test/unit/chat.test.sh                # cx chat and chat-mcp, against a fake Claude that replays real stream-json
+bash test/unit/usage.test.sh               # cx usage: limits, tokens from transcripts, the incremental cache
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -727,7 +728,9 @@ Four properties are relied on, all verified against a real store:
    is the one place this is written down, and it is one place because it used
    to be two: a slashes-only copy in `_derive_dir` meant `cx ls` reported no
    history for every worktree cx has ever made, since they all live under
-   `.worktrees` and the dot never got encoded.
+   `.worktrees` and the dot never got encoded. `_session_dir_names`, which
+   encodes many paths in one process for `usage`, takes its character class
+   from the same `_SESSION_DIR_KEEP`, so there is still one rule.
 2. **each `*.jsonl` is named for the session id it contains** — the file's own
    `.sessionId` equals its basename. `_newest_session_id` uses this so the
    first open of a project adopts the conversation `--continue` would have
@@ -762,6 +765,38 @@ says `unknown` and exits 0. A future Claude Code change should cost one display
 column or one new conversation, never a broken `cx ls`, a session that will not
 open, or a driver that cannot tell what is happening. Preserve that property —
 `test/fixtures/transcript/` has a fixture for each of these failure modes.
+
+### What `cx usage` reads
+
+`cx usage` reads every transcript of its window, not a tail, so it leans on
+three more observed properties. **An assistant entry carries
+`.message.usage`** (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+`cache_creation_input_tokens`) and a UTC `.timestamp`, whose first ten
+characters are the day. **One message is one line per content block**, all
+with the same `.message.id`, and `output_tokens` grows from line to line
+(seen: fifteen lines saying 3, the last 6706) — so summing lines is wrong, and
+rows are deduplicated by id keeping the largest of each figure, **across
+files** too (a resumed or forked conversation carries earlier messages along:
+177 of 56,000 on one server). **Subagents write their own transcripts** under
+`<session-id>/subagents/*.jsonl`; they count, under the project whose
+directory they are in. A directory no registered project or worktree accounts
+for (or a worktree since removed, by the `.worktrees` prefix) is counted under
+project `null`, never dropped.
+
+A naive pass over a real 1.1 GB store took twenty seconds, and the active
+transcripts are the biggest ones, so the agent keeps an **incremental cache**
+in `$CX_DATA_DIR/usage/`: per transcript, the byte offset read through the
+last complete line (`.off`) and one compacted row per message (`.rows`). Only
+bytes appended since are read, and only for transcripts touched within the
+window; the last, half-written line is left for next time. The rows file is
+replaced by a rename before the offset is written, so a kill only repeats
+rows, which the dedupe absorbs; a file smaller than its offset is read again
+from the start. One awk pass over the listings decides what changed (a shell
+loop reading each offset was most of a second by itself), and one over the
+rows does the sums. Delete the cache and the next run is slow and answers the
+same — invariant 4. The limits come from `_limits_readings`, the same function
+the tmux bar uses, so the two cannot disagree; only the usage figures leave
+`~/.claude.json`, which also holds the account's id and email.
 
 ### Claude's own status, and its hooks
 

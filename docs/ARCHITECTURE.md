@@ -405,6 +405,39 @@ because sidechains bury the main thread. And every line is parsed with
 append-only and is being written while it is read, so its final line is
 routinely a half-written object.
 
+### What `cx usage` counts
+
+`cx usage` reads the same store for tokens, and every transcript in it rather
+than the newest few lines, so it relies on three more observed properties:
+
+- **an assistant entry carries `.message.usage`** — `input_tokens`,
+  `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` —
+  and a UTC `.timestamp`;
+- **one message is written as one line per content block**, every one with the
+  same `.message.id` and its usage, and `output_tokens` grows from line to line
+  (seen: fifteen lines saying 3, the last 6706). Summing lines over-counts, so
+  rows are deduplicated by id, keeping the largest of each figure — across
+  files too, because a resumed or forked conversation can carry earlier
+  messages along;
+- **subagents write their own transcripts**, under
+  `<session-id>/subagents/*.jsonl`. Their tokens are the account's, so they
+  count, and they count under the project whose directory they are in.
+
+The store runs to a gigabyte on a busy server, and the active transcripts to
+tens of megabytes, so the agent keeps an **incremental cache** under
+`~/.local/share/cx/usage/`: per transcript, how many bytes of complete lines it
+has read and one row per message found there. A run reads only what was
+appended since, and only transcripts touched within the window. It is a cache
+under invariant 3 — delete it and the next run reads everything again and
+answers the same. Measured on a server with 420 transcripts (1.1 GB): about
+37 seconds from nothing, under two once the cache is warm.
+
+The limits come from two readings Claude itself leaves on the server — the
+status line a cx session was last handed, and the copy Claude keeps of its
+own `/usage` screen in `~/.claude.json` — the same two the server's tmux bar
+shows, read by the same function. Only the usage figures leave that file;
+nothing reads the login.
+
 ## Naming and tmux
 
 A **unit** is a working directory: a project, or one of its worktrees. A
