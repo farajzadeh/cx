@@ -32,7 +32,7 @@ _CX_ACTIVITY_LOADED=1
 export CX_IDLE_GRACE CX_PEEK_TAIL
 
 # cx_activity_state ALIVE SHELL UUID PRESENT LAST_ROLE LAST_STOP QUIET
-#                   [CLAUDE_STATUS CLAUDE_KIND EVENT HOOKED]
+#                   [CLAUDE_STATUS CLAUDE_KIND EVENT HOOKED [CHAT]]
 #
 # ALIVE/SHELL/PRESENT are the strings "true" or "false"; UUID and the LAST_*
 # fields are empty when unknown; QUIET is seconds since the transcript was last
@@ -54,6 +54,9 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 #   HOOKED         "true" when cx started the session with its hooks, so Claude
 #                  is expected to report — and saying nothing means it has not
 #                  finished starting.
+#   CHAT           set when a `cx chat` holds the conversation: how many of its
+#                  approvals and questions are waiting for the program at the
+#                  other end. A chat runs no tmux, so ALIVE is false.
 #
 # CLAUDE_STATUS BEATS EVENT, and the order was found the hard way. Pressing
 # Escape at a permission prompt fires no hook at all — no Stop, nothing — so a
@@ -83,6 +86,42 @@ cx_activity_state() {
   local alive="$1" shell="$2" uuid="$3" present="$4"
   local last_role="$5" last_stop="$6" quiet="$7"
   local claude_status="${8:-}" claude_kind="${9:-}" event="${10:-}" hooked="${11:-}"
+  local chat="${12:-}"
+
+  # A chat has no tmux to be alive in, and is alive all the same. Its own count
+  # of waiting requests comes first: Claude's status file says `busy` for the
+  # whole time a permission tool is waiting, which a chat's approval always is.
+  # Then Claude's word, then the hooks'. With none of them it has just started.
+  if [ "$alive" != true ] && [ -n "$chat" ] && [ "$chat" != - ]; then
+    case "$chat" in
+      *[!0-9]*) ;;
+      *)
+        if [ "$chat" -gt 0 ]; then
+          printf 'blocked'
+          return 0
+        fi
+        ;;
+    esac
+    case "$claude_status" in
+      busy)
+        printf 'working'
+        return 0
+        ;;
+      waiting)
+        printf 'blocked'
+        return 0
+        ;;
+      idle) event=idle ;;
+    esac
+    case "$event" in
+      working | blocked)
+        printf '%s' "$event"
+        return 0
+        ;;
+    esac
+    if [ "$present" = true ]; then printf 'idle'; else printf 'fresh'; fi
+    return 0
+  fi
 
   if [ "$alive" != true ] || [ "$shell" = true ]; then
     # A background session never had a tmux session to lose, and cx used to
@@ -267,7 +306,7 @@ cx_activity_color() {
 cx_activity_rows() {
   local host="$1" file="$2" now="$3"
   local target alive shell attached uuid present last_role last_stop mtime created
-  local cstatus ckind event hooked quiet age state
+  local cstatus ckind event hooked chat quiet age state
 
   # Every field is emitted with a "-" placeholder when it is absent, and the
   # placeholder is not decoration. TAB IS IFS WHITESPACE: with IFS set to it,
@@ -280,7 +319,7 @@ cx_activity_rows() {
   #
   # The rows printed below keep the same convention for the same reason: their
   # last two columns are routinely empty.
-  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created cstatus ckind event hooked; do
+  while IFS='	' read -r target alive shell attached uuid present last_role last_stop mtime created cstatus ckind event hooked chat; do
     [ -n "$target" ] || continue
 
     [ "$uuid" = - ] && uuid=""
@@ -289,6 +328,7 @@ cx_activity_rows() {
     [ "$cstatus" = - ] && cstatus=""
     [ "$ckind" = - ] && ckind=""
     [ "$event" = - ] && event=""
+    [ "$chat" = - ] && chat=""
 
     quiet=""
     age=""
@@ -296,7 +336,7 @@ cx_activity_rows() {
     [ "$created" != - ] && age=$((now - created))
 
     state=$(cx_activity_state "$alive" "$shell" "$uuid" "$present" \
-      "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event" "$hooked")
+      "$last_role" "$last_stop" "$quiet" "$cstatus" "$ckind" "$event" "$hooked" "$chat")
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$host" "$target" "$state" "$attached" "${quiet:--}" "${age:--}"
@@ -320,7 +360,9 @@ $(jq -r '
         (.claude.status      | f),
         (.claude.kind        | f),
         (.event.state        | f),
-        (.hooks | tostring)
+        (.hooks | tostring),
+        # From agent 0.6.0 on: set only while a cx chat holds the session.
+        (.chat.pending       | f)
       ] | @tsv' "$file" 2>/dev/null)
 EOF
 }
