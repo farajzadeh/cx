@@ -27,6 +27,7 @@ _cx_cmd_desc=(
   'provision:install or update the agent on a server'
   'login:one-time Claude Code sign-in on a server'
   'doctor:check requirements and connectivity'
+  'usage:Claude usage limits, and tokens per day and project'
   'new:create and register a project'
   'ls:list projects and worktrees'
   'rm:unregister a project'
@@ -133,6 +134,7 @@ _cx_specs() {
     'host test' | 'host edit' | 'host rm') reply=('1:server:_cx_hosts') ;;
     provision) reply=('(-a --all *)'{-a,--all}'[every server]' '*:server:_cx_hosts') ;;
     login | doctor) reply=('1:server:_cx_hosts') ;;
+    usage) reply=('--days[tokens over the last N days]:N: ' '*:server:_cx_hosts') ;;
     ls) reply=(
       '--git[show git branch and state]'
       '(-f --filter)'{-f,--filter}'[only what matches]:pattern: '

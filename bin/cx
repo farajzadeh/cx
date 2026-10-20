@@ -130,6 +130,8 @@ ${C_BOLD}SERVERS${C_RESET}
   provision <host> | --all                install or update the agent
   login <host>                            one-time Claude Code sign-in
   doctor [host]                           check requirements and connectivity
+  usage [host] [--days N]                 Claude's usage limits, and tokens per
+                                          day and project
 
 ${C_BOLD}PROJECTS${C_RESET}
   new <host>:<name> [--repo URL]          create and register a project

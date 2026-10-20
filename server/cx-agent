@@ -43,10 +43,13 @@ set -eu
 # 0.6.0 added chat: a conversation over JSON lines for a program, with
 # approvals and questions answered through chat-mcp, the permission tool chat
 # hands Claude; and the chat fact in observe.
+# 0.7.0 added usage: the account's usage limits as Claude last reported them,
+# and tokens per day and per project from the transcripts, kept fast by an
+# incremental cache.
 # The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.6.0"
+CX_AGENT_VERSION="0.7.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -78,6 +81,14 @@ CX_NOTIFY="${CX_NOTIFY:-$HOME/.config/cx/notify}"
 # keeps open, ask and a second chat from becoming a second writer (invariant
 # 12), and a claim whose process is gone is simply taken over.
 CX_CHAT_DIR="${CX_CHAT_DIR:-$CX_DATA_DIR/chat}"
+
+# What `usage` has already read of each transcript: how far, and the token
+# rows found there. A cache in the invariant-4 sense — delete it and the next
+# `usage` reads every transcript again and answers the same, only slower.
+CX_USAGE_DIR="${CX_USAGE_DIR:-$CX_DATA_DIR/usage}"
+# The longest window `usage --days` takes. Cache entries are kept a little
+# longer than this, so no window ever has to read a transcript twice.
+CX_USAGE_MAX_DAYS=90
 
 # Worktrees live in a hidden directory beside the project, one subdirectory per
 # project, so `ls ~/projects` stays readable and `rm --purge` is one removal.
@@ -438,7 +449,17 @@ _find_claude() {
 # so `cx ls` reported no history for exactly the directories `cx open` could
 # still find it in. One function, two callers.
 _session_dir_name() {
-  printf '%s' "$1" | tr -c 'A-Za-z0-9-' '-'
+  printf '%s' "$1" | tr -c "$_SESSION_DIR_KEEP" '-'
+}
+_SESSION_DIR_KEEP='A-Za-z0-9-'
+
+# _session_dir_names — the same, for many paths at once: one per line in, one
+# per line out, so `usage` encodes every project and worktree in one process.
+# The character class is the one above; only the newline is kept as well, and
+# it goes first because the class ends in a literal "-", which a following
+# character would turn into a range.
+_session_dir_names() {
+  tr -c '\n'"$_SESSION_DIR_KEEP" '-'
 }
 
 _session_dir() {
@@ -2794,7 +2815,7 @@ _TMUX_STATUS_USAGE_JQ='
   .cachedUsageUtilization
   | select(type == "object" and (.utilization | type) == "object")
   | .utilization as $u
-  | {at: ((.fetchedAtMs // 0) / 1000 | floor),
+  | {at: ((.fetchedAtMs // 0) / 1000 | floor), source: "usage",
      five: {pct: $u.five_hour.utilization, reset: ($u.five_hour.resets_at | iso)},
      seven: {pct: $u.seven_day.utilization, reset: ($u.seven_day.resets_at | iso)},
      scoped: [($u.limits // [])[]
@@ -2830,43 +2851,52 @@ _TMUX_STATUS_LIMITS_JQ='
   | if ($parts | length) == 0 then empty
     else ($parts | join(" \u00b7 ")) + (if $w == null then "" else ($now - $w.at | ago) end) end'
 
-# _tmux_status_limits — the account's usage limits, for every session's bar.
+# _limits_readings — every reading of the account's usage limits Claude has
+# left on this server, one object per line in the shape _TMUX_STATUS_LIMITS_JQ
+# reads: {at, source, five, seven, scoped}.
 #
 # Limits belong to the account, not to a session, so any fresh reading serves
-# every bar — which is what lets a session started before cx gave Claude a
-# status line show them too. Two readings, and the newer wins:
+# every session — which is what lets a session started before cx gave Claude a
+# status line show them too. Two readings, and the caller takes the newer:
 #
 #   * the newest status line any session on this server was handed, which
-#     Claude refreshes on every turn;
+#     Claude refreshes on every turn (source "statusline");
 #   * the copy Claude keeps of its own /usage screen, cachedUsageUtilization in
-#     ~/.claude.json. Only it has the per-model weekly limits, but it is fetched
-#     rarely: over an hour apart on a busy server.
+#     ~/.claude.json (source "usage"). Only it has the per-model weekly limits,
+#     but it is fetched rarely: over an hour apart on a busy server.
 #
 # Both are observed, not documented, and either missing costs only its part.
 # ~/.claude.json is read whole each time; at ~100 KB that is a few milliseconds
-# of jq, cheaper than keeping a copy of it honest.
-_tmux_status_limits() {
+# of jq, cheaper than keeping a copy of it honest. Only the usage figures leave
+# it: the file also holds the account's id and email, and nothing here may
+# print them. The tmux bar and `usage` both read through this one function, so
+# the two can never disagree about what the account has used.
+_limits_readings() {
   local newest="" at=0
   # One ls for the newest, rather than a stat per session per redraw. The names
   # are conversation ids, validated when written, so nothing can mis-split.
   # shellcheck disable=SC2012
   newest=$(ls -t "$CX_STATE_DIR"/*.line 2>/dev/null | head -n 1) || newest=""
   if [ -n "$newest" ]; then at=$(_mtime "$newest" 2>/dev/null) || at=0; fi
-  {
-    if [ -n "$newest" ]; then
-      jq -c --argjson at "${at:-0}" '
-        select((.rate_limits | type) == "object")
-        | {at: $at,
-           five: {pct: .rate_limits.five_hour.used_percentage,
-                  reset: .rate_limits.five_hour.resets_at},
-           seven: {pct: .rate_limits.seven_day.used_percentage,
-                   reset: .rate_limits.seven_day.resets_at},
-           scoped: []}' "$newest" 2>/dev/null
-    fi
-    if [ -r "$CX_CLAUDE_JSON" ]; then
-      jq -c "$_TMUX_STATUS_USAGE_JQ" "$CX_CLAUDE_JSON" 2>/dev/null
-    fi
-  } | jq -rn "$_TMUX_STATUS_DEFS$_TMUX_STATUS_LIMITS_JQ" 2>/dev/null
+  if [ -n "$newest" ]; then
+    jq -c --argjson at "${at:-0}" '
+      select((.rate_limits | type) == "object")
+      | {at: $at, source: "statusline",
+         five: {pct: .rate_limits.five_hour.used_percentage,
+                reset: .rate_limits.five_hour.resets_at},
+         seven: {pct: .rate_limits.seven_day.used_percentage,
+                 reset: .rate_limits.seven_day.resets_at},
+         scoped: []}' "$newest" 2>/dev/null || true
+  fi
+  if [ -r "$CX_CLAUDE_JSON" ]; then
+    jq -c "$_TMUX_STATUS_USAGE_JQ" "$CX_CLAUDE_JSON" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# _tmux_status_limits — the account's usage limits, for every session's bar.
+_tmux_status_limits() {
+  _limits_readings | jq -rn "$_TMUX_STATUS_DEFS$_TMUX_STATUS_LIMITS_JQ" 2>/dev/null
   return 0
 }
 
@@ -4858,6 +4888,349 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# usage
+# ---------------------------------------------------------------------------
+#
+# How much of Claude this server's account has used: the usage limits as Claude
+# last reported them, and tokens per day and per project from the transcripts.
+# Read-only, one-shot, and everything it reports is something Claude Code wrote
+# down by itself — never the login, never a call to Anthropic.
+
+# One transcript line in, one row out: id TAB date TAB input TAB output TAB
+# cache read TAB cache write. Claude writes an assistant message as one line
+# per content block, every one carrying the message's id and usage, and the
+# output count grows from line to line (seen: fifteen lines saying 3, the last
+# 6706). So nothing is summed here; the rows are deduplicated by id later,
+# keeping the largest of each figure. `fromjson?` is load-bearing, as in
+# _transcript_filter: the line may be one Claude is still writing.
+_USAGE_ROWS_JQ='
+  def n: if type == "number" and . >= 0 then floor else 0 end;
+  fromjson? // empty
+  | select(type == "object" and .type == "assistant"
+      and (.message | type) == "object" and (.message.usage | type) == "object")
+  | .message.usage as $u
+  | [((.message.id // .uuid // "") | tostring),
+     ((.timestamp // "") | tostring | .[0:10]),
+     ($u.input_tokens | n), ($u.output_tokens | n),
+     ($u.cache_read_input_tokens | n), ($u.cache_creation_input_tokens | n)]
+  | select(.[0] != "" and (.[1] | length) == 10)
+  | map(tostring) | @tsv'
+
+# The newest of _limits_readings, as usage reports it. Facts only: a window
+# whose reset time has passed is still reported, and the caller, who knows what
+# time it is where it shows them, decides what such a figure means now.
+_USAGE_LIMITS_JQ='
+  def win: if (.pct | type) != "number" then null
+    else {pct: .pct, resets_at: (.reset | if type == "number" then floor else null end)} end;
+  [inputs | select(type == "object")]
+  | map(select(.five.pct != null or .seven.pct != null))
+  | max_by(.at)
+  | if . == null then null
+    else {five_hour: (.five | win), seven_day: (.seven | win), at: .at, source: .source} end'
+
+# Rows in, one row per id out, in first-seen order: the earliest date and the
+# largest of each figure. The same rule twice — per transcript when its rows
+# are written, then across every transcript — so a message counts once however
+# many lines, and however many files, it appears in (a resumed or forked
+# conversation can carry earlier messages along; 177 of 56,000 did on one
+# server). A row of the wrong shape, as a kill mid-write could leave, is
+# dropped — except from rows this awk wrote itself (TRUSTED): the pass across
+# every transcript reads only those, and checking them again is pure cost.
+# Run under LC_ALL=C: these are bytes, and gawk is a third faster.
+_USAGE_DEDUPE_AWK='
+  function num(s) { return s ~ /^[0-9]+$/ }
+  function row(id, dt, i, o, r, w, src, trusted) {
+    if (!trusted && (length(dt) != 10 || !num(i) || !num(o) || !num(r) || !num(w))) return
+    if (!(id in day)) {
+      day[id] = dt; from[id] = src; ti[id] = i + 0; to[id] = o + 0; tr[id] = r + 0; tw[id] = w + 0
+      ids[++n] = id
+      return
+    }
+    if (dt < day[id]) { day[id] = dt; from[id] = src }
+    if (i + 0 > ti[id]) ti[id] = i + 0
+    if (o + 0 > to[id]) to[id] = o + 0
+    if (r + 0 > tr[id]) tr[id] = r + 0
+    if (w + 0 > tw[id]) tw[id] = w + 0
+  }'
+
+# _usage_update TRANSCRIPT CACHE SIZE — bring CACHE.rows up to SIZE bytes of
+# TRANSCRIPT, reading only what was appended since CACHE.off.
+#
+# A transcript is append-only, so what was read stays read: the active ones run
+# to tens of megabytes, and reading them whole every time is what made a naive
+# pass take twenty seconds on a real server. SIZE is taken once, before any
+# reading, so a transcript that grows meanwhile is read to a consistent point.
+# The snapshot stops at its last newline: the line after it is one Claude is
+# still writing, and it is read whole next time. The rows file is replaced with
+# a rename and the offset written after it, so a kill anywhere leaves either
+# the old pair or rows a step ahead of their offset — and reading a chunk twice
+# only repeats rows, which the dedupe absorbs.
+_usage_update() {
+  local f="$1" c="$2" size="$3" off=0 take last cut old=""
+  if [ -r "$c.off" ]; then read -r off <"$c.off" 2>/dev/null || off=0; fi
+  case "$off" in '' | *[!0-9]*) off=0 ;; esac
+  [ "$off" != "$size" ] || return 0
+  mkdir -p "$(dirname "$c")" 2>/dev/null || return 0
+  # Smaller than what was read: not the file that was read. Start it over.
+  if [ "$off" -gt "$size" ]; then
+    off=0
+    rm -f "$c.rows" 2>/dev/null || true
+  fi
+  take=$((size - off))
+  # The last byte of the snapshot; command substitution drops a newline, so
+  # anything left means the snapshot ends inside a line.
+  last=""
+  if [ "$take" -gt 0 ]; then
+    last=$(tail -c +"$size" "$f" 2>/dev/null | head -c 1) || last=""
+  fi
+  if [ -n "$last" ]; then
+    cut=$(tail -c +"$((off + 1))" "$f" 2>/dev/null | head -c "$take" | tail -n 1 | wc -c) || cut=0
+    take=$((take - cut))
+  fi
+  if [ "$take" -le 0 ]; then
+    # Nothing whole to read yet; but a start-over still has to be recorded.
+    printf '%s\n' "$off" >"$c.off" 2>/dev/null || true
+    return 0
+  fi
+  # The greps only skip lines that cannot be assistant messages (tool results
+  # are most of a transcript's bytes); jq decides what is one.
+  tail -c +"$((off + 1))" "$f" 2>/dev/null | head -c "$take" |
+    LC_ALL=C grep -F '"assistant"' 2>/dev/null | LC_ALL=C grep -F '"usage"' 2>/dev/null |
+    jq -Rr "$_USAGE_ROWS_JQ" >"$c.new.$$" 2>/dev/null || {
+    rm -f "$c.new.$$" 2>/dev/null
+    return 0
+  }
+  if [ -s "$c.new.$$" ]; then
+    [ ! -s "$c.rows" ] || old="$c.rows"
+    # One row per message here already, so the pass across every transcript
+    # reads half the rows it would otherwise.
+    if LC_ALL=C awk -F'\t' "$_USAGE_DEDUPE_AWK"'
+      NF == 6 { row($1, $2, $3, $4, $5, $6, "") }
+      END { for (k = 1; k <= n; k++) { id = ids[k]
+        printf "%s\t%s\t%.0f\t%.0f\t%.0f\t%.0f\n", id, day[id], ti[id], to[id], tr[id], tw[id] } }' \
+      ${old:+"$old"} "$c.new.$$" >"$c.tmp.$$" 2>/dev/null &&
+      mv -f "$c.tmp.$$" "$c.rows" 2>/dev/null; then
+      :
+    else
+      # Not recorded, so not counted as read: the next run tries this chunk again.
+      rm -f "$c.tmp.$$" "$c.new.$$" 2>/dev/null
+      return 0
+    fi
+  fi
+  rm -f "$c.new.$$" 2>/dev/null || true
+  printf '%s\n' "$((off + take))" >"$c.off" 2>/dev/null || true
+}
+
+# _usage_prune STORE — drop what the cache holds for transcripts that are gone,
+# and for any that have not grown in longer than the longest window: those can
+# hold nothing a window would count.
+_usage_prune() {
+  local store="$1" o rel
+  [ -d "$CX_USAGE_DIR" ] || return 0
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    rel=${o#"$CX_USAGE_DIR"/}
+    rel=${rel#/}
+    rel=${rel%.off}
+    [ ! -e "$store/$rel" ] || continue
+    rm -f "$o" "${o%.off}.rows" 2>/dev/null || true
+  done <<EOF
+$(find "$CX_USAGE_DIR/" -type f -name '*.off' 2>/dev/null)
+EOF
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    rm -f "$o" "${o%.off}.rows" 2>/dev/null || true
+  done <<EOF
+$(find "$CX_USAGE_DIR/" -type f -name '*.off' -mtime +"$((CX_USAGE_MAX_DAYS + 2))" 2>/dev/null)
+EOF
+  # What a run killed mid-update leaves behind.
+  find "$CX_USAGE_DIR/" -type f \( -name '*.jsonl.new.*' -o -name '*.jsonl.tmp.*' \) \
+    -mtime +0 -exec rm -f {} + 2>/dev/null || true
+  return 0
+}
+
+# _usage_sums DAYS SINCE — token totals from every transcript touched in the
+# last DAYS days, as TSV: "D date in out cache_read cache_write messages" per
+# day and "P dir …" per top-level directory of the session store.
+#
+# Subagents' transcripts (<session>/subagents/*.jsonl) count too: their tokens
+# are the account's like any others. One awk does the dedupe and the sums: a
+# message counts once however many lines, and however many files, it appears
+# in — a resumed or forked conversation can carry earlier messages along — on
+# its earliest date.
+_usage_sums() {
+  local days="$1" since="$2" store="$CX_CLAUDE_DIR/projects" plan kind a b c
+  [ -d "$store" ] || return 0
+  mkdir -p "$CX_USAGE_DIR" 2>/dev/null || return 0
+  # The plan, in one awk over two listings: every offset the cache holds (one
+  # awk per batch of files, not a read per file) and every transcript's size
+  # (one find and a few wc, not a stat per file). "U size transcript cache"
+  # for each transcript that grew, "R rows" for each whose rows count. Most
+  # have not changed since last time, and for those this is all the work there
+  # is — on a server with 420 transcripts, a shell loop reading each offset was
+  # most of a second by itself. A transcript last touched before the window has
+  # nothing in it, and find follows no link below the store. The path becomes
+  # a path in the cache, so anything but the names Claude gives its
+  # directories and files is skipped rather than escaped.
+  plan=$(
+    {
+      find "$CX_USAGE_DIR/" -type f -name '*.off' -exec awk 'FNR == 1 { print "O\t" FILENAME "\t" $0 }' {} + 2>/dev/null
+      find "$store/" -type f -name '*.jsonl' -mtime "-$((days + 1))" -exec wc -c {} + 2>/dev/null
+    } | LC_ALL=C awk -v store="$store/" -v cache="$CX_USAGE_DIR/" '
+      function clean(p) { gsub(/\/\/+/, "/", p); return p }
+      substr($0, 1, 2) == "O\t" { split($0, o, "\t"); off[clean(o[2])] = o[3]; next }
+      match($0, /^[ \t]*[0-9]+[ \t]/) {
+        size = $1
+        f = substr($0, RLENGTH + 1)
+        if (index(f, store) != 1) next
+        rel = substr(f, length(store) + 1)
+        sub(/^\/+/, "", rel)
+        if (rel == "" || rel ~ /[^A-Za-z0-9._\/-]/ || index(rel, "..")) next
+        c = clean(cache rel)
+        if (off[c ".off"] != size) print "U\t" size "\t" f "\t" c
+        print "R\t" c ".rows"
+      }'
+  ) || plan=""
+  while IFS='	' read -r kind a b c; do
+    [ "$kind" = U ] || continue
+    _usage_update "$b" "$c" "$a" || true
+  done <<EOF
+$plan
+EOF
+  _usage_prune "$store"
+  # Compacted rows only, so they are taken as written; a rows file that is
+  # missing (a transcript with no assistant messages) reads as empty.
+  printf '%s\n' "$plan" | LC_ALL=C awk -F'\t' -v since="$since" -v base="$CX_USAGE_DIR/" "$_USAGE_DEDUPE_AWK"'
+    BEGIN { gsub(/\/\/+/, "/", base) }
+    $1 == "R" {
+      f = $2
+      # The top-level directory of the store: which project it was.
+      d = substr(f, length(base) + 1)
+      sub(/^\/+/, "", d)
+      i = index(d, "/")
+      if (i > 0) d = substr(d, 1, i - 1)
+      while ((getline line < f) > 0)
+        if (split(line, a, "\t") == 6) row(a[1], a[2], a[3], a[4], a[5], a[6], d, 1)
+      close(f)
+    }
+    END {
+      for (k = 1; k <= n; k++) {
+        id = ids[k]
+        if (day[id] < since) continue
+        x = day[id]
+        Di[x] += ti[id]; Do[x] += to[id]; Dr[x] += tr[id]; Dw[x] += tw[id]; Dn[x]++
+        x = from[id]
+        Pi[x] += ti[id]; Po[x] += to[id]; Pr[x] += tr[id]; Pw[x] += tw[id]; Pn[x]++
+      }
+      for (k in Dn) printf "D\t%s\t%.0f\t%.0f\t%.0f\t%.0f\t%d\n", k, Di[k], Do[k], Dr[k], Dw[k], Dn[k]
+      for (k in Pn) printf "P\t%s\t%.0f\t%.0f\t%.0f\t%.0f\t%d\n", k, Pi[k], Po[k], Pr[k], Pw[k], Pn[k]
+    }'
+}
+
+# _usage_dirmap — which session-store directory is which project, as TSV:
+# "<dir> exact <project>" for a project and each of its worktrees, and
+# "<prefix> prefix <project>" for where its worktrees live, which still names
+# the project once a worktree is gone. Encoded by _session_dir_name, the one
+# place that encoding is written down.
+_usage_dirmap() {
+  local name path wpath meta="" paths="" enc kind
+  [ -r "$CX_REGISTRY" ] || return 0
+  while IFS='	' read -r name path; do
+    [ -n "$name" ] && [ -n "$path" ] || continue
+    meta="${meta}exact	$name
+"
+    paths="$paths$path
+"
+    while IFS='	' read -r _ wpath _; do
+      [ -n "$wpath" ] || continue
+      meta="${meta}exact	$name
+"
+      paths="$paths$wpath
+"
+    done <<EOF
+$(_worktrees_tsv "$path")
+EOF
+    meta="${meta}prefix	$name
+"
+    paths="$paths$(_worktree_base "$path")
+"
+  done <<EOF
+$(jq -r '.projects[]? | [(.name // "" | tostring), (.path // "" | tostring)] | @tsv' "$CX_REGISTRY" 2>/dev/null)
+EOF
+  [ -n "$paths" ] || return 0
+  # The paths and what each one is travel as two lists in the same order, so
+  # every path is encoded in one tr instead of one process per path.
+  printf '%s' "$paths" | _session_dir_names |
+    while IFS= read -r enc && IFS='	' read -r kind name <&3; do
+      if [ "$kind" = prefix ]; then enc="$enc-"; fi
+      printf '%s\t%s\t%s\n' "$enc" "$kind" "$name"
+    done 3<<EOF
+$meta
+EOF
+}
+
+# cmd_usage [--days N] — limits and tokens, as one JSON object.
+#
+# Days are UTC dates, as the transcripts' timestamps are. A directory of the
+# session store no registered project accounts for (a session started in a
+# home directory, a project registered elsewhere) is counted under project
+# null rather than dropped: it is still the account's usage.
+cmd_usage() {
+  local days=30
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days)
+        [ $# -ge 2 ] || die "--days needs a number" 3
+        days="$2"
+        shift
+        ;;
+      --json) ;; # always JSON; accepted for symmetry with the client
+      *) die "unknown option: $1" 3 ;;
+    esac
+    shift
+  done
+  case "$days" in
+    '' | *[!0-9]* | ???*) die "--days wants a number from 1 to $CX_USAGE_MAX_DAYS" 3 ;;
+  esac
+  days=$((10#$days))
+  if [ "$days" -lt 1 ] || [ "$days" -gt "$CX_USAGE_MAX_DAYS" ]; then
+    die "--days wants a number from 1 to $CX_USAGE_MAX_DAYS" 3
+  fi
+
+  local now since limits sums dirmap
+  now=$(date +%s)
+  since=$(jq -rn --argjson t "$now" --argjson d "$days" '$t - ($d - 1) * 86400 | todate | .[0:10]')
+  limits=$(_limits_readings | jq -cn "$_USAGE_LIMITS_JQ" 2>/dev/null) || limits=""
+  [ -n "$limits" ] || limits=null
+  sums=$(_usage_sums "$days" "$since") || sums=""
+  dirmap=$(_usage_dirmap) || dirmap=""
+
+  jq -nc --argjson now "$now" --arg since "$since" --argjson limits "$limits" \
+    --arg sums "$sums" --arg dirmap "$dirmap" '
+    def rows($s): $s | split("\n") | map(select(length > 0) | split("\t"));
+    def counts: {input: (.[2] | tonumber), output: (.[3] | tonumber),
+      cache_read: (.[4] | tonumber), cache_write: (.[5] | tonumber), messages: (.[6] | tonumber)};
+    def fresh: .input + .output + .cache_write;
+    (rows($dirmap)) as $m
+    | ($m | map(select(.[1] == "exact") | {key: .[0], value: .[2]}) | from_entries) as $exact
+    | ($m | map(select(.[1] == "prefix"))) as $prefix
+    | rows($sums) as $s
+    | {observed_at: $now, since: $since, limits: $limits,
+       days: ($s | map(select(.[0] == "D") | {date: .[1]} + counts) | sort_by(.date)),
+       projects: ($s | map(select(.[0] == "P") | .[1] as $d
+           | {project: (if $exact | has($d) then $exact[$d]
+               else [$prefix[] | select(.[0] as $p | $d | startswith($p))]
+                 | max_by(.[0] | length) | if . == null then null else .[2] end end)}
+             + counts)
+         | group_by(.project)
+         | map(reduce .[] as $r ({project: .[0].project, input: 0, output: 0,
+             cache_read: 0, cache_write: 0, messages: 0};
+             .input += $r.input | .output += $r.output | .cache_read += $r.cache_read
+             | .cache_write += $r.cache_write | .messages += $r.messages))
+         | sort_by(0 - fresh))}'
+}
+
+# ---------------------------------------------------------------------------
 # doctor
 # ---------------------------------------------------------------------------
 
@@ -4922,7 +5295,7 @@ cmd_doctor() {
       # feature gates deliberately use `version` instead: that is one cheap
       # line, where reaching this verb costs _find_claude, five tool_version
       # calls and four credential stats, and a gate runs before every call.
-      capabilities: ["units", "detach", "observe", "nudge", "goals", "chat"],
+      capabilities: ["units", "detach", "observe", "nudge", "goals", "chat", "usage"],
       hostname: $hostname,
       project_root: $root,
       registry: { path: $registry, valid: $registry_ok },
@@ -4986,6 +5359,9 @@ cx-agent — server-side helper for cx (not intended for direct use)
               [--dangerous] [-- CLAUDE_ARGS...]
                                 a conversation as JSON lines on stdin and
                                 stdout, until stdin closes (docs/chat.md)
+  usage [--days N]              the account's usage limits as Claude last
+                                reported them, and tokens per day and per
+                                project from the transcripts (N: 1-90, 30)
   chat-mcp <rundir>             the permission tool chat hands Claude, an MCP
                                 server on stdio; run by Claude
   goal new <name> [--member T]...           definition of done on stdin
@@ -5065,6 +5441,7 @@ main() {
     goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
     chat) cmd_chat "$@" ;;
+    usage) cmd_usage "$@" ;;
     # Run by Claude, as the permission tool chat hands it; see cmd_chat_mcp.
     chat-mcp) cmd_chat_mcp "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;

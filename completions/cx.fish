@@ -110,6 +110,7 @@ for c in \
     'provision	install or update the agent' \
     'login	one-time Claude Code sign-in' \
     'doctor	check requirements and connectivity' \
+    'usage	Claude usage limits, and tokens per day and project' \
     'new	create a project' \
     'ls	list projects and worktrees' \
     'rm	unregister a project' \
@@ -148,7 +149,7 @@ complete -c cx -n '__cx_needs_sub goal' -a 'new ls show dod member pause resume 
 complete -c cx -n '__cx_needs_sub cache' -a 'status clear refresh'
 
 # Arguments.
-complete -c cx -n '__cx_sub host test edit rm; or __cx_using provision login doctor ls; or __cx_sub cache clear refresh' -a '(__cx_hosts)'
+complete -c cx -n '__cx_sub host test edit rm; or __cx_using provision login doctor usage ls; or __cx_sub cache clear refresh' -a '(__cx_hosts)'
 complete -c cx -n '__cx_sub host import' -a '(__cx_ssh_hosts)'
 complete -c cx -n '__cx_using new' -a '(__cx_hosts | string replace -r "^([^\t]*)" "\$1:")'
 complete -c cx -n '__cx_using open resume shell code ask chat peek rm find pick; or __cx_sub wt ls rm' -a '(__cx_targets)'
@@ -205,6 +206,7 @@ complete -c cx -n '__cx_using stop' -l all -d 'every session of the project'
 complete -c cx -n '__cx_using peek' -l all -d 'list finished sessions too'
 complete -c cx -n '__cx_using peek' -l tail -x -d 'include the last N messages in --json'
 complete -c cx -n '__cx_using peek' -l goal -x -a '(__cx_goals)' -d "just that goal's members"
+complete -c cx -n '__cx_using usage' -l days -x -d 'tokens over the last N days'
 complete -c cx -n '__cx_using nudge' -l force -d 'send it even if the session is busy'
 complete -c cx -n '__cx_using bar' -l setup -d 'print tmux configuration'
 complete -c cx -n '__cx_using bar' -l plain -d 'no tmux styling'

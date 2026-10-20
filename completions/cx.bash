@@ -23,7 +23,7 @@
 # Tables
 # ---------------------------------------------------------------------------
 
-_cx_commands="host provision login doctor new ls rm wt worktree open resume shell code ask chat status stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
+_cx_commands="host provision login doctor usage new ls rm wt worktree open resume shell code ask chat status stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
 
 # Valid anywhere in the argv: bin/cx strips them before choosing a subcommand.
 _cx_global_flags="-r --refresh --no-cache --stale --json -y --yes --no-color"
@@ -65,6 +65,7 @@ _cx_flags() {
     chat) printf '%s' "$claude --allowed-tools=word --append-system-prompt-file=file" ;;
     stop) printf '%s' "--all" ;;
     peek) printf '%s' "--all --tail=word --goal=goal" ;;
+    usage) printf '%s' "--days=word" ;;
     nudge) printf '%s' "--force" ;;
     bar) printf '%s' "--setup --plain --attached --color --icons=icons --window=all --max=word --states=states --label=word" ;;
     tabs) printf '%s' "-n --dry-run --no-attach --take -s --session=word" ;;
@@ -92,7 +93,7 @@ _cx_positional() {
   case "$1${2:+ $2}:$3" in
     "host test:1" | "host edit:1" | "host rm:1") printf host ;;
     "host import:1") printf sshhost ;;
-    provision:* | login:1 | doctor:1 | ls:1) printf host ;;
+    provision:* | login:1 | doctor:1 | ls:1 | usage:*) printf host ;;
     "cache clear:1" | "cache refresh:1") printf host ;;
     new:1) printf hostcolon ;;
     rm:1) printf projects ;;
