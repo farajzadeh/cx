@@ -13,6 +13,8 @@ release sets both to the same number. After upgrading the client, run
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-20
+
 ### Added
 
 - **`cx usage [host] [--days N]`** (2026-10-20): how much of Claude each
@@ -220,7 +222,8 @@ Initial release: manage servers (`cx host`), provision the agent and sign
 Claude Code in on each one, create and list projects across servers, and
 open, resume, stop and ask Claude sessions that live in tmux on the server.
 
-[Unreleased]: https://github.com/farajzadeh/cx/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/farajzadeh/cx/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/farajzadeh/cx/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/farajzadeh/cx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/farajzadeh/cx/compare/v0.1.0...v0.5.0
 [0.1.0]: https://github.com/farajzadeh/cx/releases/tag/v0.1.0
