@@ -130,6 +130,12 @@ the turns of whichever loses are silently orphaned.
 `cx ask <target>@<label>` did exactly this until 0.3.0. It now refuses with
 exit 4 when that session is live and points at `cx nudge` instead.
 
+`cx chat` holds a conversation with no tmux session at all, so it leaves its
+own mark: `~/.local/share/cx/chat/<id>/owner`, with its pid. A chat refuses a
+conversation a live tmux session holds (exit 4, `refused` on its stdout), and
+while one runs, `cx open`, `cx ask @label`, `cx forget` and a second chat
+refuse it in turn.
+
 Steering a running session is `tmux send-keys` into its pane — never a second
 `claude`. The text goes through a paste buffer (`load-buffer` from stdin,
 `paste-buffer -d`, then `C-m`) rather than as a `send-keys` argument, because a
@@ -318,6 +324,25 @@ with no client-side state and no replication between servers.
 `cx goal dod` records the previous text in `revisions` rather than overwriting
 it. Changing the definition of done halfway through is normal, and afterwards
 the only way to know what a session was actually asked for is to have kept it.
+
+## A conversation for a program
+
+`cx chat` is `cx open` without the terminal: the agent runs `claude -p` with
+stream-json on both sides against the session's pinned conversation, and the
+client relays JSON lines over ssh like any other verb. Approvals go through
+`--permission-prompt-tool`, the documented route, pointed at an MCP server
+that is the agent itself (`cx-agent chat-mcp`), so the agent stays one file.
+The wire protocol and the Claude Code behaviour it rests on are in
+[chat.md](chat.md).
+
+Three choices there are not obvious. Claude is interrupted with its own
+`interrupt` control request, because SIGINT ends a `claude -p` outright. Every
+line bound for the client is written under a lock, because several processes
+write that stream and one stream-json line can be megabytes — far past what a
+pipe writes in one piece; the lock is a token in a FIFO, two shell builtins a
+line, where `mkdir` would fork. And a chat is not a daemon: when the client's
+stdin closes, Claude's does, and Claude finishes its turn and exits, after cx
+denies whatever approvals were still waiting so that it can.
 
 ## The Claude session store — a known assumption
 

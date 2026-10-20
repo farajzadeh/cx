@@ -120,6 +120,7 @@ for c in \
     'shell	plain shell, no Claude' \
     'code	open in VS Code over Remote-SSH' \
     'ask	one-shot question' \
+    'chat	a conversation as JSON lines, for a program' \
     'status	live sessions' \
     'stop	end a session' \
     'forget	drop a finished session from the lists' \
@@ -150,7 +151,7 @@ complete -c cx -n '__cx_needs_sub cache' -a 'status clear refresh'
 complete -c cx -n '__cx_sub host test edit rm; or __cx_using provision login doctor ls; or __cx_sub cache clear refresh' -a '(__cx_hosts)'
 complete -c cx -n '__cx_sub host import' -a '(__cx_ssh_hosts)'
 complete -c cx -n '__cx_using new' -a '(__cx_hosts | string replace -r "^([^\t]*)" "\$1:")'
-complete -c cx -n '__cx_using open resume shell code ask peek rm find pick; or __cx_sub wt ls rm' -a '(__cx_targets)'
+complete -c cx -n '__cx_using open resume shell code ask chat peek rm find pick; or __cx_sub wt ls rm' -a '(__cx_targets)'
 complete -c cx -n '__cx_sub wt add' -a '(__cx_targets | string match -v -r "[/@]" | string replace -r "^([^\t]*:[^\t]+)\t.*" "\$1/")'
 complete -c cx -n '__cx_using stop nudge' -a '(__cx_targets live)'
 complete -c cx -n '__cx_using forget' -a '(__cx_targets known)'
@@ -191,13 +192,15 @@ complete -c cx -n '__cx_sub wt rm' -l force -d 'discard uncommitted changes'
 complete -c cx -n '__cx_sub wt rm' -l merged -d 'every merged worktree'
 complete -c cx -n '__cx_using open resume shell' -s d -l detach -d 'start it, do not attach'
 complete -c cx -n '__cx_using open resume shell new; or __cx_sub wt add' -l no-hooks -d 'without the hooks that report its state'
-complete -c cx -n '__cx_using open resume ask new; or __cx_sub wt add' -l permission-mode -x -a 'acceptEdits auto bypassPermissions manual dontAsk plan' -d 'how much Claude asks'
-complete -c cx -n '__cx_using open resume ask new; or __cx_sub wt add' -l dangerously-skip-permissions -d 'bypass ALL permission checks'
-complete -c cx -n '__cx_using open resume ask new; or __cx_sub wt add; or __cx_sub goal on-stop' -l model -x -a 'opus sonnet haiku' -d 'model'
-complete -c cx -n '__cx_using open resume ask new; or __cx_sub wt add' -l effort -x -a 'low medium high xhigh max' -d 'reasoning effort'
+complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add' -l permission-mode -x -a 'acceptEdits auto bypassPermissions manual dontAsk plan' -d 'how much Claude asks'
+complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add' -l dangerously-skip-permissions -d 'bypass ALL permission checks'
+complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add; or __cx_sub goal on-stop' -l model -x -a 'opus sonnet haiku' -d 'model'
+complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add' -l effort -x -a 'low medium high xhigh max' -d 'reasoning effort'
 complete -c cx -n '__cx_using ask' -l output-format -x -a 'text json stream-json' -d 'output format'
 complete -c cx -n '__cx_using ask' -l json-schema -x -d 'JSON Schema for structured output'
 complete -c cx -n '__cx_using ask' -l max-budget-usd -x -d 'cap what this call may spend'
+complete -c cx -n '__cx_using chat' -l allowed-tools -x -d 'tools that run without asking'
+complete -c cx -n '__cx_using chat' -l append-system-prompt-file -r -F -d 'add this file to the system prompt'
 complete -c cx -n '__cx_using stop' -l all -d 'every session of the project'
 complete -c cx -n '__cx_using peek' -l all -d 'list finished sessions too'
 complete -c cx -n '__cx_using peek' -l tail -x -d 'include the last N messages in --json'

@@ -156,6 +156,8 @@ ${C_BOLD}WORKING${C_RESET}
   shell <target>                          plain shell, no Claude
   code <target>                           open in VS Code over Remote-SSH
   ask <target> "prompt"                   one-shot question, prints to stdout
+  chat <target>                           a conversation as JSON lines, for a
+                                          program (approvals and questions too)
   status                                  live sessions across servers
   stop <target> [--all]                   end a session (--all: the project's)
   forget <target>                         drop a finished session from the lists

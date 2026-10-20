@@ -23,7 +23,7 @@
 # Tables
 # ---------------------------------------------------------------------------
 
-_cx_commands="host provision login doctor new ls rm wt worktree open resume shell code ask status stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
+_cx_commands="host provision login doctor new ls rm wt worktree open resume shell code ask chat status stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
 
 # Valid anywhere in the argv: bin/cx strips them before choosing a subcommand.
 _cx_global_flags="-r --refresh --no-cache --stale --json -y --yes --no-color"
@@ -62,6 +62,7 @@ _cx_flags() {
     open | resume) printf '%s' "-d --detach --no-hooks $claude" ;;
     shell) printf '%s' "-d --detach --no-hooks" ;;
     ask) printf '%s' "$claude --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
+    chat) printf '%s' "$claude --allowed-tools=word --append-system-prompt-file=file" ;;
     stop) printf '%s' "--all" ;;
     peek) printf '%s' "--all --tail=word --goal=goal" ;;
     nudge) printf '%s' "--force" ;;
@@ -98,7 +99,7 @@ _cx_positional() {
     "wt add:1") printf projslash ;;
     "wt ls:1") printf hostproj ;;
     "wt rm:1" | code:1) printf units ;;
-    open:1 | resume:1 | shell:1 | ask:1 | peek:1) printf all ;;
+    open:1 | resume:1 | shell:1 | ask:1 | chat:1 | peek:1) printf all ;;
     find:* | pick:*) printf all ;; # query words; a target is a fine one
     stop:1 | nudge:1) printf live ;;
     forget:1) printf known ;;

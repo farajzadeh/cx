@@ -13,6 +13,28 @@ release sets both to the same number. After upgrading the client, run
 
 ## [Unreleased]
 
+### Behaviour changes
+
+- **A conversation a `cx chat` holds is refused by `cx open` (when it would
+  start the session), `cx ask <target>@<label>` and `cx forget`, with exit
+  `4`.** Each would otherwise be a second writer on one conversation. Needs
+  agent 0.6.0.
+
+### Added
+
+- **`cx chat <target>`**: a conversation with Claude Code for a program, as
+  JSON lines on stdin and stdout, on the same pinned conversation `cx open`
+  uses. Claude's replies are its own stream-json, streamed as written;
+  approvals and AskUserQuestion questions arrive as `permission_request` lines
+  and are answered with `op: permission`; `op: interrupt` stops a turn and
+  keeps the chat. Takes `--model`, `--permission-mode`, `--effort`,
+  `--allowed-tools` and `--append-system-prompt-file`, whose text travels over
+  stdin. The protocol, and what it relies on in Claude Code, is in
+  `docs/chat.md`. Needs agent 0.6.0.
+- `cx peek` and `cx bar` report a session a chat holds — `blocked` while an
+  approval waits for the program — and `cx peek --json` carries its `chat`
+  fact. The agent's `observe` reports it.
+
 ## [0.5.0] - 2026-09-26
 
 The release that makes cx about running several Claude sessions at once and

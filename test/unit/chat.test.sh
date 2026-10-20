@@ -246,7 +246,10 @@ it "installs no status line, which a headless Claude would never draw"
 assert_not_contains "$_args" statusLine
 
 it "lets go of the conversation and cleans up"
-assert_eq "$(ls "$CX_CHAT_DIR" 2>/dev/null; ls "$TMPDIR")" ""
+assert_eq "$(
+  ls "$CX_CHAT_DIR" 2>/dev/null
+  ls "$TMPDIR"
+)" ""
 
 chat_start api --model haiku --permission-mode acceptEdits --allowed-tools 'Read,Bash(npm test:*)'
 send '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello again"}]}}'

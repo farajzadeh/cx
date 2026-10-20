@@ -4261,7 +4261,7 @@ _chat_refuse() {
 # The locks. fd 7 is the token for the `out` pipe and fd 8 the one for
 # Claude's stdin, opened once by main and inherited; chat-mcp opens its own.
 _chat_take() { IFS= read -r -n 1 _ <&"$1" || true; }
-_chat_give() { printf . >&"$1" 2>/dev/null || true; }
+_chat_give() { { printf . >&"$1"; } 2>/dev/null || true; }
 
 # _chat_emit LINE — one line to the client. fd 6 is main's writer on `out`.
 _chat_emit() {
@@ -4283,7 +4283,7 @@ _chat_to_claude() {
 
 # _chat_mark NAME — drop a flag in the run directory, under the out lock.
 #
-# A request about to be shown to the client checks `closing` and `done` under
+# A request about to be shown to the client checks `closing` and `ended` under
 # the same lock before it shows itself, and registers its FIFO before that. So
 # whoever sets a flag and then sweeps the FIFOs either finds the request's FIFO
 # or the request finds the flag — it never waits for an answer nobody will
@@ -4424,7 +4424,7 @@ _chat_cleanup() {
   [ -n "${CHAT_CLAUDE_PID:-}" ] && kill "$CHAT_CLAUDE_PID" 2>/dev/null
   [ -n "${CHAT_INPUT_PID:-}" ] && kill "$CHAT_INPUT_PID" 2>/dev/null
   if [ -n "${CHAT_RUN:-}" ] && [ -d "$CHAT_RUN" ]; then
-    : >"$CHAT_RUN/done" 2>/dev/null
+    : >"$CHAT_RUN/ended" 2>/dev/null
     _chat_sweep '{"cancel":"end"}'
     rm -rf "$CHAT_RUN" 2>/dev/null
   fi
@@ -4641,7 +4641,7 @@ cmd_chat() {
   wait "$CHAT_INPUT_PID" 2>/dev/null
   CHAT_INPUT_PID=""
 
-  _chat_mark done
+  _chat_mark ended
   _chat_sweep '{"cancel":"end"}'
 
   case "$reason" in
@@ -4737,7 +4737,7 @@ _chat_mcp_call() {
     # the pipe, and a writer opening it never blocks.
     exec 3<>"$fifo"
     _chat_take 7
-    if [ -e "$CHAT_RUN/closing" ] || [ -e "$CHAT_RUN/done" ]; then
+    if [ -e "$CHAT_RUN/closing" ] || [ -e "$CHAT_RUN/ended" ]; then
       _chat_give 7
       ans="$closed"
     else
@@ -4758,7 +4758,7 @@ _chat_mcp_call() {
     *'"cancel"'*)
       if [ "$(printf '%s\n' "$ans" | jq -r '.cancel // empty' 2>/dev/null)" = claude ]; then
         _chat_take 7
-        [ -e "$CHAT_RUN/done" ] ||
+        [ -e "$CHAT_RUN/ended" ] ||
           printf '{"type":"cx","event":"permission_cancelled","id":"%s"}\n' "$key" 1<>"$CHAT_RUN/out" 2>/dev/null
         _chat_give 7
       fi

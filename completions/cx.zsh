@@ -37,6 +37,7 @@ _cx_cmd_desc=(
   'shell:plain shell in the project, no Claude'
   'code:open in VS Code over Remote-SSH'
   'ask:one-shot question, printed here'
+  'chat:a conversation as JSON lines, for a program'
   'status:live sessions across servers'
   'stop:end a session'
   'forget:drop a finished session from the lists'
@@ -183,6 +184,11 @@ _cx_specs() {
       '--max-budget-usd[cap what this one call may spend]:amount: '
       '1:target:_cx_target all'
       '*:prompt: ') ;;
+    chat) reply=(
+      $claude
+      '--allowed-tools[tools that run without asking]:tools: '
+      '--append-system-prompt-file[add this file to the system prompt]:file:_files'
+      '1:target:_cx_target all') ;;
     stop) reply=('--all[every session of the project]' '1:session:_cx_target live') ;;
     forget) reply=('1:session:_cx_target known') ;;
     peek) reply=(
