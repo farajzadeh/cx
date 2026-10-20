@@ -208,6 +208,24 @@ tmux source-file ~/.tmux.conf
 cx tabs                              # a tab per live session; re-run for new ones
 ```
 
+### From a program: `cx chat`
+
+`cx chat` is `cx open` for a program. It holds the same conversation, but
+speaks JSON lines instead of drawing a terminal: user turns go in on stdin;
+Claude's replies come out on stdout as Claude Code's own stream-json, along
+with each approval it needs and each question it asks, for the program to
+answer. Nothing runs once stdin closes.
+
+```sh
+cx chat web1:api --permission-mode acceptEdits --allowed-tools "Read,Bash(npm test:*)"
+# in:  {"type":"user","message":{"role":"user","content":"add a /health endpoint"}}
+# out: {"type":"cx","event":"permission_request","id":"p812-2","tool_name":"Bash",...}
+# in:  {"type":"cx","op":"permission","id":"p812-2","behavior":"allow"}
+```
+
+The protocol, and what it relies on in Claude Code, is in
+[docs/chat.md](docs/chat.md).
+
 The rest — notifications, goals with
 a definition of done, and the driver subagent that pushes sessions towards
 them — is in [Driving Sessions](https://github.com/farajzadeh/cx/wiki/Driving-Sessions)
@@ -246,6 +264,7 @@ line: `-r`/`--refresh`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`.
 | `cx open <target> [-d]` | attach a Claude session, resuming its conversation |
 | `cx resume` / `shell` / `code <target>` | pick an older conversation / plain shell / VS Code |
 | `cx ask <target> "prompt"` | one-shot question, printed to stdout |
+| `cx chat <target>` | a conversation as JSON lines, for a program: replies, approvals, questions |
 | `cx status` | live sessions across servers |
 | `cx stop <target> [--all]` / `cx forget <target>` | end a session / drop a finished one |
 | `cx find [query] [--print]` | choose any target from a menu, then act |
@@ -314,6 +333,7 @@ In the repository:
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | every setting and environment variable |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | when something doesn't work |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, and why it's built this way |
+| [docs/chat.md](docs/chat.md) | `cx chat`'s wire protocol, and what Claude Code does on the other side |
 | [docs/cx-driver.agent.md](docs/cx-driver.agent.md) | the driver subagent, as `cx driver` prints it |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | tests, portability rules, sending a patch |
 | [issues/](issues/) | known issues not yet fixed, with full context |

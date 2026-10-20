@@ -84,6 +84,7 @@ These live on each server, not on the machine you run cx from.
 | `~/.local/share/cx/state/` | What each session's hooks last reported, and, as `<id>.line`, what Claude last told its status line: the context, cost and usage-limit numbers the session's tmux bar shows. A cache: delete it and cx reads conversations instead. |
 | `~/.local/share/cx/cx-driver.agent.md` | The driver's instructions, copied by `cx provision`. Goals with `on-stop` cannot drive themselves without it. |
 | `~/.local/share/cx/driving/<goal>.log` | What each self-driving pass printed. |
+| `~/.local/share/cx/chat/<id>/` | Which conversations a `cx chat` holds right now, with the holder's pid. A lock, not a cache: it is what makes `cx open`, `cx ask @label` and a second chat refuse. A claim whose process has gone is taken over. |
 
 ## The flags, as environment variables
 

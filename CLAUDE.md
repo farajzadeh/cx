@@ -51,6 +51,7 @@ bash test/unit/pick.test.sh                # the interactive picker, fzf-less
 bash test/unit/find.test.sh                # cx find, and commands that pick a missing target
 bash test/unit/ask.test.sh                 # cx_ask_line / cx_ask_yn, the terminal questions
 bash test/unit/create.test.sh              # new / wt add: --open, and asking for what is missing
+bash test/unit/chat.test.sh                # cx chat and chat-mcp, against a fake Claude that replays real stream-json
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -226,6 +227,12 @@ no merge, and the turns of whichever loses are silently orphaned. `cx ask
 <target>@<label>` did exactly this until 0.3.0; it now refuses with exit 4 when
 that session is live. **Steering a running session is `tmux send-keys` into its
 pane — never a second `claude`.**
+
+`cx chat` is the writer with no tmux session to find, so it leaves a claim
+in `~/.local/share/cx/chat/<uuid>/owner` (pid and start time, checked like
+Claude's status files). A chat refuses a conversation tmux holds (`refused`,
+exit 4), and `open` (on creation), `ask @label`, `forget` and a second chat
+refuse one a chat holds.
 
 `cx nudge` sends the text through a tmux paste buffer (`load-buffer` from
 stdin, `paste-buffer -d`, then `C-m`) rather than as a `send-keys` argument.
@@ -530,6 +537,47 @@ Five commands, and the split between them is invariant 11 made concrete:
   "busy, come back" apart from "this is broken". The agent refuses an
   *attached* session by itself (a fact it can check); the client refuses
   `working` and `blocked` (policy, needing the grace period).
+
+- **`cx chat`** — a conversation for a program; the wire is `docs/chat.md`,
+  with what was verified against a real Claude Code. The agent runs `claude -p
+  --input-format stream-json --output-format stream-json` on the pinned id and
+  hands it `--permission-prompt-tool mcp__cx_chat__permission`, an MCP stdio
+  server that is the agent again (`chat-mcp`), so invariant 6 holds. Things
+  that look simplifiable and are not:
+
+  - **AskUserQuestion exists headless only with a permission prompt tool.**
+    Without one it is not in the tool list at all. It arrives through that
+    tool, and the answer is `updatedInput.answers` keyed by question text.
+  - **Interrupt with Claude's `interrupt` control request, never SIGINT**,
+    which ends `claude -p` with the turn. Interrupted while an approval waits,
+    Claude sends the MCP server `notifications/cancelled` — so the server
+    keeps reading while each request waits, as a background job per call.
+  - **Every line to the client is written under a lock.** Several processes
+    write that stream (Claude's relay, the input loop, chat-mcp's jobs) and a
+    stream-json line can be megabytes; past PIPE_BUF a write can interleave
+    with another. The lock is a token in a FIFO — `read -n 1` takes it,
+    `printf .` gives it back — because both are builtins and the relay takes
+    it once per line; `mkdir` would fork every time. chat-mcp is started BY
+    CLAUDE and cannot inherit stdout, which is why everything goes through
+    one `out` FIFO drained by a single `cat`.
+  - **Descriptors are closed on purpose.** A background job's stdin is
+    /dev/null, so the client's stdin is kept on fd 5 for the input loop.
+    Claude gets none of the chat's descriptors: a copy of the `out` writer
+    would keep `cat` from ever seeing EOF, and a copy of the client's stdin
+    would make its EOF meaningless.
+  - **FIFOs are opened `1<>`** where the other end may have gone, because a
+    read-write open never blocks. Where the FIFO vanished first, `<>` makes a
+    plain file, which is why only FIFOs count as pending.
+  - **`closing` and `ended` are set under the out lock**, and a request checks
+    them under it after registering its FIFO. So the sweep that follows either
+    finds the request or the request sees the flag: none waits for an answer
+    nobody will give, and nothing reaches the client after `exit`.
+  - **Claude's status file says `busy`, not `waiting`, while a permission tool
+    decides.** observe reports the chat's own pending count, and
+    `lib/activity.sh` puts it ahead of Claude's status for a chat.
+  - **Do not key on field order:** a `result` line does not start with
+    `"type"`. The relay looks for `"control_request"` anywhere in a line, and
+    answers one (Claude never sends it here) rather than letting a turn hang.
 
 - **`cx goal`** — the definition of done, and who is working on it. Stored
   server-side per invariant 5, because a goal is the one thing in cx that

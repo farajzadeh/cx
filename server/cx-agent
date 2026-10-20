@@ -40,10 +40,13 @@ set -eu
 # 0.5.0 added the server's own tmux bar: open --bar, the statusline verb Claude
 # runs to report context, cost and usage limits, and tmux-status, which tmux
 # runs to draw them.
+# 0.6.0 added chat: a conversation over JSON lines for a program, with
+# approvals and questions answered through chat-mcp, the permission tool chat
+# hands Claude; and the chat fact in observe.
 # The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.5.0"
+CX_AGENT_VERSION="0.6.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -69,6 +72,12 @@ CX_STATE_DIR="${CX_STATE_DIR:-$CX_DATA_DIR/state}"
 
 # Run on the server when a session starts needing its human — see cmd_event.
 CX_NOTIFY="${CX_NOTIFY:-$HOME/.config/cx/notify}"
+
+# Which conversations a `chat` is holding right now, one directory per
+# conversation id with the holder's pid inside. A lock, not a cache: it is what
+# keeps open, ask and a second chat from becoming a second writer (invariant
+# 12), and a claim whose process is gone is simply taken over.
+CX_CHAT_DIR="${CX_CHAT_DIR:-$CX_DATA_DIR/chat}"
 
 # Worktrees live in a hidden directory beside the project, one subdirectory per
 # project, so `ls ~/projects` stays readable and `rm --purge` is one removal.
@@ -1257,6 +1266,11 @@ cmd_open() {
 
   local uuid="" created=false
   if ! _tmux_has "$tname"; then
+    # A cx chat holds its conversation with no tmux session to find, and a
+    # claude started here would be its second writer (invariant 12).
+    if [ "$mode" = continue ] && _chat_holds "$slug"; then
+      die "$slug is held by a cx chat; a second claude on its conversation would lose turns" 4
+    fi
     # EVERYTHING that can fail happens before new-session. Creating the tmux
     # session first and then dying leaves an empty session behind that the
     # next `cx open` cheerfully reattaches to, so the failure turns into a
@@ -2180,6 +2194,7 @@ EOF
   local s proj w lbl dir uuid tname alive att created activity pcmd sdir
   local cstatus cat ckind cpid estate eat evia hooked
   local tfile present seen shell mtime bytes
+  local chatpid chatpend chatat crow since
   keep="$tail_n"
   [ "$keep" -ge 1 ] || keep=1
 
@@ -2199,21 +2214,37 @@ EOF
     [ "$ckind" = - ] && ckind=""
     [ "$cpid" = - ] && cpid=""
 
+    # A cx chat holding this conversation: no tmux at all, and very much
+    # running. Its claim says since when, and how many of its requests are
+    # waiting for the program at the other end — which is exact, where
+    # Claude's status file says `busy` all the while.
+    chatpid=""
+    chatpend=""
+    chatat=""
+    if [ -n "$uuid" ] && [ -d "$CX_CHAT_DIR/$uuid" ] && crow=$(_chat_holder "$uuid"); then
+      chatpid="${crow%%	*}"
+      chatpend=$(_chat_pending "${crow#*	}")
+      chatat=$(_mtime "$CX_CHAT_DIR/$uuid/owner" 2>/dev/null) || chatat=""
+    fi
+
     # What this session's hooks last reported, if cx started it with hooks.
-    # Only while tmux is up, and only if written after tmux started it: the
-    # file is keyed by conversation, a conversation outlives its session, and
-    # a report left by the last session to hold it would describe a turn that
-    # is long over.
+    # Only while tmux (or a chat) is up, and only if written after it started:
+    # the file is keyed by conversation, a conversation outlives its session,
+    # and a report left by the last session to hold it would describe a turn
+    # that is long over.
     estate=""
     eat=""
     evia=""
-    if [ -n "$uuid" ] && [ "$alive" = true ] && [ -r "$CX_STATE_DIR/$uuid" ]; then
+    since="$created"
+    [ -z "$chatpid" ] || since="$chatat"
+    if [ -n "$uuid" ] && { [ "$alive" = true ] || [ -n "$chatpid" ]; } &&
+      [ -r "$CX_STATE_DIR/$uuid" ]; then
       # The fourth field, the hook's message, is read into _ only so that it
       # does not run on into the third.
       IFS='	' read -r estate eat evia _ <"$CX_STATE_DIR/$uuid" 2>/dev/null || estate=""
       case "$eat" in
         '' | *[!0-9]*) estate="" ;;
-        *) [ -z "$created" ] || [ "$eat" -ge "$created" ] || estate="" ;;
+        *) [ -z "$since" ] || [ "$eat" -ge "$since" ] || estate="" ;;
       esac
       [ -n "$estate" ] || {
         eat=""
@@ -2241,7 +2272,7 @@ EOF
     # and stopped. There is nothing to say about it, and reporting it forever
     # is noise that grows with every session ever opened. An explicitly named
     # session is always reported: the caller asked about that one.
-    if [ "$all" = 1 ] && [ "$alive" != true ] && [ "$present" != true ]; then
+    if [ "$all" = 1 ] && [ "$alive" != true ] && [ "$present" != true ] && [ -z "$chatpid" ]; then
       case "$forced" in
         *"
 $s
@@ -2264,7 +2295,7 @@ $s
       # A driver asking for --tail still gets the last thing a dead session
       # said, which is how it decides whether to revive it; with --tail 0,
       # `last` is null for a session that is not running.
-      if [ "$alive" = true ] || [ "$tail_n" -gt 0 ]; then
+      if [ "$alive" = true ] || [ -n "$chatpid" ] || [ "$tail_n" -gt 0 ]; then
         m=$(_transcript_messages "$tfile" "$keep")
         if [ -n "$m" ]; then
           # Only what the answer uses: the last message, or the tail asked
@@ -2285,7 +2316,7 @@ EOF
       fi
     fi
 
-    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia	$hooked
+    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia	$hooked	$chatpid	$chatpend
 "
   done <<EOF
 $resolved
@@ -2359,6 +2390,12 @@ EOF
               # Started with cx hooks, so silence from Claude means it has not
               # finished starting rather than that nobody can tell.
               hooks: ($f[25] == "true"),
+              # Held by a cx chat, which has no tmux: its process, and how
+              # many of its requests wait for the program driving it.
+              chat: (if ($f[26] // "") == "" then null else {
+                pid:     ($f[26] | num),
+                pending: ($f[27] | num)
+              } end),
               last: ($m | last),
               tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
             }))
@@ -2404,6 +2441,7 @@ cmd_forget() {
   local slug uuid
   slug=$(_slug "$name" "$wt" "$label")
   _tmux_has "$(_tmux_name "$slug")" && die "$slug is running — stop it first" 4
+  _chat_holds "$slug" && die "$slug is held by a cx chat — let it finish first" 4
   uuid=$(_session_uuid_get "$slug" 2>/dev/null) || die "cx has nothing recorded for $slug" 2
 
   _lock
@@ -4073,6 +4111,9 @@ cmd_ask() {
     if have tmux && _tmux_has "$(_tmux_name "$slug")"; then
       die "$slug is running; a second claude on its conversation would lose turns — use nudge" 4
     fi
+    if _chat_holds "$slug"; then
+      die "$slug is held by a cx chat; a second claude on its conversation would lose turns" 4
+    fi
 
     uuid=$(_session_uuid_ensure "$slug" "$dir" 2>/dev/null || printf '')
     if [ -n "$uuid" ]; then
@@ -4086,6 +4127,734 @@ cmd_ask() {
   fi
 
   "$claude_bin" "${opt_args[@]+"${opt_args[@]}"}" -p "$prompt"
+}
+
+# ---------------------------------------------------------------------------
+# chat
+# ---------------------------------------------------------------------------
+#
+# `chat` is to a program what `open` is to a person: the same pinned
+# conversation, held by a Claude Code that speaks JSON lines instead of
+# drawing a terminal. The wire is in docs/chat.md; what Claude Code does on
+# the other side of it was established against a real one and is written down
+# there too, because most of it is not documented anywhere else.
+#
+# Claude runs as `claude -p --input-format stream-json --output-format
+# stream-json`, which takes user turns on stdin for as long as stdin stays open.
+# Approvals and questions come back through --permission-prompt-tool, the
+# documented route: Claude calls an MCP tool before any tool the permission
+# mode does not already allow, and that tool is this file again, run as
+# `chat-mcp` (below). Only with a permission tool does headless Claude offer
+# AskUserQuestion at all, and its answers travel back the same way.
+#
+# FIVE PROCESSES, and the reason for each:
+#
+#   main     sets up, says `ready`, waits for Claude, says `exit`, cleans up.
+#   claude   reads the to-claude pipe, writes the from-claude pipe.
+#   input    reads the client and feeds Claude, and answers pending requests.
+#   output   copies Claude's lines to the client, unchanged.
+#   chat-mcp started BY CLAUDE, so it cannot inherit our stdout; it reaches the
+#            client through the `out` pipe by path.
+#
+# Everything bound for the client goes through one pipe, `out`, drained by one
+# `cat` onto our stdout. Several processes write it, and a line of Claude's can
+# be megabytes, far past the size the kernel writes in one piece, so each
+# writer holds a lock for the length of one line. The lock is a token in a
+# FIFO — read one byte to take it, write it back to give it up — because both
+# halves are shell builtins: the output side takes it once per line, and
+# `mkdir`, the lock cx uses everywhere else, is a fork per attempt. Claude's
+# own stdin has two writers for the same reason (input, and output answering a
+# control request) and a second token.
+#
+# No daemon (invariant 11): when the client's stdin closes, Claude's does, and
+# Claude finishes the turn it is on and exits, and so does everything here.
+
+# _proc_start PID — when PID started, as /proc says (field 22), or "-" where
+# there is no /proc. The other half of _proc_started.
+_proc_start() {
+  local stat rest
+  if [ -r "/proc/$1/stat" ] && read -r stat <"/proc/$1/stat" 2>/dev/null; then
+    rest="${stat##*) }"
+    # shellcheck disable=SC2086
+    set -- $rest
+    printf '%s' "${20:--}"
+  else
+    printf '%s' -
+  fi
+}
+
+# _chat_holder UUID — "pid TAB run" for the live chat holding UUID's
+# conversation, or return 1. A claim whose process is gone holds nothing.
+_chat_holder() {
+  local d="$CX_CHAT_DIR/$1" pid="" start="" run=""
+  [ -r "$d/owner" ] || return 1
+  IFS='	' read -r pid start run _ <"$d/owner" 2>/dev/null || [ -n "$pid" ] || return 1
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  _proc_started "$pid" "${start:--}" || return 1
+  printf '%s\t%s' "$pid" "$run"
+}
+
+# _chat_holds SLUG — true while a chat holds SLUG's pinned conversation.
+# What open, ask and forget ask before they would become a second writer.
+_chat_holds() {
+  local u
+  u=$(_session_uuid_get "$1" 2>/dev/null) || return 1
+  [ -d "$CX_CHAT_DIR/$u" ] || return 1
+  _chat_holder "$u" >/dev/null
+}
+
+# _chat_claim UUID SLUG RUN — hold UUID's conversation for this process.
+# mkdir is the atomic part; a claim left by a process that died (a kill -9, a
+# reboot) is taken over rather than honoured forever.
+_chat_claim() {
+  local d="$CX_CHAT_DIR/$1"
+  mkdir -p "$CX_CHAT_DIR" 2>/dev/null || return 1
+  if ! mkdir "$d" 2>/dev/null; then
+    _chat_holder "$1" >/dev/null && return 1
+    rm -rf "$d" 2>/dev/null || true
+    mkdir "$d" 2>/dev/null || return 1
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$$" "$(_proc_start $$)" "$3" "$2" >"$d/owner"
+}
+
+_chat_release() {
+  local d="$CX_CHAT_DIR/$1" pid=""
+  [ -r "$d/owner" ] && IFS='	' read -r pid _ <"$d/owner" 2>/dev/null
+  [ "$pid" = "$$" ] && rm -rf "$d" 2>/dev/null
+  return 0
+}
+
+# _chat_pending RUN — how many requests are waiting for the client right now:
+# one FIFO each under RUN/ans. Only FIFOs count; see _chat_answer.
+_chat_pending() {
+  local f n=0
+  for f in "$1"/ans/*; do
+    [ -p "$f" ] && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
+_chat_exit_line() {
+  jq -nc --argjson c "$1" --arg r "$2" --arg m "$3" \
+    '{type: "cx", event: "exit", code: $c, reason: $r, message: $m}'
+}
+
+# _chat_end CODE MESSAGE — a chat that never started: the stream still ends
+# the way every chat ends, so a program reading it always gets its last line.
+# _chat_fail says why on stderr as well, for failures nothing else reported.
+_chat_end() {
+  _chat_exit_line "$1" error "$2"
+  exit "$1"
+}
+_chat_fail() {
+  log "cx-agent: $2"
+  _chat_end "$1" "$2"
+}
+
+# _chat_refuse REASON MESSAGE — one conversation, one writer (invariant 12).
+_chat_refuse() {
+  log "cx-agent: $2"
+  jq -nc --arg r "$1" '{type: "cx", event: "refused", reason: $r}'
+  _chat_end 4 "$2"
+}
+
+# The locks. fd 7 is the token for the `out` pipe and fd 8 the one for
+# Claude's stdin, opened once by main and inherited; chat-mcp opens its own.
+_chat_take() { IFS= read -r -n 1 _ <&"$1" || true; }
+_chat_give() { { printf . >&"$1"; } 2>/dev/null || true; }
+
+# _chat_emit LINE — one line to the client. fd 6 is main's writer on `out`.
+_chat_emit() {
+  _chat_take 7
+  printf '%s\n' "$1" >&6
+  _chat_give 7
+}
+
+_chat_error() {
+  _chat_emit "$(jq -nc --arg m "$1" '{type: "cx", event: "error", message: $m}')"
+}
+
+# _chat_to_claude LINE — one line onto Claude's stdin, fd 4 in `input`.
+_chat_to_claude() {
+  _chat_take 8
+  printf '%s\n' "$1" >&4
+  _chat_give 8
+}
+
+# _chat_mark NAME — drop a flag in the run directory, under the out lock.
+#
+# A request about to be shown to the client checks `closing` and `ended` under
+# the same lock before it shows itself, and registers its FIFO before that. So
+# whoever sets a flag and then sweeps the FIFOs either finds the request's FIFO
+# or the request finds the flag — it never waits for an answer nobody will
+# give, and nothing reaches the client after `exit`.
+_chat_mark() {
+  _chat_take 7
+  : >"$CHAT_RUN/$1"
+  _chat_give 7
+}
+
+# _chat_sweep LINE — hand LINE to every request still waiting for an answer.
+#
+# `1<>` and not `>`: opening a FIFO read-write never blocks, so a request that
+# has just gone cannot hang the sweep. The test for -p first matters too —
+# where the FIFO vanished between the test and the open, `<>` makes a plain
+# file, which is why only FIFOs count as pending.
+_chat_sweep() {
+  local f
+  for f in "$CHAT_RUN"/ans/*; do
+    [ -p "$f" ] || continue
+    printf '%s\n' "$1" 1<>"$f" 2>/dev/null || true
+  done
+}
+
+# _chat_answer ID BEHAVIOR LINE — pass the client's answer to the request.
+_chat_answer() {
+  case "$1" in
+    '' | - | *[!A-Za-z0-9_-]*)
+      _chat_error "op permission needs the id of a pending request"
+      return 0
+      ;;
+  esac
+  case "$2" in
+    allow | deny) ;;
+    *)
+      _chat_error "op permission needs behavior allow or deny"
+      return 0
+      ;;
+  esac
+  if [ ! -p "$CHAT_RUN/ans/$1" ]; then
+    _chat_error "no pending request with id $1"
+    return 0
+  fi
+  printf '%s\n' "$3" 1<>"$CHAT_RUN/ans/$1" 2>/dev/null ||
+    _chat_error "could not deliver the answer to $1"
+}
+
+# _chat_input — the client's lines, until EOF or op close.
+_chat_input() {
+  set +e
+  local line row typ op id behavior reason=eof n=0
+  # Blocks until Claude opens its end of the pipe, which it does as it starts.
+  exec 4>"$CHAT_RUN/to-claude" || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    # "-" for an absent field: tab is IFS whitespace, and an empty column
+    # would fold into the next one (see cx_activity_rows).
+    row=$(printf '%s\n' "$line" | jq -r '
+      def f: if . == null or . == "" then "-" else tostring | gsub("[\t\n\r]"; " ") end;
+      if type == "object" then [(.type | f), (.op | f), (.id | f), (.behavior | f)] | @tsv
+      else "-\t-\t-\t-" end' 2>/dev/null) || row=""
+    [ -n "$row" ] || row="-	-	-	-"
+    IFS='	' read -r typ op id behavior <<EOF
+$row
+EOF
+    case "$typ" in
+      # Claude Code's own input format, passed through unchanged.
+      user) _chat_to_claude "$line" ;;
+      cx)
+        case "$op" in
+          permission) _chat_answer "$id" "$behavior" "$line" ;;
+          # Claude's own control request. A signal would not do: SIGINT ends
+          # a `claude -p` along with the turn, and the conversation is then
+          # held by nothing.
+          interrupt)
+            n=$((n + 1))
+            _chat_to_claude "{\"type\":\"control_request\",\"request_id\":\"cx-interrupt-$n\",\"request\":{\"subtype\":\"interrupt\"}}"
+            ;;
+          close)
+            reason=close
+            break
+            ;;
+          *) _chat_error "unknown op" ;;
+        esac
+        ;;
+      -) _chat_error "not a JSON object" ;;
+      *) _chat_error "unknown input type: $typ" ;;
+    esac
+  done
+
+  # Nobody is left to answer what is still waiting, and the turn cannot end
+  # while it waits — so deny it, with a reason Claude can read. Then close
+  # Claude's stdin, which is how it learns to finish this turn and stop.
+  printf '%s' "$reason" >"$CHAT_RUN/reason"
+  _chat_mark closing
+  _chat_sweep '{"behavior":"deny","message":"The chat was closed before this was answered."}'
+  exec 4>&-
+  return 0
+}
+
+# _chat_control LINE — a control request FROM Claude, which this chat never
+# asks for: approvals come through the MCP tool. Answered rather than ignored,
+# because Claude waits for the answer, and a chat that hangs is worse than a
+# refusal Claude can read. A can_use_tool is denied, anything else is an error.
+_chat_control() {
+  local reply
+  reply=$(printf '%s\n' "$1" | jq -c '
+    select(type == "object" and .type == "control_request")
+    | {type: "control_response", response: (
+        if .request.subtype == "can_use_tool" then
+          {subtype: "success", request_id: .request_id,
+           response: {behavior: "deny",
+             message: "cx chat answers permissions through its MCP tool only; this request was denied."}}
+        else
+          {subtype: "error", request_id: .request_id,
+           error: ("cx chat does not handle " + (.request.subtype // "this request" | tostring))}
+        end)}' 2>/dev/null) || reply=""
+  [ -n "$reply" ] || return 0
+  _chat_take 8
+  printf '%s\n' "$reply" 1<>"$CHAT_RUN/to-claude" 2>/dev/null || true
+  _chat_give 8
+}
+
+# _chat_output — Claude's lines, to the client, unchanged.
+_chat_output() {
+  set +e
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *'"control_request"'*) _chat_control "$line" ;;
+    esac
+    _chat_emit "$line"
+  done
+  return 0
+}
+
+_chat_cleanup() {
+  [ -n "${CHAT_CLAUDE_PID:-}" ] && kill "$CHAT_CLAUDE_PID" 2>/dev/null
+  [ -n "${CHAT_INPUT_PID:-}" ] && kill "$CHAT_INPUT_PID" 2>/dev/null
+  if [ -n "${CHAT_RUN:-}" ] && [ -d "$CHAT_RUN" ]; then
+    : >"$CHAT_RUN/ended" 2>/dev/null
+    _chat_sweep '{"cancel":"end"}'
+    rm -rf "$CHAT_RUN" 2>/dev/null
+  fi
+  [ -n "${CHAT_UUID:-}" ] && _chat_release "$CHAT_UUID"
+  return 0
+}
+
+# cmd_chat NAME [--worktree W] [--session L] [OPTIONS] [-- ARGS] — JSON lines
+# in on stdin, JSON lines out on stdout, until stdin closes.
+cmd_chat() {
+  local name="" wt="" label="" perm_mode="" model="" effort="" allowed=""
+  local dangerous=0 sp_stdin=0
+  local passthru=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      --permission-mode)
+        shift
+        perm_mode="${1:-}"
+        ;;
+      --dangerous) dangerous=1 ;;
+      --model)
+        shift
+        model="${1:-}"
+        ;;
+      --effort)
+        shift
+        effort="${1:-}"
+        ;;
+      --allowed-tools)
+        shift
+        allowed="${1:-}"
+        ;;
+      # The first stdin line is {"type":"cx","op":"system_prompt","append":…}.
+      # Text the user wrote travels on stdin, never as an argument (invariant 1).
+      --system-prompt-stdin) sp_stdin=1 ;;
+      --)
+        shift
+        while [ $# -gt 0 ]; do
+          passthru=("${passthru[@]+"${passthru[@]}"}" "$1")
+          shift
+        done
+        break
+        ;;
+      -*) _chat_fail 3 "unknown option: $1" ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$name" ] || _chat_fail 3 "usage: cx-agent chat <name> [--worktree W] [--session L] [OPTIONS] [-- ARGS]  (JSON lines on stdin)"
+  if [ "$dangerous" = 1 ]; then
+    if [ -n "$perm_mode" ] && [ "$perm_mode" != bypassPermissions ]; then
+      _chat_fail 3 "--dangerous conflicts with --permission-mode $perm_mode"
+    fi
+    perm_mode=bypassPermissions
+  fi
+  # `default` is Claude's own mode, spelled out: pass nothing.
+  case "$perm_mode" in
+    '' | default) perm_mode="" ;;
+    acceptEdits | auto | bypassPermissions | manual | dontAsk | plan) ;;
+    *) _chat_fail 3 "unknown permission mode: $perm_mode (default, acceptEdits, plan, auto, manual, dontAsk, bypassPermissions)" ;;
+  esac
+  case "$effort" in
+    '' | low | medium | high | xhigh | max) ;;
+    *) _chat_fail 3 "unknown effort level: $effort (low, medium, high, xhigh, max)" ;;
+  esac
+  if [ -n "$wt" ]; then
+    (_validate_label "worktree name" "$wt") || _chat_end 3 "invalid worktree name: $wt"
+  fi
+  if [ -n "$label" ]; then
+    (_validate_label "session label" "$label") || _chat_end 3 "invalid session label: $label"
+  fi
+
+  _registry_ensure
+  local dir slug claude_bin uuid
+  dir=$(_unit_dir "$name" "$wt") || _chat_end "$?" "no such project or worktree: $(_unit "$name" "$wt")"
+  [ -d "$dir" ] || _chat_fail 1 "directory is missing: $dir"
+  slug=$(_slug "$name" "$wt" "$label")
+  claude_bin=$(_find_claude) || _chat_fail 1 "Claude Code is not installed on this server"
+
+  # The tmux session cx open would attach to is a live claude already resuming
+  # this conversation; a second one would orphan the turns of whichever loses.
+  if have tmux && _tmux_has "$(_tmux_name "$slug")"; then
+    _chat_refuse live "$slug is running in tmux; a second claude on its conversation would lose turns (attach with cx open, or cx stop it first)"
+  fi
+
+  # The same pin cx open uses, so a conversation started here carries on in
+  # tmux and the other way round.
+  uuid=$(_session_uuid_ensure "$slug" "$dir" 2>/dev/null) || uuid=""
+  [ -n "$uuid" ] || _chat_fail 1 "could not pin a conversation id for $slug"
+
+  local run
+  run=$(mktemp -d "${TMPDIR:-/tmp}/cx-chat.XXXXXX" 2>/dev/null) || run=""
+  [ -n "$run" ] && [ -d "$run" ] || _chat_fail 1 "could not create a working directory for the chat"
+  chmod 700 "$run" 2>/dev/null || true
+  if ! _chat_claim "$uuid" "$slug" "$run"; then
+    rm -rf "$run"
+    _chat_refuse chat "$slug is already held by another cx chat"
+  fi
+  CHAT_RUN="$run"
+  CHAT_UUID="$uuid"
+  CHAT_CLAUDE_PID=""
+  CHAT_INPUT_PID=""
+  trap '_chat_cleanup' EXIT
+  trap 'exit 130' INT TERM HUP
+
+  local append=""
+  if [ "$sp_stdin" = 1 ]; then
+    local first=""
+    IFS= read -r first || true
+    printf '%s\n' "$first" |
+      jq -jre 'select(type == "object" and .type == "cx" and .op == "system_prompt") | .append | strings' \
+        >"$run/append.md" 2>/dev/null ||
+      _chat_fail 3 'with --system-prompt-stdin the first line must be {"type":"cx","op":"system_prompt","append":"..."}'
+    append="$run/append.md"
+  fi
+
+  mkdir "$run/ans" "$run/req" &&
+    mkfifo "$run/out" "$run/out.lock" "$run/in.lock" "$run/to-claude" "$run/from-claude" ||
+    _chat_fail 1 "could not create the chat's pipes"
+  : >"$run/.cx-chat"
+
+  # chat-mcp is this file, by absolute path: Claude starts it with whatever
+  # PATH it has. The server is named so that it cannot be the user's own.
+  local agent_bin settings=""
+  agent_bin=$(_agent_self)
+  jq -nc --arg c "$agent_bin" --arg r "$run" \
+    '{mcpServers: {cx_chat: {type: "stdio", command: $c, args: ["chat-mcp", $r]}}}' \
+    >"$run/mcp.json" || _chat_fail 1 "could not write the chat's MCP config"
+
+  local flag=--session-id resumed=false
+  if [ -f "$(_session_dir "$dir")/$uuid.jsonl" ]; then
+    flag=--resume
+    resumed=true
+  fi
+
+  # Real argv, not a command line: nothing here passes through a shell.
+  # --include-partial-messages is what streams text as it is written.
+  local args=(-p --input-format stream-json --output-format stream-json
+    --verbose --include-partial-messages "$flag" "$uuid"
+    --mcp-config "$run/mcp.json"
+    --permission-prompt-tool mcp__cx_chat__permission)
+  # The hooks cx open installs, so cx peek reports a chat like any session.
+  if _claude_supports "$claude_bin" --settings; then
+    settings=$(_launch_settings "$agent_bin" 1 0 2>/dev/null) || settings=""
+    if [ -n "$settings" ]; then args=("${args[@]+"${args[@]}"}" --settings "$settings"); fi
+  fi
+  if [ -n "$perm_mode" ]; then
+    args=("${args[@]+"${args[@]}"}" --permission-mode "$perm_mode")
+    if [ "$perm_mode" = bypassPermissions ]; then
+      log "WARNING: chatting with $slug with ALL permission checks bypassed"
+    fi
+  fi
+  if [ -n "$model" ]; then args=("${args[@]+"${args[@]}"}" --model "$model"); fi
+  if [ -n "$effort" ]; then args=("${args[@]+"${args[@]}"}" --effort "$effort"); fi
+  if [ -n "$allowed" ]; then args=("${args[@]+"${args[@]}"}" --allowedTools "$allowed"); fi
+  if [ -n "$append" ]; then args=("${args[@]+"${args[@]}"}" --append-system-prompt-file "$append"); fi
+  local a
+  for a in "${passthru[@]+"${passthru[@]}"}"; do
+    args=("${args[@]+"${args[@]}"}" "$a")
+  done
+
+  # From here every failure is reported in the stream, so errexit, which would
+  # end it without its last line, is off.
+  set +e
+
+  # The client's stdin, kept on fd 5 for `input`: a background job's stdin is
+  # otherwise /dev/null.
+  exec 5<&0
+  cat <"$run/out" 5<&- &
+  local catpid=$!
+  exec 6>"$run/out"
+  exec 7<>"$run/out.lock" 8<>"$run/in.lock"
+  _chat_give 7
+  _chat_give 8
+
+  _chat_emit "$(jq -nc --arg t "$slug" --arg u "$uuid" --argjson r "$resumed" --arg d "$dir" \
+    '{type: "cx", event: "ready", target: $t, session_id: $u, resumed: $r, cwd: $d}')"
+
+  # Claude gets none of our descriptors: a copy of the `out` writer would keep
+  # cat from ever seeing the end, and a copy of the client's stdin would keep
+  # the client's EOF from meaning anything.
+  (cd "$dir" && exec "$claude_bin" "${args[@]+"${args[@]}"}") \
+    <"$run/to-claude" >"$run/from-claude" 5<&- 6>&- 7>&- 8>&- &
+  CHAT_CLAUDE_PID=$!
+  _chat_output <"$run/from-claude" 5<&- &
+  local opid=$!
+  _chat_input <&5 &
+  CHAT_INPUT_PID=$!
+  exec 5<&-
+
+  local st=0
+  wait "$CHAT_CLAUDE_PID"
+  st=$?
+  CHAT_CLAUDE_PID=""
+
+  local reason="" code=0 msg=""
+  [ -r "$run/reason" ] && reason=$(cat "$run/reason" 2>/dev/null)
+  if [ -z "$reason" ]; then
+    # Claude went first, with the client still talking. Nothing reads what it
+    # sends from here on.
+    reason=claude_exited
+    kill "$CHAT_INPUT_PID" 2>/dev/null
+  fi
+  wait "$opid"
+  wait "$CHAT_INPUT_PID" 2>/dev/null
+  CHAT_INPUT_PID=""
+
+  _chat_mark ended
+  _chat_sweep '{"cancel":"end"}'
+
+  case "$reason" in
+    eof) msg="the client closed its input" ;;
+    close) msg="closed on request" ;;
+    *) msg="Claude Code exited" ;;
+  esac
+  if [ "$st" != 0 ]; then
+    code=1
+    msg="$msg; Claude Code exited with status $st"
+  fi
+
+  # Everyone else has stopped, so a lost token (a writer killed holding it)
+  # must not keep the last line from being written: wait for it briefly, then
+  # write regardless. And a client that has gone is no reason to die before
+  # cleaning up.
+  trap '' PIPE
+  IFS= read -r -t 5 -n 1 _ <&7 || true
+  printf '%s\n' "$(_chat_exit_line "$code" "$reason" "$msg")" >&6 2>/dev/null
+  exec 6>&- 7>&- 8>&-
+  wait "$catpid"
+  exit "$code"
+}
+
+# ---------------------------------------------------------------------------
+# chat-mcp — the permission tool a chat hands Claude
+# ---------------------------------------------------------------------------
+#
+# An MCP server over stdio (newline-delimited JSON-RPC), started BY CLAUDE from
+# the --mcp-config chat writes, with one tool, `permission`. Claude calls it
+# with {tool_name, input, tool_use_id} whenever it wants a tool its permission
+# mode does not already allow, and waits for {"behavior":"allow",
+# "updatedInput":…} or {"behavior":"deny","message":…} as the tool's text.
+#
+# Each call becomes a background job, so the server keeps reading while the
+# client thinks: Claude cancels a call it no longer wants (an interrupt does)
+# with notifications/cancelled, and that has to reach the job that is waiting.
+# A job registers a FIFO under RUN/ans named for the request, tells the client,
+# and reads one line from it — the client's answer, a denial from a chat that
+# is closing, or a cancellation.
+#
+# Run by Claude, so its stdout is Claude's: only JSON-RPC goes there. Its
+# lines to the client go to RUN/out under the chat's out lock.
+
+_chat_mcp_tool='{name: "permission",
+  description: "Asks the program at the other end of cx chat whether a tool may run.",
+  inputSchema: {type: "object",
+    properties: {tool_name: {type: "string"}, input: {type: "object"}, tool_use_id: {type: "string"}},
+    required: ["tool_name", "input"]}}'
+
+# _chat_mcp_send LINE — one JSON-RPC message to Claude, under this server's
+# own lock (fd 9): the main loop and the jobs all write here.
+_chat_mcp_send() {
+  _chat_take 9
+  printf '%s\n' "$1"
+  _chat_give 9
+}
+
+# _chat_mcp_reply REQUEST RESULT_JQ — answer REQUEST with RESULT_JQ's value.
+# Built from the request itself, so the id goes back exactly as it came.
+_chat_mcp_reply() {
+  local out
+  out=$(printf '%s\n' "$1" | jq -c --arg v "$CX_AGENT_VERSION" --argjson tool "$(jq -nc "$_chat_mcp_tool")" \
+    "{jsonrpc: \"2.0\", id: .id, result: ($2)}" 2>/dev/null) || return 0
+  _chat_mcp_send "$out"
+}
+
+_chat_mcp_error() {
+  local out
+  out=$(printf '%s\n' "$1" | jq -c --argjson c "$2" --arg m "$3" \
+    '{jsonrpc: "2.0", id: .id, error: {code: $c, message: $m}}' 2>/dev/null) || return 0
+  _chat_mcp_send "$out"
+}
+
+# _chat_mcp_call KEY — one permission request, from the client's question to
+# Claude's answer. The request itself is in RUN/req/KEY.
+_chat_mcp_call() {
+  set +e
+  local key="$1" req="$CHAT_RUN/req/$1" fifo="$CHAT_RUN/ans/$1" ev="" ans="" out=""
+  local closed='{"behavior":"deny","message":"The chat was closed before this was answered."}'
+
+  ev=$(jq -c --arg id "$key" '
+    .params.arguments as $a
+    | {type: "cx", event: "permission_request", id: $id,
+       tool_name: ($a.tool_name // null),
+       tool_use_id: ($a.tool_use_id // .params._meta["claudecode/toolUseId"] // null),
+       input: ($a.input // {})}' "$req" 2>/dev/null) || ev=""
+
+  if [ -z "$ev" ]; then
+    ans='{"behavior":"deny","message":"cx chat could not read this permission request."}'
+  elif mkfifo "$fifo" 2>/dev/null; then
+    # Held open read-write: an answer written before the read starts waits in
+    # the pipe, and a writer opening it never blocks.
+    exec 3<>"$fifo"
+    _chat_take 7
+    if [ -e "$CHAT_RUN/closing" ] || [ -e "$CHAT_RUN/ended" ]; then
+      _chat_give 7
+      ans="$closed"
+    else
+      printf '%s\n' "$ev" 1<>"$CHAT_RUN/out" 2>/dev/null
+      _chat_give 7
+      IFS= read -r ans <&3 || ans=""
+    fi
+    exec 3>&-
+    rm -f "$fifo"
+  else
+    ans='{"behavior":"deny","message":"cx chat could not wait for an answer."}'
+  fi
+
+  # Cancelled: Claude has stopped waiting, so nothing is owed to it. The client
+  # hears about it only when Claude cancelled; when the chat is ending, the
+  # last thing the client sees has to be `exit`.
+  case "$ans" in
+    *'"cancel"'*)
+      if [ "$(printf '%s\n' "$ans" | jq -r '.cancel // empty' 2>/dev/null)" = claude ]; then
+        _chat_take 7
+        [ -e "$CHAT_RUN/ended" ] ||
+          printf '{"type":"cx","event":"permission_cancelled","id":"%s"}\n' "$key" 1<>"$CHAT_RUN/out" 2>/dev/null
+        _chat_give 7
+      fi
+      rm -f "$req"
+      return 0
+      ;;
+  esac
+
+  # What Claude is told. A bare allow gets the original input back as
+  # updatedInput, which every Claude Code version accepts. For AskUserQuestion
+  # the client's updatedInput is laid OVER the original, so {"answers": …} on
+  # its own is enough; for any other tool it replaces it, so a client can drop
+  # a field as well as change one.
+  out=$(printf '%s\n' "$ans" | jq -c --slurpfile r "$req" '
+    $r[0] as $q
+    | ($q.params.arguments // {}) as $a
+    | ($a.input // {}) as $in
+    | (if type == "object" then . else {} end) as $ans
+    | ($ans.updatedInput | if type == "object" then . else null end) as $up
+    | (if $ans.behavior == "allow" then
+         {behavior: "allow",
+          updatedInput: (if $a.tool_name == "AskUserQuestion" then $in + ($up // {})
+                         else ($up // $in) end)}
+       else
+         {behavior: "deny",
+          message: ($ans.message // "" | tostring
+                    | if . == "" then "The user denied this." else . end)}
+       end) as $d
+    | {jsonrpc: "2.0", id: $q.id, result: {content: [{type: "text", text: ($d | tojson)}]}}' 2>/dev/null) || out=""
+  if [ -z "$out" ]; then
+    out=$(jq -c '{jsonrpc: "2.0", id: .id, result: {content: [{type: "text",
+      text: ({behavior: "deny", message: "cx chat could not read the answer."} | tojson)}]}}' "$req" 2>/dev/null) || out=""
+  fi
+  [ -n "$out" ] && _chat_mcp_send "$out"
+  rm -f "$req"
+  return 0
+}
+
+cmd_chat_mcp() {
+  set +e
+  local run="${1:-}" line row method key name rid k f
+  # Only a directory a chat made. This verb writes to whatever it is pointed at.
+  [ -n "$run" ] && [ -f "$run/.cx-chat" ] && [ -p "$run/out.lock" ] || return 0
+  CHAT_RUN="$run"
+  exec 7<>"$run/out.lock"
+  # This server's own lock: a FIFO that needs no name once it is open.
+  mkfifo "$run/mcp.$$.lock" 2>/dev/null || return 0
+  exec 9<>"$run/mcp.$$.lock"
+  rm -f "$run/mcp.$$.lock"
+  _chat_give 9
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    row=$(printf '%s\n' "$line" | jq -r '
+      def f: if . == null or . == "" then "-" else tostring | gsub("[\t\n\r]"; " ") end;
+      if type == "object" then
+        [(.method | f), (if has("id") then (.id | tojson) else "-" end),
+         (.params.name | f), (.params.requestId | if . == null then "-" else tojson end)] | @tsv
+      else empty end' 2>/dev/null) || row=""
+    [ -n "$row" ] || continue
+    IFS='	' read -r method key name rid <<EOF
+$row
+EOF
+    case "$method" in
+      initialize)
+        _chat_mcp_reply "$line" '{protocolVersion: (.params.protocolVersion // "2025-06-18"),
+          capabilities: {tools: {}}, serverInfo: {name: "cx-chat", version: $v}}'
+        ;;
+      tools/list) _chat_mcp_reply "$line" '{tools: [$tool]}' ;;
+      tools/call)
+        if [ "$name" = permission ] && [ "$key" != - ]; then
+          k="p$$-$(printf '%s' "$key" | tr -c 'A-Za-z0-9' '_')"
+          printf '%s\n' "$line" >"$run/req/$k" 2>/dev/null
+          _chat_mcp_call "$k" &
+        else
+          _chat_mcp_reply "$line" '{isError: true, content: [{type: "text", text: "cx chat has no such tool"}]}'
+        fi
+        ;;
+      ping) _chat_mcp_reply "$line" '{}' ;;
+      notifications/cancelled)
+        if [ "$rid" != - ]; then
+          f="$run/ans/p$$-$(printf '%s' "$rid" | tr -c 'A-Za-z0-9' '_')"
+          [ -p "$f" ] && printf '{"cancel":"claude"}\n' 1<>"$f" 2>/dev/null
+        fi
+        ;;
+      notifications/* | -) ;;
+      *) [ "$key" != - ] && _chat_mcp_error "$line" -32601 "method not found: $method" ;;
+    esac
+  done
+
+  # Claude has closed this server's stdin: nothing will read an answer now.
+  for f in "$run"/ans/p$$-*; do
+    [ -p "$f" ] && printf '{"cancel":"end"}\n' 1<>"$f" 2>/dev/null
+  done
+  wait
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -4153,7 +4922,7 @@ cmd_doctor() {
       # feature gates deliberately use `version` instead: that is one cheap
       # line, where reaching this verb costs _find_claude, five tool_version
       # calls and four credential stats, and a gate runs before every call.
-      capabilities: ["units", "detach", "observe", "nudge", "goals"],
+      capabilities: ["units", "detach", "observe", "nudge", "goals", "chat"],
       hostname: $hostname,
       project_root: $root,
       registry: { path: $registry, valid: $registry_ok },
@@ -4212,6 +4981,13 @@ cx-agent — server-side helper for cx (not intended for direct use)
   ask <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
              [--effort E] [--output-format F] [--json-schema S]
              [--max-budget-usd N] [--dangerous] [-- CLAUDE_ARGS...]
+  chat <name> [--worktree W] [--session L] [--permission-mode M] [--model M]
+              [--effort E] [--allowed-tools T] [--system-prompt-stdin]
+              [--dangerous] [-- CLAUDE_ARGS...]
+                                a conversation as JSON lines on stdin and
+                                stdout, until stdin closes (docs/chat.md)
+  chat-mcp <rundir>             the permission tool chat hands Claude, an MCP
+                                server on stdio; run by Claude
   goal new <name> [--member T]...           definition of done on stdin
   goal ls [--state S] | show <name> | rm <name>
   goal dod <name>                           replace it (stdin), keeping history
@@ -4288,6 +5064,9 @@ main() {
     forget) cmd_forget "$@" ;;
     goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
+    chat) cmd_chat "$@" ;;
+    # Run by Claude, as the permission tool chat hands it; see cmd_chat_mcp.
+    chat-mcp) cmd_chat_mcp "$@" ;;
     worktree | wt) cmd_worktree "$@" ;;
     *) die "unknown command: $cmd" 3 ;;
   esac
