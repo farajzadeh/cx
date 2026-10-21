@@ -245,7 +245,9 @@ permission checks runs what it is told, so it listens on 127.0.0.1 only and
 every request needs its token. Reach it through an SSH tunnel or an
 authenticating reverse proxy; [docs/WEB.md](docs/WEB.md) has both, and the
 threat model. The server is a small Go program: `install.sh` fetches the
-release's build, or `cx web` builds it once with Go 1.21+.
+release's build, or `cx web` builds it once with Go 1.21+. With ttyd
+installed, `cx web --terminal` also shows a session's own screen,
+read-only (`cx open --view` does the same in a terminal).
 
 ### From a program: `cx chat`
 

@@ -461,20 +461,42 @@ Made on 2026-10-21, with the review of this design.
 
 ## Read-only terminal (`cx web --terminal`)
 
-Optional, and off unless asked for. It shows the raw TUI of one session in
-the page, for when the tail is not enough and Remote Control is not on.
+Optional, and off unless asked for. It shows the raw screen of one session,
+for when the tail is not enough and Remote Control is not on.
 
-- `ttyd` runs **on the client host** and attaches **read-only** (no `-W`),
-  bound to `127.0.0.1` on a random port. It runs
-  `ssh -t HOST cx-agent open … --view`, a new agent mode that runs `tmux
-  attach -r` (read-only) to the existing session. It never creates a session.
-- cx web starts one ttyd per terminal view, on request, and proxies it
-  (HTTP and WebSocket) under `/term/<id>/`, behind cx web's own
-  authentication, so ttyd's port is never handed to the browser. The ttyd
-  process ends when its viewer disconnects (`--once`), so nothing lingers.
-- A read-only attach is still a tmux client. It counts as `attached`, so
-  while someone watches, `cx nudge` declines exactly as it does when you are
-  attached in a terminal. That is deliberate. The watcher is a person, and
+- **`cx open --view <target>`** attaches to a running session read-only. It
+  is the agent's `view` verb, which never creates anything: a session that
+  is not running is exit 2. On tmux 3.2 or newer the client is
+  `-f read-only,ignore-size`, so a watcher can neither type nor shrink the
+  window under whoever is working in it; older tmux gets `-r`.
+- **ttyd runs on the machine running cx web**, one per view, started on
+  `POST /api/term` with `--once` and without `-W` (read-only on ttyd's side
+  too). It listens on a **Unix socket** in a fresh 0700 directory, not a TCP
+  port, so nothing but cx web can reach it, and cx web proxies `/term/<id>/`
+  to it (HTTP and the WebSocket) behind its own sign-in. A WebSocket from
+  another origin is refused. The page opens the view in a new tab, so the
+  page's own `frame-ancestors 'none'` stays.
+- ttyd exits when its viewer goes (`--once`); one nobody connects to within a
+  minute is stopped; at most four run at once; all are stopped when cx web
+  exits. These are children of a request, not a loop.
+- A read-only client is still a tmux client: the session reads as
+  `attached` while someone watches, and `cx nudge` declines it as it would
+  for you in a terminal. That is deliberate. The watcher is a person, and
   the same rule protects them.
-- With no `ttyd` installed, the button is not shown, and `cx web --terminal`
-  says how to get it.
+- Without ttyd, `cx web --terminal` refuses to start and says where to get
+  it, and without `--terminal` the page has no button.
+
+Checked live on 2026-10-21 with ttyd 1.7.7 (the release's static binary,
+verified against its `SHA256SUMS`), against `local:salam2@rclive`, driving
+the WebSocket the way ttyd's page does:
+
+| Did | Saw |
+|---|---|
+| `POST /api/term`, then the view's page and token, signed in and not | `200` and ttyd's page; `401` without the cookie |
+| the socket | `srw-rw----` in a `drwx------` directory under `/tmp` |
+| the WebSocket, with `Origin` this server | Claude's screen and the session's tmux bar, 1.7 KB in 5 s |
+| `tmux list-clients` meanwhile | `attached,focused,ignore-size,read-only` |
+| `cx peek --json` meanwhile | `"attached": true` |
+| typing into the view | nothing reached the pane |
+| `cx nudge` meanwhile, then after the view closed | `sent: false, reason: attached`, then `sent: true` |
+| after the view closed | no ttyd process left, the socket removed |

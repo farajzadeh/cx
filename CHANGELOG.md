@@ -52,6 +52,12 @@ release sets both to the same number. After upgrading the client, run
   `--force` a second confirmation. The server is Go with no dependencies:
   `install.sh` downloads the release's build and checks it against
   `SHA256SUMS`, and without one `cx web` builds it with Go 1.21+.
+- **`cx web --terminal`** and **`cx open --view <target>`** (2026-10-21): a
+  running session's own screen, read-only. `--view` attaches tmux read-only
+  and without resizing the window, and never starts a session; cx web shows
+  it through ttyd, on a Unix socket behind its own sign-in. While someone
+  watches, the session is attached, so `cx nudge` declines it. Needs ttyd
+  on the machine running cx web, and agent 0.8.0.
 - **`cx tail <target>`** (2026-10-21): a session's conversation, main thread
   only, as text or `--json`. With `--from OFFSET --uuid U` from a previous
   answer it reads only what was written since, which is what `cx web`
