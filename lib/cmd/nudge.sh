@@ -157,7 +157,8 @@ _nudge_state() {
   [ -n "$alive" ] && [ "$alive" != null ] || return 1
   shell=$(printf '%s' "$obs" | jq -r '.sessions[0].tmux.shell | tostring')
   uuid=$(printf '%s' "$obs" | jq -r '.sessions[0].transcript.uuid // ""')
-  present=$(printf '%s' "$obs" | jq -r '.sessions[0].transcript.present | tostring')
+  present=$(printf '%s' "$obs" | jq -r '.sessions[0].transcript
+    | if .present and .empty == true then "empty" else (.present | tostring) end')
   last_role=$(printf '%s' "$obs" | jq -r '.sessions[0].last.role // ""')
   last_stop=$(printf '%s' "$obs" | jq -r '.sessions[0].last.stop_reason // ""')
   mtime=$(printf '%s' "$obs" | jq -r '.sessions[0].transcript.mtime // ""')

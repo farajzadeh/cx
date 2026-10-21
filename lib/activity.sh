@@ -38,6 +38,12 @@ export CX_IDLE_GRACE CX_PEEK_TAIL
 # fields are empty when unknown; QUIET is seconds since the transcript was last
 # written, or empty.
 #
+# PRESENT may also be "empty": the transcript is on disk and holds no message.
+# A Remote Control session writes one the moment it starts (verified with
+# Claude Code 2.1.306), so a file no longer means the conversation has begun.
+# "empty" reads as absent everywhere except `starting`, because the file still
+# proves that Claude got past its startup.
+#
 # The three optional facts are better sources than the transcript when the
 # agent has them, and each is empty when it does not:
 #
@@ -196,7 +202,7 @@ cx_activity_state() {
   #
   # Only with no transcript either. A conversation on disk proves Claude
   # started, whatever happened to cx's own state files (invariant 4).
-  if [ "$hooked" = true ] && [ "$present" != true ]; then
+  if [ "$hooked" = true ] && [ "$present" = false ]; then
     printf 'starting'
     return 0
   fi
@@ -350,7 +356,10 @@ $(jq -r '
         (.tmux.shell         | tostring),
         (.tmux.attached      | tostring),
         (.transcript.uuid    | f),
-        (.transcript.present | tostring),
+        # "empty" when it is on disk with no message in it yet: see
+        # PRESENT in cx_activity_state. From agent 0.8.0 on.
+        (if .transcript.present and .transcript.empty == true then "empty"
+         else (.transcript.present | tostring) end),
         (.last.role          | f),
         (.last.stop_reason   | f),
         (.transcript.mtime   | f),
