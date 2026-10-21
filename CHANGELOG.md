@@ -13,6 +13,42 @@ release sets both to the same number. After upgrading the client, run
 
 ## [Unreleased]
 
+### Behaviour changes
+
+- **`cx peek` has a MODE column** between STATE and WHO: the permission mode
+  a session was started with (`no-perms` for none) and `rc` for Remote
+  Control, joined as in `no-perms+rc`. A script that splits the table on
+  whitespace sees one more column; `--json` is the stable form.
+
+### Added
+
+- **Remote Control** (2026-10-21): `cx open`, `resume`, `new` and `wt add`
+  take `--remote-control`, which starts Claude Code with its own Remote
+  Control so the session is also on claude.ai/code and in the Claude app,
+  named after its cx target (`web1:api@review`). `--no-remote-control` turns
+  it off for one session. The default comes from, in order, the project's own
+  setting, the host file's `#cx:remote_control=0|1` and `CX_REMOTE_CONTROL`
+  (default `0`). Like the permission mode it is fixed when a session starts.
+  Needs agent 0.8.0 and Claude Code signed in with a claude.ai account.
+  Claude Code turns Remote Control back on whenever it resumes a conversation
+  that had it, so `--no-remote-control` cannot remove it from one: cx says
+  so, and records the session as `rc`.
+- **`cx rc [on|off|default <host>:<project>]`** (2026-10-21): a project's own
+  Remote Control setting, kept in its server's registry so every machine you
+  run cx from sees the same one. Bare, it lists every project and what its
+  new sessions get.
+- **`cx status` shows `rc` in MODE and takes `--json`** (2026-10-21).
+- **`cx peek --json`** has, per session, `remote_control` (`enabled`, `name`,
+  and `url`, the claude.ai link, read from Claude's own status file while the
+  session runs) and `perm_mode`.
+
+### Fixed
+
+- A session whose transcript holds no message yet is `fresh`, not `idle` or
+  `unknown`. A Remote Control session writes its transcript the moment it
+  starts, so a file on disk no longer meant the conversation had begun.
+  `cx nudge` sends to it as to any other fresh session.
+
 ## [0.7.0] - 2026-10-20
 
 ### Added

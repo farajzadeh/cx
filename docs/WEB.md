@@ -32,12 +32,27 @@ tmux 3.4) on 2026-10-21.
 | In a directory Claude has not trusted, the trust prompt comes first and Remote Control is not active until it is answered | started in an untrusted directory |
 | `claude --help` lists `--remote-control [name]` and `--remote-control-session-name-prefix <prefix>` (default: hostname) | the installed binary |
 
-Still to verify while building Layer 1, each recorded in this file once checked:
-which name claude.ai/code shows when `--name` and `--remote-control <name>`
-disagree; `--resume <uuid> --remote-control`; `--resume` (the picker) with
-`--remote-control`; whether hooks fire for a message sent from claude.ai; what
-happens when the account cannot use Remote Control (API-key auth, a plan
-without it).
+Found while building Layer 1, on the same host with cx's own commands
+(`cx open -d local:salam2@rclive --remote-control --permission-mode plan`,
+then `cx peek`, `cx status`, `cx nudge`, `cx stop` and `cx open` again):
+
+| Claim | What was seen |
+|---|---|
+| A cx-started RC session reads `fresh`, then `idle` after a nudge | `fresh  plan+rc`, then `idle` with last message `pong` and a `Stop` hook report |
+| `--resume <uuid> --remote-control` keeps the same claude.ai link | the same `session_01U3…` before and after `cx stop` / `cx open` |
+| **Claude Code reconnects Remote Control by itself on `--resume` of a conversation that had it** | the pane got `claude --resume <uuid> --name …` with no `--remote-control`, and its status file still had the same `bridgeSessionId` |
+| That is per conversation, not per directory | a new `@rclive2` in the same directory had no bridge |
+| The transcript's `bridge-session` entry holds `cse_01…`, the status file `session_01…`, same suffix | both read directly; only the status file's form is used for the link |
+
+So `--no-remote-control` cannot take Remote Control away from a conversation
+that has had it. The agent sees the `bridge-session` entry before resuming,
+records the session as `rc`, and says what to do instead (a new `@label`, or
+`cx stop` then `cx forget`).
+
+Still open, because they need claude.ai in a browser: which name the session
+list shows when `--name` and `--remote-control <name>` differ; whether hooks
+fire for a message sent from claude.ai; what happens on an account that cannot
+use Remote Control (API-key auth).
 
 ## Layer 1: Remote Control
 

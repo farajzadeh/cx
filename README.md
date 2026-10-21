@@ -208,6 +208,25 @@ tmux source-file ~/.tmux.conf
 cx tabs                              # a tab per live session; re-run for new ones
 ```
 
+### From your phone: Remote Control
+
+Claude Code's own Remote Control puts a session on claude.ai/code and in the
+Claude app, with everything Claude Code does there: the conversation, sending
+it messages, approving its prompts, slash commands, interrupting it. cx starts
+a session with it and names it after its target, so `web1:api@review` is
+easy to find among the rest.
+
+```sh
+cx open -d web1:api@review --remote-control
+cx rc on web1:api                    # every new session of this project
+cx peek web1:api@review --json | jq -r '.sessions[0].remote_control.url'
+```
+
+`cx status` and `cx peek` show it in MODE as `rc`. It is decided when a
+session starts: by the flag, then the project's own setting (`cx rc`, kept on
+its server), then the host's `#cx:remote_control=1`, then
+`CX_REMOTE_CONTROL`. Claude Code must be signed in with a claude.ai account.
+
 ### From a program: `cx chat`
 
 `cx chat` is `cx open` for a program. It holds the same conversation, but
@@ -263,10 +282,12 @@ line: `-r`/`--refresh`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`.
 | Working | |
 |---|---|
 | `cx open <target> [-d]` | attach a Claude session, resuming its conversation |
+| `cx open <target> --remote-control` | also on claude.ai/code and in the Claude app |
+| `cx rc [on \| off \| default <host>:<project>]` | whether a project's sessions start with Remote Control |
 | `cx resume` / `shell` / `code <target>` | pick an older conversation / plain shell / VS Code |
 | `cx ask <target> "prompt"` | one-shot question, printed to stdout |
 | `cx chat <target>` | a conversation as JSON lines, for a program: replies, approvals, questions |
-| `cx status` | live sessions across servers |
+| `cx status [--json]` | live sessions across servers |
 | `cx stop <target> [--all]` / `cx forget <target>` | end a session / drop a finished one |
 | `cx find [query] [--print]` | choose any target from a menu, then act |
 
