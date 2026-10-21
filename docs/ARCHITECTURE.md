@@ -348,6 +348,24 @@ claude.ai is a remote screen on the one process that writes the conversation,
 not a second writer, so invariant 8 holds. Design notes, what was verified and
 the threat model are in [WEB.md](WEB.md).
 
+## In a browser
+
+`cx web` serves one page that watches and steers every session. It is the
+only cx process that keeps running, and it keeps the no-loop rule by only
+answering: the board refreshes on the page's timer, and the live tail is
+Server-Sent Events where each connection is a single `cx tail` and the cursor
+(`uuid:offset`) comes back from the browser as `Last-Event-ID`. The server is
+a small Go program with no dependencies, because bash cannot listen on a
+socket, and it knows only what it learns by running `cx --json` by argv, so
+the classifier, the refusals and the quoting rules are the CLI's own.
+
+Its security is that of a remote shell, since a message to a session with no
+permission checks is one: loopback only by default, a 0600 token, stateless
+HMAC cookies, CSRF on every change, a `Host` allowlist against DNS
+rebinding, no CORS, a nonce-only CSP, and `textContent` for everything a
+transcript says. [WEB.md](WEB.md) has the threat model and how to reach it
+from a phone.
+
 ## A conversation for a program
 
 `cx chat` is `cx open` without the terminal: the agent runs `claude -p` with

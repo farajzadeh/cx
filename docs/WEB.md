@@ -221,15 +221,16 @@ The board needs the conversation as it grows, read incrementally. `cx peek
 the wrong shape for a stream. So:
 
 ```
-cx tail <target> [--from OFFSET] [--max N]   →   cx-agent tail ... (one shot)
+cx tail <target> [--from OFFSET --uuid U] [--max N]   →   cx-agent tail ... (one shot)
 ```
 
 It returns:
 
 ```json
-{"target":"salam2@impl","uuid":"…","offset":183522,"size":183522,"reset":false,
- "messages":[{"role":"user","text":"…","ts":"…"},
-             {"role":"assistant","text":"…","tools":[{"name":"Bash","summary":"ls -la"}]}]}
+{"host":"local","target":"salam2@impl","uuid":"…","offset":183522,"size":183522,"reset":false,
+ "messages":[{"id":"…","role":"user","at":"…","text":"…","tools":[],"results":[]},
+             {"id":"…","role":"assistant","at":"…","text":"…",
+              "tools":[{"name":"Bash","summary":"ls -la"}],"results":[]}]}
 ```
 
 - With `--from`, it reads only the bytes after OFFSET, up to the last
@@ -237,8 +238,12 @@ It returns:
   the same rule as `cx usage`'s incremental cache, except that the offset
   lives in the browser and not on disk.
 - Without `--from`, or when the file is now smaller than OFFSET, or the
-  session's pinned uuid changed, it reads the last 256 KB, returns the last
-  `--max` messages (default 40), and sets `reset: true`.
+  session's pinned uuid is not `--uuid`, or more than 4 MB was written since,
+  it reads the last 256 KB, returns the last `--max` messages (default 40),
+  and sets `reset: true`. When 256 KB held fewer than that, it reads the last
+  5000 lines instead, as `_transcript_messages` does: on a real server one
+  short exchange left 213 KB of attachment entries between the prompt and
+  its reply, which put the prompt outside the first window.
 - Main thread only (`isSidechain` false), messages only (`type` user or
   assistant), parsed with `fromjson?`, exactly as `_transcript_messages` does.
 - Tool calls become `{name, summary}`, where the summary is a short line from
@@ -255,7 +260,8 @@ header. All responses are JSON unless noted.
 | Method | Route | Does |
 |---|---|---|
 | GET | `/` | the page (HTML). Without a valid cookie: a small sign-in form, no data |
-| POST | `/api/login` | body `{token}`. Sets the session cookie, returns the CSRF token |
+| POST | `/api/login` | body `{token}`. Sets the session cookie, returns the CSRF token. The only route that needs no session |
+| GET | `/api/me` | the CSRF token again, the refresh interval and the version, for a page that was reloaded |
 | POST | `/api/logout` | clears the cookie |
 | GET | `/api/sessions` | `cx --json peek`, joined with branch from `cx --json ls` |
 | GET | `/api/goals` | every goal on every host, with members, state, and the last 20 log entries |
@@ -305,10 +311,41 @@ it is the main source of hostile input, and it is never treated as markup.
 ### Running it
 
 ```
-cx web [--listen 127.0.0.1:8377] [--interval 10]
-cx web --rotate-token
-cx web --print-url
+cx web [--listen 127.0.0.1:8377] [--interval 10] [--allow-host NAME]...
+cx web --print-url        # the sign-in link again
+cx web --rotate-token     # a new token; every page is signed out
+cx web --rebuild          # build the server again from web/*.go
 ```
+
+`CX_WEB_LISTEN` and `CX_WEB_INTERVAL` set the first two in the config file,
+and `CX_WEB_TOKEN` moves the token.
+
+### What was run against a live host
+
+On 2026-10-21, `cx web --listen 127.0.0.1:8399` against host `local` (33
+sessions, agent 0.8.0, Claude Code 2.1.306), with curl and with headless
+Chromium at 390 px wide, in light and dark:
+
+| Did | Saw |
+|---|---|
+| `GET /api/sessions` with no cookie | `401` |
+| `GET /` with `Host: evil.example:8399` | `421` |
+| `GET /` | the page, `script-src 'nonce-…'`, `X-Frame-Options: DENY`; signing in through `#token=` and the board rendering prove the nonce reached both the script and the style |
+| `POST /api/login` with the token, then `GET /api/sessions` | the board in 1.2 s: `cx --json peek --tail 0` and `cx --json ls` run side by side |
+| `GET /api/tail?target=local:salam2@rclive` | `id: <uuid>:355285`, `event: tail`, both messages of the earlier exchange |
+| the same with that `Last-Event-ID` | `retry: 3000`, the same `id:`, no event |
+| `POST /api/nudge` without `X-CX-CSRF` | `403` |
+| `POST /api/nudge` "Reply with just the word ping" | `sent: true`; a second one at once got `sent: false`, `reason: working` |
+| the tail again with the old `Last-Event-ID` | only the new prompt and `ping`, at a new offset |
+| `POST /api/nudge` to a session opened with `--permission-mode bypassPermissions`, without and with a wrong `confirm` | `428`, `need_confirm: no-perms`, and `cx nudge` never ran |
+| `POST /api/stop` without, then with `confirm` | `428`, then `stopped: true` |
+| `POST /api/open` | `created: true`, the session back |
+| `GET /api/goals` | the one goal, with 20 of its 32 log entries and no `revisions` |
+| the session view in the browser | the conversation, *Open in Claude* linking to the session's claude.ai URL, and for the no-perms one the red banner and badge |
+
+Not yet seen: the page from a phone over a real tunnel, and the messages a
+phone sends through claude.ai showing up in the tail (they should: it is the
+same transcript).
 
 On start it prints `http://127.0.0.1:8377/#token=…`. The token is in the URL
 **fragment**, which browsers never send to a server or write to its logs.
@@ -335,11 +372,11 @@ only as text.
 |---|---|
 | Reached from the network | Binds `127.0.0.1` by default. Any other address needs `--listen` explicitly and prints a warning. |
 | Request with no credentials | Every route checks the session cookie or an `Authorization: Bearer` header, with a constant-time compare. |
-| Stolen or leaked token | Token is 32 random bytes in `~/.config/cx/web.token`, mode 0600, created with a 077 umask. `cx web --rotate-token` replaces it. The server reads the file on each check, so rotation takes effect at once, and every cookie issued from the old token stops working. |
+| Stolen or leaked token | Token is 32 random bytes in `~/.config/cx/web.token`, mode 0600, created with a 077 umask by temp file and rename; a file found readable by others is set back to 0600 with a warning. `cx web --rotate-token` replaces it. The server re-reads the file when it changes, so rotation takes effect at once, and every cookie issued from the old token stops working: a cookie is `issued.HMAC(token, "session|issued")` and the CSRF token `HMAC(token, "csrf|issued")`, so the server checks both from the token alone and stores nothing. Sessions last 30 days. |
 | CSRF from another site | The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` behind HTTPS. Every POST also needs `X-CX-CSRF`, an HMAC of the token, which another origin cannot read. The `Origin` header must match the request's own host. |
 | DNS rebinding | The `Host` header must be one the server is listening as (`127.0.0.1:PORT`, `localhost:PORT`), or a name passed with `--allow-host`. |
 | Cross-origin reads | No CORS headers at all. A preflight gets `403`. |
-| XSS through transcript text | `textContent` only. Plus `Content-Security-Policy: default-src 'none'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'`. |
+| XSS through transcript text | `textContent` only. Plus `Content-Security-Policy: default-src 'none'; script-src 'nonce-…'; style-src 'nonce-…'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, with a fresh nonce per request, so the page has no inline `style=` attributes either. |
 | Clickjacking | `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
 | Injection into cx argv | Target grammar check, argv `exec`, text on stdin (invariant 1). |
 | Remote code execution through a nudge | Inherent in the feature. It gets the no-perms warnings and confirmations above, and the refusal rules are the CLI's own. |
@@ -384,11 +421,15 @@ without TLS in front.
 ## Layout
 
 ```
-web/main.go        the server (Go, standard library only, no go.sum)
-web/index.html     the page, read at runtime
-lib/cmd/web.sh     `cx web`: finds or builds the binary, then execs it
-lib/cmd/tail.sh    `cx tail`
-lib/cmd/rc.sh      `cx rc on|off|default <target>`
+web/main.go            flags, the token on start, listening
+web/auth.go            the token file, cookies, CSRF, Host and Origin checks
+web/server.go          the routes, and running cx
+web/server_test.go     against a fake cx that records argv and stdin
+web/index.html         the page, read at runtime
+lib/cmd/web.sh         `cx web`: finds or builds the binary, then execs it
+lib/cmd/tail.sh        `cx tail`
+lib/cmd/rc.sh          `cx rc on|off|default <target>`
+.github/workflows/release.yml   the binaries and SHA256SUMS, per release
 ```
 
 ## Decisions

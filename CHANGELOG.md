@@ -41,6 +41,21 @@ release sets both to the same number. After upgrading the client, run
 - **`cx peek --json`** has, per session, `remote_control` (`enabled`, `name`,
   and `url`, the claude.ai link, read from Claude's own status file while the
   session runs) and `perm_mode`.
+- **`cx web`** (2026-10-21): every session in a browser, from a laptop or a
+  phone. A board grouped by server and goal, blocked first, refreshing while
+  the tab is visible; a session's live conversation, a box to send it a
+  message through `cx nudge`, *Open in Claude*, start and stop; and goals,
+  with pause, resume and done. It listens on 127.0.0.1, needs a token for
+  every request (`~/.config/cx/web.token`, 0600, `--rotate-token`) and a CSRF
+  token for every change, and sends nothing cross-origin. A session with no
+  permission checks needs its target typed back before anything is sent, and
+  `--force` a second confirmation. The server is Go with no dependencies:
+  `install.sh` downloads the release's build and checks it against
+  `SHA256SUMS`, and without one `cx web` builds it with Go 1.21+.
+- **`cx tail <target>`** (2026-10-21): a session's conversation, main thread
+  only, as text or `--json`. With `--from OFFSET --uuid U` from a previous
+  answer it reads only what was written since, which is what `cx web`
+  streams. Needs agent 0.8.0.
 
 ### Fixed
 

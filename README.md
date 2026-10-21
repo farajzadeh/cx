@@ -227,6 +227,26 @@ session starts: by the flag, then the project's own setting (`cx rc`, kept on
 its server), then the host's `#cx:remote_control=1`, then
 `CX_REMOTE_CONTROL`. Claude Code must be signed in with a claude.ai account.
 
+### In a browser: `cx web`
+
+`cx web` serves one page that shows every session on every server, grouped by
+server and goal with the blocked ones first. Each session opens into its live
+conversation, with a box to send it a message (`cx nudge`, with the same
+refusals), *Open in Claude* when it has Remote Control, and start and stop.
+A goals tab pauses, resumes and finishes goals.
+
+```sh
+cx web                               # prints http://127.0.0.1:8377/#token=…
+ssh -N -L 8377:127.0.0.1:8377 box    # from a phone or laptop, then open that link
+```
+
+Whoever can use the page can type into your sessions, and a session with no
+permission checks runs what it is told, so it listens on 127.0.0.1 only and
+every request needs its token. Reach it through an SSH tunnel or an
+authenticating reverse proxy; [docs/WEB.md](docs/WEB.md) has both, and the
+threat model. The server is a small Go program: `install.sh` fetches the
+release's build, or `cx web` builds it once with Go 1.21+.
+
 ### From a program: `cx chat`
 
 `cx chat` is `cx open` for a program. It holds the same conversation, but
@@ -295,6 +315,8 @@ line: `-r`/`--refresh`, `--no-cache`, `--stale`, `--json`, `-y`, `--no-color`.
 |---|---|
 | `cx peek [target] [--all \| --goal G]` | what each session is doing now |
 | `cx nudge <target> "prompt"` | type into a running session |
+| `cx tail <target> [--json]` | a session's conversation, from where you left off |
+| `cx web` | every session in a browser: watch, send, start, stop |
 | `cx bar` / `tabs` / `jump` | tmux status bar, a tab per session, go to the one that needs you |
 | `cx goal new` / `ls` / `show` / `pause` / `done` / `on-stop` | definitions of done, and who is on them |
 | `cx driver` | print the cx-driver subagent |
