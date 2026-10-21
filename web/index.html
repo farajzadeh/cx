@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>cx live</title>
+<!--
+  cx live: one page, no build step, no framework. Served by `cx web`, which
+  replaces every NONCE placeholder with a fresh nonce per request; the CSP
+  allows no script or style without it, and no inline style attributes.
+
+  Everything that comes from a transcript or from cx is put on the page with
+  textContent, never innerHTML: transcript text is written by whatever Claude
+  read and ran, which makes it the page's main source of hostile input.
+-->
+<style nonce="{{NONCE}}">
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+  --accent: #2f5fd0; --accent-text: #ffffff;
+  --blocked: #b3261e; --blocked-bg: #fde7e4;
+  --idle: #1f7a3a; --idle-bg: #e2f4e6;
+  --working: #2f5fd0; --working-bg: #e4ebfb;
+  --starting: #8a5a00; --starting-bg: #fbf0d9;
+  --dead: #6b6b66; --dead-bg: #ecebe7;
+  --danger: #b3261e; --danger-bg: #fde7e4;
+  --you: #eef2fb; --claude: #ffffff; --code: #f1f0ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a93; --line: #34332f;
+    --accent: #7ea2ff; --accent-text: #0b1530;
+    --blocked: #ff8a80; --blocked-bg: #3d1a17;
+    --idle: #7fd498; --idle-bg: #17301f;
+    --working: #9db8ff; --working-bg: #1b2645;
+    --starting: #f2c66d; --starting-bg: #382b10;
+    --dead: #9b9a93; --dead-bg: #2a2a27;
+    --danger: #ff8a80; --danger-bg: #3d1a17;
+    --you: #1d2638; --claude: #1f1f1d; --code: #2a2a27;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 0 16px calc(24px + env(safe-area-inset-bottom));
+}
+a { color: var(--accent); }
+button, select, input, textarea { font: inherit; color: inherit; }
+button {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; min-height: 36px;
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, .row:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+input, textarea, select {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+}
+.wrap { max-width: 980px; margin: 0 auto; }
+header {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 0 10px; border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 17px; margin: 0; letter-spacing: .01em; }
+header .grow { flex: 1; }
+header .meta { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; }
+nav button[aria-current="page"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.notice {
+  margin: 12px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+}
+.notice.danger { border-color: var(--danger); background: var(--danger-bg); color: var(--danger); }
+.notice.warn { border-color: var(--starting); background: var(--starting-bg); color: var(--starting); }
+h2 { font-size: 15px; margin: 22px 0 8px; display: flex; gap: 8px; align-items: baseline; }
+h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center;
+  padding: 10px 12px; border-top: 1px solid var(--line); border-left: 4px solid transparent; cursor: pointer;
+}
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--bg); }
+.row.blocked { border-left-color: var(--blocked); }
+.row.idle { border-left-color: var(--idle); }
+.row .name { font-weight: 600; overflow-wrap: anywhere; }
+.row .sub { grid-column: 1 / -1; color: var(--muted); font-size: 13px; display: flex; gap: 10px; flex-wrap: wrap; }
+.chip {
+  display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  background: var(--dead-bg); color: var(--dead); white-space: nowrap;
+}
+.chip.blocked { background: var(--blocked-bg); color: var(--blocked); }
+.chip.idle, .chip.fresh, .chip.active { background: var(--idle-bg); color: var(--idle); }
+.chip.working { background: var(--working-bg); color: var(--working); }
+.chip.starting, .chip.paused { background: var(--starting-bg); color: var(--starting); }
+.badge {
+  font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line);
+  color: var(--muted); letter-spacing: .03em;
+}
+.badge.noperms { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); }
+.badge.rc { border-color: var(--accent); color: var(--accent); }
+.toggle { background: none; border: 0; color: var(--muted); padding: 8px 0; min-height: 0; }
+#signin { max-width: 420px; margin: 18vh auto 0; }
+#signin form { display: flex; gap: 8px; margin-top: 12px; }
+#signin input { flex: 1; min-width: 0; }
+
+/* Session view */
+.sv-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 14px 0 6px; }
+.sv-head h2 { margin: 0; overflow-wrap: anywhere; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.actions a.button {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 6px 12px; border-radius: 8px;
+  background: var(--accent); color: var(--accent-text); text-decoration: none;
+}
+#log { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.msg { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--claude); }
+.msg.user { background: var(--you); }
+.msg .who { font-size: 12px; color: var(--muted); display: flex; gap: 8px; }
+.msg .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg .tool { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+.msg details { margin-top: 4px; }
+.msg details summary { cursor: pointer; font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+.msg details.error summary { color: var(--danger); }
+.msg pre {
+  margin: 6px 0 0; padding: 8px; background: var(--code); border-radius: 6px; max-height: 320px; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px;
+}
+.composer {
+  position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+.composer textarea { width: 100%; min-height: 76px; resize: vertical; }
+.composer .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.composer .bar .grow { flex: 1; }
+#sendResult { min-height: 1.4em; }
+
+/* Goals */
+.goal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+.goal .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.goal .top strong { overflow-wrap: anywhere; }
+.goal .dod { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; max-height: 9.5em; overflow: hidden; }
+.goal .dod.open { max-height: none; }
+.goal ul { margin: 6px 0; padding-left: 18px; }
+.goal .logline { font-size: 13px; border-top: 1px solid var(--line); padding: 6px 0; overflow-wrap: anywhere; }
+.goal .logline .when { color: var(--muted); }
+
+dialog {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
+  max-width: min(480px, calc(100vw - 32px)); padding: 18px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+dialog p { margin: 0 0 10px; }
+dialog input { width: 100%; margin: 6px 0 12px; }
+dialog .actions { justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<section id="signin" class="hidden">
+  <h1>cx live</h1>
+  <p class="muted">Paste the token that <code>cx web</code> printed, or open the link it printed.
+    <code>cx web --print-url</code> prints it again.</p>
+  <form id="signinForm">
+    <input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="token" aria-label="token">
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+  <p id="signinError" class="notice danger hidden" role="alert"></p>
+</section>
+
+<section id="app" class="hidden">
+  <header>
+    <h1>cx live</h1>
+    <nav>
+      <button type="button" id="navBoard" aria-current="page">Board</button>
+      <button type="button" id="navGoals">Goals</button>
+    </nav>
+    <span class="grow"></span>
+    <span class="meta" id="updated" aria-live="polite"></span>
+    <label class="meta">every
+      <select id="interval" aria-label="refresh interval">
+        <option value="5">5 s</option><option value="10">10 s</option>
+        <option value="30">30 s</option><option value="60">60 s</option>
+      </select>
+    </label>
+    <button type="button" id="refresh">Refresh</button>
+    <button type="button" id="signout">Sign out</button>
+  </header>
+
+  <div id="problems"></div>
+
+  <main id="board"></main>
+  <main id="goals" class="hidden"></main>
+
+  <main id="session" class="hidden">
+    <div class="sv-head">
+      <button type="button" id="back" aria-label="back to the board">← Board</button>
+      <h2 id="svTitle"></h2>
+      <span id="svState"></span>
+      <span id="svBadges"></span>
+    </div>
+    <div id="svMeta" class="muted small"></div>
+    <div id="svNoPerms" class="notice danger hidden" role="alert">
+      <strong>No permission checks.</strong> This session runs every tool call without asking.
+      A message sent here is effectively remote code execution on that server<span id="svNoPermsRc">,
+      and so is anything sent to it from claude.ai, where it is on Remote Control</span>.
+      Every send needs the target typed back.
+    </div>
+    <div class="actions" id="svActions"></div>
+    <div id="svStream" class="muted small" aria-live="polite"></div>
+    <div id="log"></div>
+    <div class="composer">
+      <textarea id="text" placeholder="Message to Claude in this session" aria-label="message"></textarea>
+      <div class="bar">
+        <label class="small"><input type="checkbox" id="force"> force (send even when cx would refuse)</label>
+        <span class="grow"></span>
+        <button type="button" class="primary" id="send">Send</button>
+      </div>
+      <div id="sendResult" class="small" role="status"></div>
+    </div>
+  </main>
+</div>
+
+<dialog id="confirm">
+  <form method="dialog" id="confirmForm">
+    <p id="confirmText"></p>
+    <p id="confirmTypeHint" class="small muted"></p>
+    <input id="confirmInput" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="confirmation">
+    <div class="actions">
+      <button type="button" id="confirmCancel">Cancel</button>
+      <button type="submit" class="danger" id="confirmOk">Confirm</button>
+    </div>
+  </form>
+</dialog>
+</div>
+
+<script nonce="{{NONCE}}">
+"use strict";
+(function () {
+  const $ = (id) => document.getElementById(id);
+
+  // el(tag, attrs, ...children): every string child becomes a text node.
+  // There is deliberately no way to pass HTML.
+  function el(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? "" : String(v));
+    }
+    for (const k of kids.flat()) {
+      if (k === null || k === undefined || k === false) continue;
+      n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+    }
+    return n;
+  }
+
+  const store = {
+    get(k) { try { return localStorage.getItem("cx-web:" + k); } catch (_) { return null; } },
+    set(k, v) { try { localStorage.setItem("cx-web:" + k, v); } catch (_) { /* private mode */ } },
+  };
+
+  let csrf = "";
+  let intervalSec = 10;
+  let timer = null;
+  let board = null;      // last /api/sessions answer, joined
+  let goals = null;      // last /api/goals answer
+  let goalsAt = 0;
+  let view = "board";
+  let current = null;    // full target of the session view
+  let stream = null;     // EventSource
+  let showFinished = {};
+
+  // ---------------------------------------------------------------- API
+
+  async function api(method, path, body) {
+    const opt = { method, headers: {}, credentials: "same-origin", cache: "no-store" };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.headers["X-CX-CSRF"] = csrf;
+      opt.body = JSON.stringify(body);
+    }
+    const r = await fetch(path, opt);
+    let data = {};
+    try { data = await r.json(); } catch (_) { /* empty */ }
+    if (r.status === 401) { signedOut(); }
+    return { status: r.status, data };
+  }
+
+  // ------------------------------------------------------------ sign in
+
+  async function start() {
+    // The token arrives in the fragment, which no browser sends to a server.
+    // Use it once, then take it out of the address bar and the history.
+    const m = /^#token=([A-Za-z0-9]+)$/.exec(location.hash);
+    if (m) {
+      history.replaceState(null, "", location.pathname);
+      if (await signIn(m[1])) return;
+    }
+    const r = await api("GET", "/api/me");
+    if (r.status === 200) return signedIn(r.data);
+    signedOut();
+  }
+
+  async function signIn(token) {
+    const r = await fetch("/api/login", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    let data = {};
+    try { data = await r.json(); } catch (_) { /* empty */ }
+    if (r.status === 200) { signedIn(data); return true; }
+    const e = $("signinError");
+    e.textContent = data.error || ("sign-in failed (" + r.status + ")");
+    e.classList.remove("hidden");
+    signedOut();
+    return false;
+  }
+
+  function signedIn(me) {
+    csrf = me.csrf || "";
+    const saved = parseInt(store.get("interval") || "", 10);
+    intervalSec = saved >= 2 ? saved : (me.interval || 10);
+    const sel = $("interval");
+    if (![...sel.options].some((o) => o.value === String(intervalSec))) {
+      sel.append(el("option", { value: intervalSec }, intervalSec + " s"));
+    }
+    sel.value = String(intervalSec);
+    $("signin").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    route();
+    refresh();
+    schedule();
+  }
+
+  function signedOut() {
+    csrf = "";
+    stopStream();
+    if (timer) { clearInterval(timer); timer = null; }
+    $("app").classList.add("hidden");
+    $("signin").classList.remove("hidden");
+  }
+
+  $("signinForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = $("tokenInput").value.trim();
+    $("tokenInput").value = "";
+    if (t) signIn(t);
+  });
+  $("signout").addEventListener("click", async () => {
+    await api("POST", "/api/logout", {});
+    signedOut();
+  });
+
+  // ---------------------------------------------------------- refreshing
+
+  // The loop is the page's: cx web only answers. It runs while the tab is
+  // visible, and catches up the moment it is shown again.
+  function schedule() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => { if (!document.hidden) refresh(); }, intervalSec * 1000);
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  $("interval").addEventListener("change", (e) => {
+    intervalSec = parseInt(e.target.value, 10) || 10;
+    store.set("interval", String(intervalSec));
+    schedule();
+  });
+  $("refresh").addEventListener("click", () => refresh(true));
+
+  let refreshing = false;
+  async function refresh(withGoals) {
+    if (refreshing || $("app").classList.contains("hidden")) return;
+    refreshing = true;
+    $("updated").textContent = "updating…";
+    try {
+      const wantGoals = withGoals || !goals || view === "goals" || Date.now() - goalsAt > intervalSec * 3000;
+      const [s, g] = await Promise.all([
+        api("GET", "/api/sessions"),
+        wantGoals ? api("GET", "/api/goals") : Promise.resolve(null),
+      ]);
+      if (g && g.status === 200) { goals = g.data; goalsAt = Date.now(); }
+      if (s.status === 200) {
+        board = join(s.data, goals);
+        $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+      } else if (s.status !== 401) {
+        $("updated").textContent = "update failed";
+        problems([s.data.error || ("cx peek failed (" + s.status + ")")]);
+      }
+      render();
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  // join puts what the page shows in one place: cx peek's sessions, each
+  // with its branch from cx ls and the goals it is a member of.
+  function join(data, goals) {
+    const peek = data.peek || {};
+    const ls = data.ls || {};
+    const branch = {};
+    for (const p of ls.projects || []) {
+      branch[p.host + ":" + p.name] = p.branch;
+      for (const w of p.worktrees || []) branch[p.host + ":" + p.name + "/" + w.name] = w.branch;
+    }
+    const memberOf = {};
+    for (const g of (goals && goals.goals) || []) {
+      for (const m of g.members || []) {
+        const key = m.includes(":") ? m : g.host + ":" + m;
+        (memberOf[key] = memberOf[key] || []).push(g);
+      }
+    }
+    const sessions = (peek.sessions || []).map((s) => {
+      const full = s.host + ":" + s.target;
+      const unit = s.host + ":" + s.project + (s.worktree ? "/" + s.worktree : "");
+      return Object.assign({}, s, { full, branch: branch[unit] || null, goals: memberOf[full] || [] });
+    });
+    const down = (ls.servers || []).filter((x) => !x.ok).map((x) => x.host + ": " + (x.error || "unreachable"));
+    return { sessions, warnings: (data.warnings || []).concat(down) };
+  }
+
+  function problems(list) {
+    const box = $("problems");
+    box.replaceChildren();
+    for (const p of list) box.append(el("div", { class: "notice warn small" }, p));
+  }
+
+  // ------------------------------------------------------------- render
+
+  const ORDER = { blocked: 0, idle: 1, fresh: 2, working: 3, starting: 4, unknown: 5, dead: 6 };
+
+  function render() {
+    if (!board) return;
+    problems(board.warnings);
+    const blocked = board.sessions.filter((s) => s.state === "blocked").length;
+    document.title = (blocked ? "(" + blocked + ") " : "") + "cx live";
+    if (view === "board") renderBoard();
+    if (view === "goals") renderGoals();
+    if (view === "session") renderSessionHead();
+  }
+
+  function quiet(sec) {
+    if (sec === null || sec === undefined) return "";
+    if (sec < 60) return sec + "s";
+    if (sec < 3600) return Math.floor(sec / 60) + "m";
+    if (sec < 86400) return Math.floor(sec / 3600) + "h";
+    return Math.floor(sec / 86400) + "d";
+  }
+
+  function isNoPerms(s) { return s.perm_mode === "bypassPermissions" || s.dangerous === true; }
+
+  function badges(s) {
+    const out = [];
+    if (isNoPerms(s)) out.push(el("span", { class: "badge noperms", title: "no permission checks" }, "NO-PERMS"));
+    else if (s.perm_mode) out.push(el("span", { class: "badge" }, s.perm_mode));
+    if (s.remote_control && s.remote_control.enabled) out.push(el("span", { class: "badge rc", title: "Remote Control" }, "rc"));
+    return out;
+  }
+
+  function chip(state) { return el("span", { class: "chip " + (state || "unknown") }, state || "unknown"); }
+
+  function row(s) {
+    const go = () => openSession(s.full);
+    return el("div", {
+      class: "row " + s.state, tabindex: 0, role: "link", "aria-label": s.full + ", " + s.state,
+      onclick: go, onkeydown: (e) => { if (e.key === "Enter") go(); },
+    },
+      el("span", { class: "name" }, s.target),
+      el("span", {}, chip(s.state)),
+      el("span", { class: "sub" },
+        s.quiet !== null && s.quiet !== undefined ? el("span", {}, "quiet " + quiet(s.quiet)) : null,
+        s.branch ? el("span", {}, "⎇ " + s.branch) : null,
+        badges(s),
+        s.tmux && s.tmux.attached ? el("span", {}, "attached") : null),
+    );
+  }
+
+  function sortRows(a, b) {
+    return (ORDER[a.state] ?? 5) - (ORDER[b.state] ?? 5) || (a.quiet ?? 0) - (b.quiet ?? 0) || a.target.localeCompare(b.target);
+  }
+
+  function renderBoard() {
+    const root = $("board");
+    root.replaceChildren();
+    const hosts = {};
+    for (const s of board.sessions) (hosts[s.host] = hosts[s.host] || []).push(s);
+    const names = Object.keys(hosts).sort((a, b) => {
+      const ba = hosts[a].some((s) => s.state === "blocked"), bb = hosts[b].some((s) => s.state === "blocked");
+      return (bb - ba) || a.localeCompare(b);
+    });
+    if (!names.length) root.append(el("p", { class: "muted" }, "No sessions. Start one with cx open -d <target>."));
+    for (const h of names) {
+      const live = hosts[h].filter((s) => s.state !== "dead").sort(sortRows);
+      const dead = hosts[h].filter((s) => s.state === "dead").sort(sortRows);
+      root.append(el("h2", {}, h, el("span", { class: "muted small" }, live.length + " running")));
+
+      // By goal first, for the sessions that belong to one, then the rest.
+      const seen = new Set();
+      const byGoal = {};
+      for (const s of live) {
+        const g = s.goals.find((g) => g.state !== "done");
+        if (g) { (byGoal[g.host + ":" + g.name] = byGoal[g.host + ":" + g.name] || { g, rows: [] }).rows.push(s); seen.add(s.full); }
+      }
+      for (const { g, rows } of Object.values(byGoal)) {
+        root.append(el("h3", {}, "goal " + g.name + " · " + g.state));
+        root.append(el("div", { class: "list" }, rows.map(row)));
+      }
+      const rest = live.filter((s) => !seen.has(s.full));
+      if (rest.length) {
+        if (Object.keys(byGoal).length) root.append(el("h3", {}, "other sessions"));
+        root.append(el("div", { class: "list" }, rest.map(row)));
+      }
+      if (dead.length) {
+        const open = !!showFinished[h];
+        root.append(el("button", {
+          class: "toggle small", type: "button", "aria-expanded": String(open),
+          onclick: () => { showFinished[h] = !open; renderBoard(); },
+        }, (open ? "▾ " : "▸ ") + dead.length + " finished"));
+        if (open) root.append(el("div", { class: "list" }, dead.map(row)));
+      }
+    }
+  }
+
+  function renderGoals() {
+    const root = $("goals");
+    root.replaceChildren();
+    if (!goals) { root.append(el("p", { class: "muted" }, "Loading goals…")); return; }
+    for (const e of goals.errors || []) root.append(el("div", { class: "notice warn small" }, e.host + ": " + e.error));
+    const list = (goals.goals || []).slice().sort((a, b) =>
+      (a.state === "done") - (b.state === "done") || a.name.localeCompare(b.name));
+    if (!list.length) root.append(el("p", { class: "muted" }, "No goals. Create one with cx goal new <name> \"definition of done\"."));
+    for (const g of list) {
+      const dod = el("div", { class: "dod" }, g.dod || "");
+      const members = (g.members || []).map((m) => {
+        const full = m.includes(":") ? m : g.host + ":" + m;
+        const s = board && board.sessions.find((x) => x.full === full);
+        return el("li", {},
+          el("a", { href: "#/s/" + encodeURIComponent(full) }, m), " ",
+          s ? chip(s.state) : el("span", { class: "muted small" }, "not seen"));
+      });
+      const log = (g.log || []).slice().reverse().map((e) =>
+        el("div", { class: "logline" },
+          el("span", { class: "when" }, (e.at || "").replace("T", " ").replace("Z", "") + " · " + (e.event || "") + (e.target ? " · " + e.target : "")),
+          e.text ? el("div", {}, e.text) : null));
+      const act = (action, label, cls) => el("button", {
+        type: "button", class: cls || "", onclick: () => goalAction(g, action),
+      }, label);
+      root.append(el("div", { class: "goal" },
+        el("div", { class: "top" },
+          el("strong", {}, g.name), el("span", { class: "muted small" }, "on " + g.host), chip(g.state),
+          el("span", { class: "grow" }),
+          g.state === "active" ? act("pause", "Pause") : null,
+          g.state === "paused" ? act("resume", "Resume") : null,
+          g.state !== "done" ? act("done", "Done…", "danger") : null),
+        dod,
+        el("button", { type: "button", class: "toggle small", onclick: (e) => {
+          dod.classList.toggle("open");
+          e.target.textContent = dod.classList.contains("open") ? "show less" : "show all";
+        } }, "show all"),
+        el("h3", {}, "members"), el("ul", {}, members),
+        log.length ? el("details", {}, el("summary", { class: "small" }, "last " + log.length + " log entries"), log) : null));
+    }
+  }
+
+  async function goalAction(g, action) {
+    const body = { host: g.host, name: g.name, action };
+    if (action === "done") {
+      const ok = await confirmTyped("Mark goal " + g.name + " done? Its driver stops; its sessions keep running.", g.name);
+      if (!ok) return;
+      body.confirm = g.name;
+    }
+    const r = await api("POST", "/api/goal", body);
+    if (r.status !== 200) alertProblem(r);
+    await refresh(true);
+  }
+
+  // ------------------------------------------------------------ routing
+
+  function route() {
+    const m = /^#\/s\/(.+)$/.exec(location.hash);
+    const g = location.hash === "#/goals";
+    const next = m ? "session" : g ? "goals" : "board";
+    const target = m ? decodeURIComponent(m[1]) : null;
+    if (next !== "session" || target !== current) stopStream();
+    view = next;
+    current = target;
+    $("board").classList.toggle("hidden", view !== "board");
+    $("goals").classList.toggle("hidden", view !== "goals");
+    $("session").classList.toggle("hidden", view !== "session");
+    for (const [id, on] of [["navBoard", view !== "goals"], ["navGoals", view === "goals"]]) {
+      if (on) $(id).setAttribute("aria-current", "page"); else $(id).removeAttribute("aria-current");
+    }
+    if (view === "session") startSession();
+    render();
+  }
+  window.addEventListener("hashchange", route);
+  $("navBoard").addEventListener("click", () => { location.hash = ""; });
+  $("navGoals").addEventListener("click", () => { location.hash = "#/goals"; });
+  $("back").addEventListener("click", () => { location.hash = ""; });
+
+  function openSession(full) { location.hash = "#/s/" + encodeURIComponent(full); }
+
+  // ------------------------------------------------------- session view
+
+  function sessionData() { return board && board.sessions.find((s) => s.full === current); }
+
+  function startSession() {
+    $("svTitle").textContent = current;
+    $("log").replaceChildren();
+    $("sendResult").textContent = "";
+    $("text").value = store.get("draft:" + current) || "";
+    renderSessionHead();
+    startStream();
+  }
+
+  $("text").addEventListener("input", () => { if (current) store.set("draft:" + current, $("text").value); });
+
+  const REFUSED = {
+    working: "Claude is mid-turn. Wait for it to finish, or tick force.",
+    blocked: "Claude has gone quiet mid-turn, usually at a permission prompt only you can answer. Open it in Claude or attach in a terminal.",
+    dead: "Claude is not running. Start it again first.",
+    attached: "It is open in a terminal. cx will not type over that person's shoulder; tick force to send anyway.",
+    starting: "Claude has not finished starting, often at the trust-this-folder prompt, where the Enter that sends a message answers no. Answer it once by attaching in a terminal with cx open.",
+    fresh: "It has no conversation yet.",
+    unknown: "cx cannot tell what it is doing.",
+  };
+
+  function renderSessionHead() {
+    const s = sessionData();
+    $("svState").replaceChildren(s ? chip(s.state) : el("span", { class: "muted small" }, "not running, or not seen yet"));
+    $("svBadges").replaceChildren(...(s ? badges(s) : []));
+    $("svNoPerms").classList.toggle("hidden", !(s && isNoPerms(s)));
+    $("svNoPermsRc").classList.toggle("hidden", !(s && s.remote_control && s.remote_control.enabled));
+    const meta = [];
+    if (s) {
+      if (s.quiet !== null && s.quiet !== undefined) meta.push("quiet " + quiet(s.quiet));
+      if (s.branch) meta.push("branch " + s.branch);
+      if (s.tmux && s.tmux.attached) meta.push("attached in a terminal");
+      if (s.goals.length) meta.push("goal " + s.goals.map((g) => g.name).join(", "));
+    }
+    $("svMeta").textContent = meta.join(" · ");
+
+    const acts = $("svActions");
+    acts.replaceChildren();
+    const live = s && s.state !== "dead";
+    const rc = s && s.remote_control;
+    if (rc && rc.url) {
+      acts.append(el("a", { class: "button", href: rc.url, target: "_blank", rel: "noopener noreferrer" }, "Open in Claude ↗"));
+    } else if (live) {
+      acts.append(el("button", { type: "button", onclick: restartWithRC, title: "This session was started without Remote Control." }, "Restart with Remote Control…"));
+    }
+    if (!live) {
+      acts.append(el("button", { type: "button", class: "primary", onclick: () => startIt(true) }, "Start with Remote Control"));
+      acts.append(el("button", { type: "button", onclick: () => startIt(null) }, "Start (open -d)"));
+    }
+    if (live) acts.append(el("button", { type: "button", class: "danger", onclick: stopIt }, "Stop…"));
+    if (live && !(rc && rc.url)) {
+      acts.append(el("span", { class: "muted small" },
+        "Started without Remote Control, which can only be turned on when a session starts."));
+    }
+
+    const steer = s && s.steerable;
+    const force = $("force").checked;
+    $("send").disabled = !s || (!steer && !force);
+    if (s && !steer && !force && !$("sendResult").dataset.sticky) {
+      $("sendResult").textContent = REFUSED[s.state] || ("cx will not send while it is " + s.state + ".");
+    } else if (!$("sendResult").dataset.sticky) {
+      $("sendResult").textContent = "";
+    }
+  }
+  $("force").addEventListener("change", renderSessionHead);
+
+  async function restartWithRC() {
+    const s = sessionData();
+    const ok = await confirmTyped(
+      "This session was started without Remote Control. Stop it and open it again with Remote Control? " +
+      "The conversation is kept; whatever Claude is doing right now is interrupted." +
+      (s && s.perm_mode ? " It starts again in cx's default permission mode, not " + s.perm_mode + "." : ""), current);
+    if (!ok) return;
+    let r = await api("POST", "/api/stop", { target: current, confirm: current });
+    if (r.status !== 200) return alertProblem(r);
+    r = await api("POST", "/api/open", { target: current, remote_control: true });
+    if (r.status !== 200) return alertProblem(r);
+    await refresh();
+  }
+
+  async function startIt(withRC) {
+    const body = { target: current };
+    if (withRC) body.remote_control = true;
+    const r = await api("POST", "/api/open", body);
+    if (r.status !== 200) return alertProblem(r);
+    await refresh();
+    stopStream();
+    startStream();
+  }
+
+  async function stopIt() {
+    const ok = await confirmTyped("Stop " + current + "? The Claude process ends; the conversation is kept and cx open resumes it.", current);
+    if (!ok) return;
+    const r = await api("POST", "/api/stop", { target: current, confirm: current });
+    if (r.status !== 200) return alertProblem(r);
+    await refresh();
+  }
+
+  $("send").addEventListener("click", send);
+  $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); });
+
+  async function send() {
+    const text = $("text").value;
+    if (!text.trim() || !current) return;
+    const s = sessionData();
+    const force = $("force").checked;
+    const body = { target: current, text, force };
+
+    // Two confirmations, each asked for separately. The server checks both
+    // again; these are here so nobody is surprised by its refusal.
+    if (s && isNoPerms(s)) {
+      const ok = await confirmTyped("This session has NO permission checks. What you send runs as code on that server, with nothing asking first.", current);
+      if (!ok) return;
+      body.confirm = current;
+    }
+    if (force) {
+      const ok = await confirmPlain("Force overrides cx's own refusal: it types into a session that is busy, quiet mid-turn, or open in a terminal. Send anyway?");
+      if (!ok) return;
+      if (!body.confirm) {
+        const typed = await confirmTyped("Type the target to force this send.", current);
+        if (!typed) return;
+        body.confirm = current;
+      }
+    }
+
+    const res = $("sendResult");
+    res.dataset.sticky = "1";
+    res.textContent = "sending…";
+    $("send").disabled = true;
+    let r = await api("POST", "/api/nudge", body);
+    if (r.status === 428) {
+      // The server knew something the page did not (say, a no-perms mode it
+      // has not shown yet). Ask, and send again.
+      const ok = await confirmTyped(r.data.error || "Confirm this send.", current);
+      if (ok) { body.confirm = current; r = await api("POST", "/api/nudge", body); }
+    }
+    $("send").disabled = false;
+    if (r.status === 200 && r.data.sent) {
+      res.textContent = "sent ✓";
+      $("text").value = "";
+      store.set("draft:" + current, "");
+      $("force").checked = false;
+      setTimeout(refresh, 1500);
+    } else if (r.status === 200) {
+      res.textContent = "not sent: " + (REFUSED[r.data.reason] || r.data.reason || "cx declined");
+    } else if (r.status !== 428) {
+      res.textContent = "failed: " + (r.data.error || r.status);
+    } else {
+      res.textContent = "not sent";
+    }
+    setTimeout(() => { delete res.dataset.sticky; }, 8000);
+  }
+
+  // The live tail. Each connection is one read; EventSource reconnects by
+  // itself and hands back the cursor as Last-Event-ID.
+  function startStream() {
+    stopStream();
+    if (!current) return;
+    const es = new EventSource("/api/tail?target=" + encodeURIComponent(current));
+    stream = es;
+    $("svStream").textContent = "reading…";
+    es.addEventListener("tail", (e) => {
+      let d;
+      try { d = JSON.parse(e.data); } catch (_) { return; }
+      const log = $("log");
+      const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
+      if (d.reset) log.replaceChildren();
+      for (const m of d.messages || []) log.append(message(m));
+      if (d.reset && !(d.messages || []).length) log.append(el("p", { class: "muted" }, "No messages yet."));
+      if (nearBottom || d.reset) window.scrollTo(0, document.body.scrollHeight);
+      $("svStream").textContent = "live";
+    });
+    es.addEventListener("failure", (e) => {
+      let d = {};
+      try { d = JSON.parse(e.data); } catch (_) { /* empty */ }
+      $("svStream").textContent = (d.permanent ? "cannot read this session: " : "retrying: ") + (d.error || "cx tail failed");
+      if (d.permanent) stopStream();
+    });
+    es.addEventListener("open", () => { if ($("svStream").textContent === "reading…") $("svStream").textContent = "live"; });
+    es.onerror = async () => {
+      if (es.readyState === EventSource.CLOSED) {
+        // Closed for good: usually the session cookie (401). Find out.
+        const r = await api("GET", "/api/me");
+        if (r.status === 200 && stream === es) setTimeout(startStream, 5000);
+      }
+    };
+  }
+
+  function stopStream() {
+    if (stream) { stream.close(); stream = null; }
+  }
+
+  function message(m) {
+    const who = m.role === "user" ? "you" : "claude";
+    const box = el("div", { class: "msg " + m.role },
+      el("div", { class: "who" }, el("span", {}, who), m.at ? el("span", {}, new Date(m.at).toLocaleTimeString()) : null));
+    if (m.text) box.append(el("div", { class: "text" }, m.text));
+    for (const t of m.tools || []) box.append(el("div", { class: "tool" }, "▸ " + t.name + "  " + (t.summary || "")));
+    for (const r of m.results || []) {
+      const first = (r.text || "").split("\n")[0] || "(no output)";
+      box.append(el("details", { class: r.error ? "error" : "" },
+        el("summary", {}, (r.error ? "✗ " : "↳ ") + first.slice(0, 160)),
+        el("pre", {}, r.text || "")));
+    }
+    return box;
+  }
+
+  // ------------------------------------------------------------ dialogs
+
+  function alertProblem(r) {
+    const msg = (r.data && r.data.error) || ("failed (" + r.status + ")");
+    $("sendResult").dataset.sticky = "1";
+    $("sendResult").textContent = msg;
+    setTimeout(() => { delete $("sendResult").dataset.sticky; }, 8000);
+    if (view !== "session") problems([msg]);
+  }
+
+  function dialog(text, typed) {
+    return new Promise((resolve) => {
+      const d = $("confirm");
+      $("confirmText").textContent = text;
+      $("confirmTypeHint").textContent = typed ? "Type " + typed + " to confirm." : "";
+      const input = $("confirmInput");
+      input.value = "";
+      input.classList.toggle("hidden", !typed);
+      const ok = $("confirmOk");
+      const check = () => { ok.disabled = !!typed && input.value.trim() !== typed; };
+      check();
+      input.oninput = check;
+      const done = (v) => { d.close(); resolve(v); };
+      $("confirmCancel").onclick = () => done(false);
+      $("confirmForm").onsubmit = (e) => { e.preventDefault(); if (!ok.disabled) done(true); };
+      d.oncancel = () => resolve(false);
+      d.showModal();
+      (typed ? input : ok).focus();
+    });
+  }
+  const confirmTyped = (text, typed) => dialog(text, typed);
+  const confirmPlain = (text) => dialog(text, null);
+
+  start();
+})();
+</script>
+</body>
+</html>

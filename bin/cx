@@ -171,6 +171,8 @@ ${C_BOLD}WORKING${C_RESET}
 ${C_BOLD}DRIVING${C_RESET}
   peek [target] [--all | --goal G]        what each session is doing now
   nudge <target> "prompt"                 type into a running session
+  tail <target> [--json]                  a session's conversation, from where you left off
+  web                                     every session in a browser (cx web --help first)
   bar [--setup]                           one line for a tmux status bar
   tabs [-n] [--take]                      a tmux tab per live session, here
   jump                                    go to the tab of the session that needs you

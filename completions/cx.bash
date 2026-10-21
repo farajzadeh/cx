@@ -23,7 +23,7 @@
 # Tables
 # ---------------------------------------------------------------------------
 
-_cx_commands="host provision login doctor usage new ls rm wt worktree open resume shell code ask chat status rc stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
+_cx_commands="host provision login doctor usage new ls rm wt worktree open resume shell code ask chat status rc stop forget peek tail nudge web bar tabs jump goal driver cache completion find pick help version"
 
 # Valid anywhere in the argv: bin/cx strips them before choosing a subcommand.
 _cx_global_flags="-r --refresh --no-cache --stale --json -y --yes --no-color"
@@ -69,6 +69,8 @@ _cx_flags() {
     peek) printf '%s' "--all --tail=word --goal=goal" ;;
     usage) printf '%s' "--days=word" ;;
     nudge) printf '%s' "--force" ;;
+    tail) printf '%s' "--max=word --from=word --uuid=word" ;;
+    web) printf '%s' "--listen=word --interval=word --allow-host=word --print-url --rotate-token --rebuild" ;;
     bar) printf '%s' "--setup --plain --attached --color --icons=icons --window=all --max=word --states=states --label=word" ;;
     tabs) printf '%s' "-n --dry-run --no-attach --take -s --session=word" ;;
     jump) printf '%s' "--states=states" ;;
@@ -102,7 +104,7 @@ _cx_positional() {
     "wt add:1") printf projslash ;;
     "wt ls:1") printf hostproj ;;
     "wt rm:1" | code:1) printf units ;;
-    open:1 | resume:1 | shell:1 | ask:1 | chat:1 | peek:1) printf all ;;
+    open:1 | resume:1 | shell:1 | ask:1 | chat:1 | peek:1 | tail:1) printf all ;;
     find:* | pick:*) printf all ;; # query words; a target is a fine one
     stop:1 | nudge:1) printf live ;;
     forget:1) printf known ;;

@@ -17,3 +17,6 @@
 # Local overrides a contributor might keep beside the repo while developing.
 # The real config lives in ~/.config/cx/config and is never part of the tree.
 /config.local
+
+# cx web: the release binary install.sh downloads, and local builds
+web/bin/

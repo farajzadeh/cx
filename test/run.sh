@@ -71,6 +71,21 @@ for t in test/unit/*.test.sh; do
   bash "$t" || fail=1
 done
 
+# --- cx web (Go) -----------------------------------------------------------
+
+# The server behind cx web is the one part of cx that is not shell. Its tests
+# need go, which a cx user does not; CI always runs them (the web job).
+if command -v go >/dev/null 2>&1; then
+  hdr "cx web (go test)"
+  if (cd web && test -z "$(gofmt -l .)" && go vet ./... && go test ./...); then
+    printf '\033[32m✓ go test passed\033[0m\n'
+  else
+    fail=1
+  fi
+else
+  printf '\n\033[33m- go not installed, skipping web/ (CI runs it)\033[0m\n'
+fi
+
 # --- bash 3.2 --------------------------------------------------------------
 
 if [ "$RUN_BASH32" -eq 1 ]; then

@@ -44,7 +44,9 @@ _cx_cmd_desc=(
   'stop:end a session'
   'forget:drop a finished session from the lists'
   'peek:what each session is doing now'
+  'tail:a session'"'"'s conversation, from where you left off'
   'nudge:type a prompt into a running session'
+  'web:watch and steer every session from a browser'
   'bar:one line for a tmux status bar'
   'tabs:a tmux tab per live session, here'
   'jump:go to the tab of the session that needs you'
@@ -213,6 +215,18 @@ _cx_specs() {
       '--goal[just that goal'"'"'s members]:goal:_cx_goals'
       '1:target:_cx_target all') ;;
     nudge) reply=('--force[send it even if the session is busy]' '1:session:_cx_target live' '*:prompt: ') ;;
+    tail) reply=(
+      '--max[how many messages]:N: '
+      '--from[a byte offset from a previous --json answer]:offset: '
+      '--uuid[the conversation that offset is in]:uuid: '
+      '1:target:_cx_target all') ;;
+    web) reply=(
+      '--listen[address to listen on]:host\:port: '
+      '--interval[seconds between board refreshes]:seconds: '
+      '*--allow-host[also answer to this host name]:name: '
+      '--print-url[print the sign-in link and exit]'
+      '--rotate-token[replace the token, signing every page out]'
+      '--rebuild[build the server again from source]') ;;
     bar) reply=(
       '--setup[print tmux configuration and exit]'
       '--plain[no tmux styling]'

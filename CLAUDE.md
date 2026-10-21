@@ -16,6 +16,9 @@ Two halves:
 - **Agent** (`server/cx-agent`) — owns each server's project registry and its
   goals, drives tmux, invokes Claude Code. Copied to servers by `cx provision`.
 
+`cx web` (`web/`) is a client of the client: a small Go server that runs
+`cx` for a browser, and holds nothing either — see **cx web** below.
+
 A third piece is *not* code: `docs/cx-driver.agent.md` is a Claude Code
 subagent that drives sessions towards their goals through the CLI. It holds
 all the judgment, because cx holds none — see invariant 11.
@@ -54,6 +57,8 @@ bash test/unit/create.test.sh              # new / wt add: --open, and asking fo
 bash test/unit/chat.test.sh                # cx chat and chat-mcp, against a fake Claude that replays real stream-json
 bash test/unit/usage.test.sh               # cx usage: limits, tokens from transcripts, the incremental cache
 bash test/unit/remote-control.test.sh      # Remote Control: the default ladder, the launch, what observe reports
+bash test/unit/tail.test.sh                # cx tail: the cursor cx web streams with
+bash test/unit/web.test.sh                 # which cx web server runs, and what it is told
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -66,6 +71,10 @@ docker run --rm -v "$PWD":/w -w /w bash:3.2 bash test/unit/compat.test.sh
 CX_AUDIT_HOST=web1 ./test/doc-audit.sh     # ...against a different one
 
 docs/demo/record.sh [name...]              # re-record docs/media/*.gif (Docker only; see docs/demo/README.md)
+
+# the cx web server is Go (web/); test/run.sh runs this when go is installed
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/tmp/gocache \
+  -v "$PWD/web":/w -w /w golang:1.22-alpine sh -c 'gofmt -l .; go vet ./... && go test ./...'
 ```
 
 CI additionally runs `shellcheck` and `shfmt -d -i 2 -ci`. Run them through
@@ -199,6 +208,12 @@ interval comes from whatever is calling cx.
 
 This is also why `cx goal pause` works without touching anything: there is no
 process to signal, only a driver that re-reads the goal each pass and stops.
+
+**`cx web` is the one cx process that keeps running**, and it stays inside
+this invariant by only answering requests: no timer, no poller, no state of
+its own. The loop is the browser's — the board's refresh, and an SSE stream
+whose every connection is one `cx tail` — the way `status-interval` is tmux's
+loop for `cx bar`. See **cx web** below.
 
 **The one place cx starts Claude by itself** is `cx goal on-stop`: a member's
 Stop hook runs one `claude -p` driver pass. It does not break this invariant,
@@ -757,6 +772,87 @@ cx's part is starting it, naming it, and reporting it.
   account can make the session run any command. Both the client and the
   agent add that to the bypass warning.
 
+## cx web
+
+One page, served by `cx web`, that watches and steers every session. The
+design and its threat model are `docs/WEB.md`; what follows is what would be
+easy to break.
+
+**It is a client of the CLI, never a second implementation.** The server
+(`web/*.go`, Go standard library only, no `go.sum`) learns everything by
+running `cx --json …` by argv: `peek --tail 0` and `ls` for the board,
+`goal --host H ls` per host, `tail`, `nudge` with the text on **stdin**,
+`open -d`, `-y stop`, `goal pause|resume|done`. So the classifier, the
+refusals and invariant 1 are the CLI's own, and the board cannot do anything
+`cx` cannot. stdout is parsed, stderr only shown (invariant 2). The page,
+`web/index.html`, is read from disk on every request, so editing it needs no
+rebuild. Targets are checked against the grammar (every part starts with a
+letter or digit, so none is read as an option) before they reach argv.
+
+**The browser is the loop.** `cx web` is the one process cx leaves running,
+and it stays inside invariant 11 by only answering: no timer, no poller, no
+state. The board refreshes on the page's interval while the tab is visible.
+The live tail is SSE where **each connection is one `cx tail` and then
+closes**; `EventSource` reconnects after `retry` and sends the `id:` it last
+saw — `uuid:offset` — back as `Last-Event-ID`, so the cursor lives in the
+browser. An event with no data still moves that id on, which is how "nothing
+new" advances nothing and costs one line. A cx failure is sent as an
+`event: failure` with a 200, not as an HTTP error: an error status ends an
+EventSource for good, and an unreachable host is usually passing.
+Identical requests in flight share one run (`flightGroup`); that is
+de-duplication, not a cache, and nothing outlives the call (invariant 4).
+
+**`cx tail` is the new verb that makes the stream cheap**: the agent reads
+only the bytes after OFFSET, up to the last complete line, so a half-written
+line is read whole next time; `reset: true` whenever the cursor cannot be
+trusted (another uuid, a shorter file, more than 4 MB since). A first read
+escalates from 256 KB to 5000 lines like `_transcript_messages` does,
+because attachments are big — one exchange on a real server put 213 KB
+between a prompt and its reply.
+
+**Authentication keeps no state either.** The token is 32 random bytes as
+hex in `~/.config/cx/web.token` (0600, written by temp file and rename, put
+back to 0600 loudly if it drifted). The session cookie is
+`issued.HMAC(token, "session|issued")` and the CSRF token
+`HMAC(token, "csrf|issued")`, both checked from the token alone, so
+rotating it (`--rotate-token`, picked up from the file's mtime by a running
+server) ends every session at once. A `Bearer` header is for scripts and
+skips CSRF, since no browser sends one by itself. Every POST with a cookie
+needs all three of: `Origin` equal to `Host` (and `Sec-Fetch-Site`
+same-origin when sent), `X-CX-CSRF`, and `Content-Type: application/json`.
+`Host` must be loopback, the listen address, or `--allow-host` — DNS
+rebinding is the attack where a foreign page reaches 127.0.0.1 under its own
+origin. No CORS headers ever; OPTIONS is 403.
+
+**The page never builds HTML from data.** Every string goes in with
+`textContent` (its `el()` helper has no way to pass markup), because
+transcript text is written by whatever Claude read and ran. The CSP allows
+only scripts and styles carrying the per-request nonce, so the page has no
+`style=` attributes and must not grow any. The token arrives in the URL
+fragment, which no browser sends to a server, and the page removes it from
+the address bar after signing in.
+
+**Confirmations are checked twice, and the server's check is the one that
+counts.** A nudge to a no-perms session (`perm_mode` `bypassPermissions`, or
+an old agent's `dangerous`) and any `--force` need `confirm` equal to the
+target; the server runs `peek` itself to know the mode rather than trusting
+the page, and answers `428` with `need_confirm` otherwise. Stop needs the
+target, goal done the goal's name. A refusal from `cx nudge` is a normal 200
+with `sent: false`, exactly as the CLI says it. Actions run detached from the
+request's context: a nudge cut off by a closed tab is worse than one whose
+answer nobody read. Each action leaves one line on stderr, never the text.
+
+**Which binary runs** (`lib/cmd/web.sh`): `web/bin/cx-web` if it says it is
+this `CX_VERSION` (baked in with `-ldflags -X main.version`, which is why
+`--version` cannot be the `--cx-version` flag); else a build with the local
+go into `~/.cache/cx/web/cx-web-<cksum of go.mod and the non-test .go
+files>`, removing older builds; else the mismatched release binary with a
+warning; else exit 1 naming both remedies. `install.sh` downloads
+`cx-web-<os>-<arch>` for this version from the GitHub Release and installs it
+only if it matches `SHA256SUMS`. `.github/workflows/release.yml` builds the
+four and the sums when a release is published, and refuses if `bin/cx` is
+not the tag's version.
+
 ## Exit codes
 
 Stable, so scripts can branch on them: `0` success, `1` general error, `2` not
@@ -947,6 +1043,8 @@ Run it when the docs change.
 - Run `./test/run.sh --all`, `--bash32`, shellcheck and shfmt, then tag
   `vX.Y.Z` on `main`, push the tag, and
   `gh release create vX.Y.Z --notes-file .github/release-notes/vX.Y.Z.md`.
+  Publishing it runs `.github/workflows/release.yml`, which attaches the
+  `cx-web-<os>-<arch>` binaries and `SHA256SUMS` that `install.sh` fetches.
 
 ## Conventions
 
@@ -956,8 +1054,10 @@ Run it when the docs change.
 - `issues/` holds one markdown file per open issue. Delete the file when the
   issue is fixed rather than marking it resolved — git history keeps the
   record, and a directory of stale entries helps nobody.
-- `install.sh` copies only `bin lib server completions config.example docs`
-  to users. `test/` and `issues/` stay repo-only. The driver subagent lives in
+- `install.sh` copies only `bin lib server completions config.example docs
+  web` to users, and never a `web/bin/` from the source tree (that is a
+  developer's build, for whatever version); `install_web` downloads the
+  release's in its place. `test/` and `issues/` stay repo-only. The driver subagent lives in
   `docs/cx-driver.agent.md` so that it ships; `.claude/agents/cx-driver.md` is
   a symlink to it for this repo's own use, and `cx driver` prints it so a user
   can put it wherever they keep subagents. `cx provision` also copies it to

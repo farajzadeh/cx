@@ -127,7 +127,9 @@ for c in \
     'stop	end a session' \
     'forget	drop a finished session from the lists' \
     'peek	what each session is doing now' \
+    "tail	a session's conversation, from where you left off" \
     'nudge	send a prompt to a running session' \
+    'web	watch and steer every session from a browser' \
     'bar	one line for a tmux status bar' \
     'tabs	a tmux tab per live session, here' \
     'jump	go to the tab of the session that needs you' \
@@ -154,7 +156,7 @@ complete -c cx -n '__cx_needs_sub rc' -a 'on off default'
 complete -c cx -n '__cx_sub host test edit rm; or __cx_using provision login doctor usage ls; or __cx_sub cache clear refresh' -a '(__cx_hosts)'
 complete -c cx -n '__cx_sub host import' -a '(__cx_ssh_hosts)'
 complete -c cx -n '__cx_using new' -a '(__cx_hosts | string replace -r "^([^\t]*)" "\$1:")'
-complete -c cx -n '__cx_using open resume shell code ask chat peek rm find pick; or __cx_sub wt ls rm' -a '(__cx_targets)'
+complete -c cx -n '__cx_using open resume shell code ask chat peek tail rm find pick; or __cx_sub wt ls rm' -a '(__cx_targets)'
 complete -c cx -n '__cx_sub wt add' -a '(__cx_targets | string match -v -r "[/@]" | string replace -r "^([^\t]*:[^\t]+)\t.*" "\$1/")'
 complete -c cx -n '__cx_using stop nudge' -a '(__cx_targets live)'
 complete -c cx -n '__cx_using forget' -a '(__cx_targets known)'
@@ -214,6 +216,15 @@ complete -c cx -n '__cx_using peek' -l tail -x -d 'include the last N messages i
 complete -c cx -n '__cx_using peek' -l goal -x -a '(__cx_goals)' -d "just that goal's members"
 complete -c cx -n '__cx_using usage' -l days -x -d 'tokens over the last N days'
 complete -c cx -n '__cx_using nudge' -l force -d 'send it even if the session is busy'
+complete -c cx -n '__cx_using tail' -l max -x -d 'how many messages'
+complete -c cx -n '__cx_using tail' -l from -x -d 'a byte offset from a previous --json answer'
+complete -c cx -n '__cx_using tail' -l uuid -x -d 'the conversation that offset is in'
+complete -c cx -n '__cx_using web' -l listen -x -d 'address to listen on, host:port'
+complete -c cx -n '__cx_using web' -l interval -x -d 'seconds between board refreshes'
+complete -c cx -n '__cx_using web' -l allow-host -x -d 'also answer to this host name'
+complete -c cx -n '__cx_using web' -l print-url -d 'print the sign-in link and exit'
+complete -c cx -n '__cx_using web' -l rotate-token -d 'replace the token, signing every page out'
+complete -c cx -n '__cx_using web' -l rebuild -d 'build the server again from source'
 complete -c cx -n '__cx_using bar' -l setup -d 'print tmux configuration'
 complete -c cx -n '__cx_using bar' -l plain -d 'no tmux styling'
 complete -c cx -n '__cx_using bar' -l attached -d 'include sessions you have open'

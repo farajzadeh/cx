@@ -47,6 +47,8 @@ never changes how your other SSH sessions behave.
 | `CX_LS_GROUP` | `none` | How `cx ls` lays out its table. `host` puts a heading over each server's projects instead of a HOST column; `none` is the flat table. `--group` overrides it. `--json` is never grouped. |
 | `CX_LS_SORT` | `none` | The order `cx ls` lists projects in: `name`, `active` (most recent first), `sessions` (most first), `host`, or `none` for the order the servers keep them in. `active` and `sessions` count a project's worktrees as part of it. `--sort` overrides it. |
 | `CX_REMOTE_CONTROL` | `0` | `1` starts sessions with Claude Code's Remote Control, so each is also on claude.ai/code and in the Claude app, named after its target (`local:api@review`). Fixed when a session is created, like the permission mode. In order of precedence: `--remote-control` / `--no-remote-control`, the project's own setting (`cx rc on\|off`, kept on its server), the host file's `#cx:remote_control=0\|1`, then this. Needs agent 0.8.0, and Claude Code signed in with a claude.ai account. |
+| `CX_WEB_LISTEN` | `127.0.0.1:8377` | Where `cx web` listens. `--listen` overrides it. Any address but loopback prints a warning: reach the page through an SSH tunnel or an authenticating reverse proxy instead (see [WEB.md](WEB.md)). |
+| `CX_WEB_INTERVAL` | `10` | Seconds between board refreshes in `cx web`'s page, which only refreshes while it is visible. `--interval` overrides it, and the page can change it for itself. |
 
 ## Environment-only
 
@@ -60,6 +62,7 @@ Not in the config file; set these in the environment when you need them.
 | `CX_CACHE_DIR` | Cache location (default `~/.cache/cx`). |
 | `CX_CONFIG_DIR` | Config location (default `~/.config/cx`). |
 | `CX_SSHD_DIR` | Host definitions (default `~/.config/cx/ssh.d`). |
+| `CX_WEB_TOKEN` | Where `cx web` keeps its token (default `~/.config/cx/web.token`, mode 0600). |
 
 ## Driving
 
