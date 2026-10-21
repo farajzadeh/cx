@@ -11,7 +11,7 @@
 . "$CX_HOME/lib/pick.sh"
 
 _open_common() {
-  local mode="$1" target="" detach=0 nohooks=0 verb="$1" rcflag=""
+  local mode="$1" target="" detach=0 nohooks=0 verb="$1" rcflag="" view=0
   shift
   # The command as the user typed it, for messages: mode "continue" is cx open.
   [ "$mode" != continue ] || verb=open
@@ -52,6 +52,9 @@ _open_common() {
       # Launch-time, like the permission mode; see _open_rc_args.
       --remote-control) rcflag=on ;;
       --no-remote-control) rcflag=off ;;
+      # Watch a running session without being able to type into it: what
+      # cx web --terminal shows. Never creates one.
+      --view) view=1 ;;
       -*)
         err "unknown option: $1"
         hint "to pass it to Claude Code instead: cx $mode <target> -- $1"
@@ -61,6 +64,19 @@ _open_common() {
     esac
     shift
   done
+
+  if [ "$view" = 1 ]; then
+    if [ "$mode" != continue ] || [ "$detach" = 1 ] || [ "$nohooks" = 1 ] ||
+      [ -n "$rcflag" ] || cx_claude_needs_agent || [ ${#passthru[@]} -gt 0 ]; then
+      err "--view only watches a session that is running; it takes no other option"
+      return 3
+    fi
+    if [ -z "$target" ]; then
+      target=$(cx_target_or_pick session "open --view" \
+        "usage: cx open --view <host>:<project>[@<label>]" \
+        "see what is running with: cx peek") || return $?
+    fi
+  fi
 
   # No target at a terminal: offer everything this can open — projects,
   # worktrees, live sessions — plus a new @label on any of them.
@@ -90,6 +106,15 @@ _open_common() {
   fi
   if cx_target_needs_units; then
     cx_agent_units_ok "$CX_T_HOST" "$ver" || return 1
+  fi
+  if [ "$view" = 1 ]; then
+    cx_agent_supports "$CX_T_HOST" "cx open --view" 0.8.0 "$ver" || return 1
+    cx_target_args
+    local vopts
+    vopts=$(CX_SSH_BATCH=no cx_ssh_opts)
+    # shellcheck disable=SC2086
+    exec ssh -t $vopts "$CX_T_HOST" \
+      "$CX_AGENT_PATH$(cx_remote_quote view "$CX_T_PROJECT" "${CX_T_ARGS[@]+"${CX_T_ARGS[@]}"}")"
   fi
   cx_claude_opts_ok "$CX_T_HOST" "$ver" || return 1
   if [ ${#passthru[@]} -gt 0 ]; then
@@ -344,6 +369,7 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open -d <target>                       start it, do not attach
   cx open --remote-control <target>         also reachable from claude.ai/code and the Claude app
   cx open --no-hooks <target>               without the hooks that report its state
+  cx open --view <target>                   watch a running one, read-only
   cx open                                   choose from a menu (at a terminal)
 
 Omit the target at a terminal to pick one: projects, worktrees and live

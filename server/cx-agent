@@ -2836,6 +2836,69 @@ cmd_tail() {
 }
 
 # ---------------------------------------------------------------------------
+# view — watch a running session, read-only
+# ---------------------------------------------------------------------------
+#
+# What cx web's terminal view runs, through ttyd on the client. Unlike open it
+# never creates anything, and the client it attaches cannot type: a watcher
+# must not be one keypress from answering a permission prompt.
+#
+# It is still a tmux client, so the session reads as attached while someone
+# watches, and cx nudge declines as it does for anyone attached. That is the
+# point: the watcher is a person, and the same rule protects them.
+
+# _tmux_at_least MAJOR MINOR — is this tmux that version or newer?
+_tmux_at_least() {
+  local v major minor
+  v=$(tmux -V 2>/dev/null) || return 1
+  v="${v#tmux }"
+  v="${v#next-}"
+  major="${v%%.*}"
+  minor="${v#*.}"
+  minor="${minor%%[!0-9]*}"
+  case "$major" in '' | *[!0-9]*) return 1 ;; esac
+  case "$minor" in '' | *[!0-9]*) minor=0 ;; esac
+  [ "$major" -gt "$1" ] || { [ "$major" -eq "$1" ] && [ "$minor" -ge "$2" ]; }
+}
+
+# cmd_view NAME [--worktree W] [--session L]
+cmd_view() {
+  local name="" wt="" label=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --worktree)
+        shift
+        wt="${1:-}"
+        ;;
+      --session)
+        shift
+        label="${1:-}"
+        ;;
+      -*) die "unknown option: $1" 3 ;;
+      *) [ -z "$name" ] && name="$1" ;;
+    esac
+    shift
+  done
+  [ -n "$name" ] || die "usage: cx-agent view <name> [--worktree W] [--session L]" 3
+  if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
+  if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
+
+  _registry_ensure
+  local slug tname
+  _unit_dir "$name" "$wt" >/dev/null || exit $?
+  slug=$(_slug "$name" "$wt" "$label")
+  tname=$(_tmux_name "$slug")
+  tmux has-session -t "=$tname" 2>/dev/null || die "$slug is not running" 2
+
+  # ignore-size (tmux 3.2) keeps a watcher's browser from resizing the window
+  # under whoever is working in it. Older tmux has only -r, read-only.
+  if _tmux_at_least 3 2; then
+    exec tmux attach -t "=$tname" -f read-only,ignore-size
+  fi
+  exec tmux attach -r -t "=$tname"
+}
+
+# ---------------------------------------------------------------------------
 # forget
 # ---------------------------------------------------------------------------
 
@@ -5782,6 +5845,8 @@ cx-agent — server-side helper for cx (not intended for direct use)
                                 drop a finished session's pin
   tail <name> [--worktree W] [--session L] [--from OFFSET --uuid U] [--max N]
                                 a conversation from a byte offset, for cx web
+  view <name> [--worktree W] [--session L]
+                                watch a running session, read-only
   event                         record a Claude Code hook's report (stdin);
                                 installed by open, run by Claude
   statusline                    keep what Claude's status line is told (stdin);
@@ -5877,6 +5942,7 @@ main() {
     nudge) cmd_nudge "$@" ;;
     forget) cmd_forget "$@" ;;
     tail) cmd_tail "$@" ;;
+    view) cmd_view "$@" ;;
     rc) cmd_rc "$@" ;;
     goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
