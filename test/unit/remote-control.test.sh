@@ -31,7 +31,9 @@ command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 #
 # In a subshell of its own, so that sourcing the agent cannot leave anything
 # behind for the client half below.
-[ "$HAVE_JQ" = 1 ] && (
+# An `if`, not `[ ] && ( ) || FAILED_AGENT=1`: without jq that form takes the
+# skipped half for a failed one.
+if [ "$HAVE_JQ" = 1 ]; then (
   export CX_DATA_DIR="$TMP/data" CX_CLAUDE_DIR="$TMP/claude"
   export CX_REGISTRY="$TMP/data/projects.json" CX_SESSIONS="$TMP/data/sessions.json"
   export CX_GOALS="$TMP/data/goals.json" CX_STATE_DIR="$TMP/data/state"
@@ -279,7 +281,7 @@ EOF
     '{"api@rc":true,"api@plain":false,"api@byhand":false,"api@odd":false}'
 
   summary
-) || FAILED_AGENT=1
+) || FAILED_AGENT=1; fi
 
 # ===========================================================================
 # The client

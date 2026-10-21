@@ -18,7 +18,7 @@ command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 # ===========================================================================
 # The agent
 # ===========================================================================
-[ "$HAVE_JQ" = 1 ] && (
+if [ "$HAVE_JQ" = 1 ]; then (
   export CX_DATA_DIR="$TMP/data" CX_CLAUDE_DIR="$TMP/claude"
   export CX_REGISTRY="$TMP/data/projects.json" CX_SESSIONS="$TMP/data/sessions.json"
   export CX_GOALS="$TMP/data/goals.json" CX_STATE_DIR="$TMP/data/state"
@@ -78,8 +78,9 @@ EOF
   assert_eq "$VIEW_RC" 3
 
   summary
-)
-[ "$HAVE_JQ" = 1 ] || printf '  (agent half skipped: no jq)\n'
+) || FAILED_AGENT=1; else
+  printf '  (agent half skipped: no jq)\n'
+fi
 
 # ===========================================================================
 # The client
@@ -126,3 +127,6 @@ AGENT_V=0.7.0
 assert_eq "$?" 1
 
 summary
+rc=$?
+[ -z "${FAILED_AGENT:-}" ] || exit 1
+exit "$rc"
