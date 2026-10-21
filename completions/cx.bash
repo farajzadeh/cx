@@ -61,7 +61,8 @@ _cx_flags() {
     rm) printf '%s' "--purge" ;;
     "wt add") printf '%s' "--branch=word --from=word $open_after" ;;
     "wt rm") printf '%s' "--force --merged" ;;
-    open | resume) printf '%s' "-d --detach --no-hooks $rc $claude" ;;
+    open) printf '%s' "-d --detach --no-hooks --view $rc $claude" ;;
+    resume) printf '%s' "-d --detach --no-hooks $rc $claude" ;;
     shell) printf '%s' "-d --detach --no-hooks" ;;
     ask) printf '%s' "$claude --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
     chat) printf '%s' "$claude --allowed-tools=word --ask-tools=word --append-system-prompt-file=file" ;;
@@ -70,7 +71,7 @@ _cx_flags() {
     usage) printf '%s' "--days=word" ;;
     nudge) printf '%s' "--force" ;;
     tail) printf '%s' "--max=word --from=word --uuid=word" ;;
-    web) printf '%s' "--listen=word --interval=word --allow-host=word --print-url --rotate-token --rebuild" ;;
+    web) printf '%s' "--listen=word --interval=word --allow-host=word --print-url --rotate-token --rebuild --terminal" ;;
     bar) printf '%s' "--setup --plain --attached --color --icons=icons --window=all --max=word --states=states --label=word" ;;
     tabs) printf '%s' "-n --dry-run --no-attach --take -s --session=word" ;;
     jump) printf '%s' "--states=states" ;;

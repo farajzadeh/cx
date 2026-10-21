@@ -225,6 +225,8 @@ complete -c cx -n '__cx_using web' -l allow-host -x -d 'also answer to this host
 complete -c cx -n '__cx_using web' -l print-url -d 'print the sign-in link and exit'
 complete -c cx -n '__cx_using web' -l rotate-token -d 'replace the token, signing every page out'
 complete -c cx -n '__cx_using web' -l rebuild -d 'build the server again from source'
+complete -c cx -n '__cx_using web' -l terminal -d 'also offer a read-only terminal view, through ttyd'
+complete -c cx -n '__cx_using open' -l view -d 'watch a running session, read-only'
 complete -c cx -n '__cx_using bar' -l setup -d 'print tmux configuration'
 complete -c cx -n '__cx_using bar' -l plain -d 'no tmux styling'
 complete -c cx -n '__cx_using bar' -l attached -d 'include sessions you have open'

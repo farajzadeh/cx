@@ -75,7 +75,7 @@ _web_binary() {
 
 cmd_web() {
   local listen="${CX_WEB_LISTEN:-127.0.0.1:8377}" interval="${CX_WEB_INTERVAL:-10}"
-  local rebuild=0 mode="" allow=()
+  local rebuild=0 mode="" terminal="" allow=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -87,6 +87,7 @@ ${C_BOLD}cx web${C_RESET} — cx live: watch and steer every session from a brow
   cx web --listen ADDR              somewhere else (host:port); see below first
   cx web --interval N               the board refreshes every N seconds (default 10)
   cx web --allow-host NAME          also answer to NAME, e.g. a reverse proxy's
+  cx web --terminal                 also offer a read-only terminal view (needs ttyd)
   cx web --print-url                print the sign-in link again, and exit
   cx web --rotate-token             replace the token, signing every page out
   cx web --rebuild                  build the server again from web/*.go
@@ -95,7 +96,10 @@ The board groups sessions by server and goal, blocked ones first, and
 refreshes itself while the tab is visible. A session opens into its live
 conversation, a box to send it a message (cx nudge, with the same
 refusals), and buttons to open it in Claude, start it, or stop it. The
-goals tab pauses, resumes and finishes goals.
+goals tab pauses, resumes and finishes goals. With --terminal, a session
+also opens as its own screen, read-only, through ttyd on this machine (cx
+open --view); while someone watches, the session counts as attached, so
+cx nudge declines it as it would for you in a terminal.
 
 ${C_BOLD}Security.${C_RESET} Whoever can use this page can type into your sessions, and
 a session with no permission checks runs what it is told: that is remote
@@ -135,6 +139,7 @@ EOF
       --rotate-token) mode=--rotate-token ;;
       --print-url) mode=--print-url ;;
       --rebuild) rebuild=1 ;;
+      --terminal) terminal=--terminal ;;
       *)
         err "unknown option: $1"
         hint "see: cx web --help"
@@ -166,5 +171,5 @@ EOF
   exec "$bin" --listen "$listen" --interval "$interval" \
     --cx "$CX_HOME/bin/cx" --page "$CX_HOME/web/index.html" \
     --token-file "$CX_WEB_TOKEN" --cx-version "$CX_VERSION" \
-    "${allow[@]+"${allow[@]}"}" ${mode:+"$mode"}
+    "${allow[@]+"${allow[@]}"}" ${terminal:+"$terminal"} ${mode:+"$mode"}
 }

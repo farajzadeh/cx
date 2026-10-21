@@ -59,6 +59,7 @@ bash test/unit/usage.test.sh               # cx usage: limits, tokens from trans
 bash test/unit/remote-control.test.sh      # Remote Control: the default ladder, the launch, what observe reports
 bash test/unit/tail.test.sh                # cx tail: the cursor cx web streams with
 bash test/unit/web.test.sh                 # which cx web server runs, and what it is told
+bash test/unit/view.test.sh                # cx open --view: read-only, never creates
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -852,6 +853,18 @@ warning; else exit 1 naming both remedies. `install.sh` downloads
 only if it matches `SHA256SUMS`. `.github/workflows/release.yml` builds the
 four and the sums when a release is published, and refuses if `bin/cx` is
 not the tag's version.
+
+**The terminal view (`--terminal`)** is ttyd running `cx open --view`, the
+agent's `view` verb: `tmux attach -f read-only,ignore-size` (`-r` before tmux
+3.2) on a session that must already exist. ttyd listens on a Unix socket in
+a 0700 directory — no TCP port at all — and cx web proxies `/term/<id>/`,
+WebSocket included, behind the same sign-in, refusing a cross-origin
+WebSocket. Clear the read and write deadlines on that upgrade
+(`http.NewResponseController`) or the server's `WriteTimeout` cuts a
+watched terminal off after 150 s. `view` is `exec`'d, so its tests fake
+tmux and ssh as programs on PATH: `exec` does not run shell functions. A
+watcher is an attached client, so `cx nudge` declines while someone
+watches, by design.
 
 ## Exit codes
 

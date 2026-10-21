@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -37,6 +38,8 @@ type config struct {
 	interval   int
 	allowHosts []string
 	version    string
+	terminal   bool
+	ttydPath   string
 }
 
 type stringList []string
@@ -55,6 +58,8 @@ func main() {
 	flag.IntVar(&cfg.interval, "interval", 10, "seconds between board refreshes, in the page")
 	flag.Var(&allow, "allow-host", "another Host header to answer to, e.g. a reverse proxy's name (repeatable)")
 	flag.StringVar(&cfg.version, "cx-version", "", "the cx version, shown in the page")
+	flag.BoolVar(&cfg.terminal, "terminal", false, "offer a read-only terminal view of a session, through ttyd")
+	flag.StringVar(&cfg.ttydPath, "ttyd", "ttyd", "the ttyd command, for --terminal")
 	flag.BoolVar(&rotate, "rotate-token", false, "replace the token, print the new URL, and exit")
 	flag.BoolVar(&printURL, "print-url", false, "print the URL to open, with the token, and exit")
 	flag.BoolVar(&showVersion, "version", false, "print the release this was built for, and exit")
@@ -87,6 +92,16 @@ func main() {
 	if printURL {
 		fmt.Println(pageURL(cfg.listen, tokens.current()))
 		return
+	}
+
+	if cfg.terminal {
+		p, err := exec.LookPath(cfg.ttydPath)
+		if err != nil {
+			fatal(1, "--terminal needs ttyd, which is not installed.\n"+
+				"        Install it (apt install ttyd, brew install ttyd, or a release from\n"+
+				"        https://github.com/tsl0922/ttyd/releases), or start cx web without --terminal.")
+		}
+		cfg.ttydPath = p
 	}
 
 	host, _, err := net.SplitHostPort(cfg.listen)
@@ -125,6 +140,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(ctx)
+		srv.terms.closeAll()
 		close(done)
 	}()
 	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

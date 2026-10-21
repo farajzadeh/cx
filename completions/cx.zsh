@@ -187,7 +187,8 @@ _cx_specs() {
       $rc
       '(-d --detach)'{-d,--detach}'[start it, do not attach]'
       '--no-hooks[without the hooks that report its state]'
-      '1:target:_cx_target all') ;;
+      '1:target:_cx_target all')
+      [[ $1 == open ]] && reply+=('--view[watch a running session, read-only]') ;;
     shell) reply=(
       '(-d --detach)'{-d,--detach}'[start it, do not attach]'
       '--no-hooks[without the hooks that report its state]'
@@ -226,7 +227,8 @@ _cx_specs() {
       '*--allow-host[also answer to this host name]:name: '
       '--print-url[print the sign-in link and exit]'
       '--rotate-token[replace the token, signing every page out]'
-      '--rebuild[build the server again from source]') ;;
+      '--rebuild[build the server again from source]'
+      '--terminal[also offer a read-only terminal view, through ttyd]') ;;
     bar) reply=(
       '--setup[print tmux configuration and exit]'
       '--plain[no tmux styling]'

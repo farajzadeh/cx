@@ -271,6 +271,7 @@ dialog .actions { justify-content: flex-end; }
   };
 
   let csrf = "";
+  let terminal = false;
   let intervalSec = 10;
   let timer = null;
   let board = null;      // last /api/sessions answer, joined
@@ -330,6 +331,7 @@ dialog .actions { justify-content: flex-end; }
 
   function signedIn(me) {
     csrf = me.csrf || "";
+    terminal = me.terminal === true;
     const saved = parseInt(store.get("interval") || "", 10);
     intervalSec = saved >= 2 ? saved : (me.interval || 10);
     const sel = $("interval");
@@ -664,6 +666,10 @@ dialog .actions { justify-content: flex-end; }
       acts.append(el("button", { type: "button", class: "primary", onclick: () => startIt(true) }, "Start with Remote Control"));
       acts.append(el("button", { type: "button", onclick: () => startIt(null) }, "Start (open -d)"));
     }
+    if (live && terminal) {
+      acts.append(el("button", { type: "button", onclick: watchIt,
+        title: "Its screen, read-only. While you watch, it counts as attached and cx will not send to it." }, "Watch terminal ↗"));
+    }
     if (live) acts.append(el("button", { type: "button", class: "danger", onclick: stopIt }, "Stop…"));
     if (live && !(rc && rc.url)) {
       acts.append(el("span", { class: "muted small" },
@@ -703,6 +709,16 @@ dialog .actions { justify-content: flex-end; }
     await refresh();
     stopStream();
     startStream();
+  }
+
+  // The tab is opened inside the click, before the request, because a
+  // browser blocks a window opened later from an async callback.
+  async function watchIt() {
+    const win = window.open("about:blank", "_blank");
+    const r = await api("POST", "/api/term", { target: current });
+    if (r.status !== 200) { if (win) win.close(); return alertProblem(r); }
+    if (win) win.location.href = r.data.url;
+    else location.href = r.data.url;
   }
 
   async function stopIt() {

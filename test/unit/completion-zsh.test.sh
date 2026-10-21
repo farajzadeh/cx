@@ -102,6 +102,7 @@ for mode in fpath source; do
   it "tail and web are commands"
   has "$(zc "cx ta")" "commands tail - "
   has "$(zc "cx web --rot")" "options --rotate-token - replace the token, signing every page out"
+  has "$(zc "cx open web1:api --vi")" "options --view - watch a running session, read-only"
   it "rc offers its subverbs"
   has "$(zc "cx rc ")" "subcommands default - follow the host and CX_REMOTE_CONTROL again"
   it "and the global flags after the command"

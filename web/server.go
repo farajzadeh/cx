@@ -26,6 +26,7 @@ type server struct {
 	allowed map[string]bool
 	limiter loginLimiter
 	flight  flightGroup
+	terms   *termManager
 	now     func() time.Time
 }
 
@@ -34,6 +35,7 @@ func newServer(cfg config, tokens *tokenStore) *server {
 		cfg:     cfg,
 		tokens:  tokens,
 		allowed: allowedHosts(cfg.listen, cfg.allowHosts),
+		terms:   newTermManager(cfg),
 		now:     time.Now,
 	}
 }
@@ -89,6 +91,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/login":
 		s.login(w, r)
 	default:
+		if strings.HasPrefix(r.URL.Path, "/term/") {
+			s.termProxy(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			s.api(w, r)
 			return
@@ -171,42 +177,51 @@ func secure(r *http.Request) bool {
 }
 
 func (s *server) me(csrf string) map[string]any {
-	return map[string]any{"csrf": csrf, "interval": s.cfg.interval, "version": s.cfg.version}
+	return map[string]any{"csrf": csrf, "interval": s.cfg.interval, "version": s.cfg.version, "terminal": s.cfg.terminal}
 }
 
-// api authenticates, then routes. A bearer token is for scripts: it is never
-// sent by a browser on its own, so it needs no CSRF check. A cookie is, so
-// every POST made with one must also come from this origin and carry the
-// CSRF token, which only a page that signed in could have read.
-func (s *server) api(w http.ResponseWriter, r *http.Request) {
-	csrf := ""
+// authenticate checks the request's credentials and answers it when they
+// fail. A bearer token is for scripts: it is never sent by a browser on its
+// own, so it needs no CSRF check. A cookie is, so every POST made with one
+// must also come from this origin and carry the CSRF token, which only a
+// page that signed in could have read. It returns that CSRF token.
+func (s *server) authenticate(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if b := bearer(r); b != "" {
 		if !s.tokens.matches(b) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in"})
-			return
+			return "", false
 		}
-	} else {
-		c, err := r.Cookie(cookieName)
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in"})
-			return
+		return "", true
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in"})
+		return "", false
+	}
+	issued, ok := s.tokens.session(c.Value, s.now())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in"})
+		return "", false
+	}
+	csrf := s.tokens.mac("csrf", issued)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if !sameOrigin(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request refused"})
+			return "", false
 		}
-		issued, ok := s.tokens.session(c.Value, s.now())
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in"})
-			return
+		if !hmac.Equal([]byte(r.Header.Get("X-CX-CSRF")), []byte(csrf)) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "missing or stale CSRF token; reload the page"})
+			return "", false
 		}
-		csrf = s.tokens.mac("csrf", issued)
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if !sameOrigin(r) {
-				writeJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request refused"})
-				return
-			}
-			if !hmac.Equal([]byte(r.Header.Get("X-CX-CSRF")), []byte(csrf)) {
-				writeJSON(w, http.StatusForbidden, map[string]any{"error": "missing or stale CSRF token; reload the page"})
-				return
-			}
-		}
+	}
+	return csrf, true
+}
+
+// api authenticates, then routes.
+func (s *server) api(w http.ResponseWriter, r *http.Request) {
+	csrf, ok := s.authenticate(w, r)
+	if !ok {
+		return
 	}
 
 	type route struct {
@@ -223,6 +238,7 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 		"/api/open":     {http.MethodPost, s.open},
 		"/api/stop":     {http.MethodPost, s.stop},
 		"/api/goal":     {http.MethodPost, s.goal},
+		"/api/term":     {http.MethodPost, s.termStart},
 	}
 	rt, ok := routes[r.URL.Path]
 	if !ok {

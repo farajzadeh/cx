@@ -226,6 +226,10 @@ it "web takes its flags and no target"
 out=$(comp "cx web --")
 has "$out" "--listen "
 has "$out" "--rotate-token "
+has "$out" "--terminal "
+it "open offers --view, and resume does not"
+has "$(comp "cx open web1:api --")" "--view "
+lacks "$(comp "cx resume web1:api --")" "--view "
 assert_eq "$(comp "cx web ")" ""
 out=$(comp "cx open --")
 it "and the global flags"
