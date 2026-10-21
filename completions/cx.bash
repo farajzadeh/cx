@@ -23,7 +23,7 @@
 # Tables
 # ---------------------------------------------------------------------------
 
-_cx_commands="host provision login doctor usage new ls rm wt worktree open resume shell code ask chat status stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
+_cx_commands="host provision login doctor usage new ls rm wt worktree open resume shell code ask chat status rc stop forget peek nudge bar tabs jump goal driver cache completion find pick help version"
 
 # Valid anywhere in the argv: bin/cx strips them before choosing a subcommand.
 _cx_global_flags="-r --refresh --no-cache --stale --json -y --yes --no-color"
@@ -35,6 +35,7 @@ _cx_subverbs() {
     wt) printf '%s' "add ls rm" ;;
     goal) printf '%s' "new ls show dod member pause resume done log on-stop rm" ;;
     cache) printf '%s' "status clear refresh" ;;
+    rc) printf '%s' "on off default" ;;
   esac
 }
 
@@ -47,7 +48,8 @@ _cx_flags() {
   # What cx passes on to Claude Code (lib/target.sh cx_claude_opt), and what
   # `new` and `wt add` take to open the thing they just made.
   local claude="--permission-mode=permmode --dangerously-skip-permissions --model=model --effort=effort"
-  local open_after="--open --no-open -d --detach --label=word --no-hooks $claude"
+  local rc="--remote-control --no-remote-control"
+  local open_after="--open --no-open -d --detach --label=word --no-hooks $rc $claude"
   case "$1${2:+ $2}" in
     "host add") printf '%s' "--alias=word --hostname=word --user=word --port=word --identity=file --root=word --no-test" ;;
     "host import") printf '%s' "--root=word" ;;
@@ -59,7 +61,7 @@ _cx_flags() {
     rm) printf '%s' "--purge" ;;
     "wt add") printf '%s' "--branch=word --from=word $open_after" ;;
     "wt rm") printf '%s' "--force --merged" ;;
-    open | resume) printf '%s' "-d --detach --no-hooks $claude" ;;
+    open | resume) printf '%s' "-d --detach --no-hooks $rc $claude" ;;
     shell) printf '%s' "-d --detach --no-hooks" ;;
     ask) printf '%s' "$claude --output-format=outfmt --json-schema=word --max-budget-usd=word" ;;
     chat) printf '%s' "$claude --allowed-tools=word --ask-tools=word --append-system-prompt-file=file" ;;
@@ -104,6 +106,7 @@ _cx_positional() {
     find:* | pick:*) printf all ;; # query words; a target is a fine one
     stop:1 | nudge:1) printf live ;;
     forget:1) printf known ;;
+    "rc on:1" | "rc off:1" | "rc default:1") printf projects ;;
     completion:1) printf shell ;;
     "goal show:1" | "goal dod:1" | "goal pause:1" | "goal resume:1" | "goal done:1") printf goal ;;
     "goal log:1" | "goal on-stop:1" | "goal rm:1" | "goal member:2") printf goal ;;

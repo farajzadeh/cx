@@ -97,6 +97,10 @@ for mode in fpath source; do
 
   it "per-command flags, with descriptions"
   has "$(zc "cx open web1:api --d")" "options --dangerously-skip-permissions - bypass ALL permission checks"
+  it "open offers --remote-control"
+  has "$(zc "cx open web1:api --rem")" "options --remote-control - also on claude.ai/code and the Claude app"
+  it "rc offers its subverbs"
+  has "$(zc "cx rc ")" "subcommands default - follow the host and CX_REMOTE_CONTROL again"
   it "and the global flags after the command"
   has "$(zc "cx ls --n")" "options --no-cache -"
 

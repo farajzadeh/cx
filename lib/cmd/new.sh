@@ -25,7 +25,7 @@ OPTIONS
   -d, --detach  start that session without attaching
   --label L     open the session as <host>:<name>@L
   --dangerously-skip-permissions, --permission-mode M, --model M,
-  --effort E, --no-hooks
+  --effort E, --no-hooks, --remote-control, --no-remote-control
                 for the session, as cx open takes them
 
 Every option describing the session implies --open.

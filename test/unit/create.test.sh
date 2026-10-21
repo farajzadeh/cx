@@ -172,6 +172,16 @@ fresh
 run cmd_new web1:app -d --dangerously-skip-permissions
 assert_eq "$(log open.log)" "-d --dangerously-skip-permissions web1:app"
 
+it "passes --remote-control through, and it implies --open like any session option"
+fresh
+run cmd_new web1:app --remote-control
+assert_eq "$(log open.log)" "--remote-control web1:app"
+
+it "and wt add does the same"
+fresh
+run cmd_wt add web1:api/fix -d --remote-control
+assert_eq "$(log open.log)" "-d --remote-control web1:api/fix"
+
 it "and the options that take a value, value included"
 fresh
 run cmd_new --model opus web1:app --effort high

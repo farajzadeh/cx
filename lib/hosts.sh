@@ -16,6 +16,7 @@
 #
 #   #cx:root=/srv/work        project root on this server
 #   #cx:import=web1           present only for imported hosts
+#   #cx:remote_control=1      start sessions with Remote Control (lib/cmd/open.sh)
 #   Host web1
 #       HostName 10.0.0.5
 #       User me

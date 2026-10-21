@@ -24,7 +24,7 @@ _cx_env_snapshot() {
   for k in CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
     CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
-    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT; do
+    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT CX_REMOTE_CONTROL; do
     eval "_v=\${$k+set}"
     if [ "${_v:-}" = set ]; then
       _CX_ENV_KEYS="$_CX_ENV_KEYS $k"
@@ -71,6 +71,7 @@ cx_config_load() {
   : "${CX_OPEN_AFTER_CREATE:=ask}"
   : "${CX_LS_GROUP:=none}"
   : "${CX_LS_SORT:=none}"
+  : "${CX_REMOTE_CONTROL:=0}"
 
   # Guard against a malformed config turning into confusing arithmetic errors
   # deep inside the cache layer.
@@ -78,13 +79,14 @@ cx_config_load() {
   _cx_require_int CX_UNREACHABLE_TTL "$CX_UNREACHABLE_TTL"
   _cx_require_int CX_CONNECT_TIMEOUT "$CX_CONNECT_TIMEOUT"
   _cx_require_one_of CX_OPEN_AFTER_CREATE "$CX_OPEN_AFTER_CREATE" ask always never
+  _cx_require_one_of CX_REMOTE_CONTROL "$CX_REMOTE_CONTROL" 0 1
 
   # Exported so a backgrounded cache refresh (a fresh `cx` process) resolves
   # the same configuration, config file, hosts, and cache directory.
   export CX_DEFAULT_HOST CX_PROJECT_ROOT CX_CACHE_TTL CX_UNREACHABLE_TTL \
     CX_STALE_OK CX_CONNECT_TIMEOUT CX_CONTROL_PERSIST CX_EDITOR CX_NO_COLOR \
     CX_TMUX_TAG CX_TMUX_TITLE CX_BAR_COLOR CX_BAR_ICONS CX_SERVER_BAR \
-    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT
+    CX_OPEN_AFTER_CREATE CX_LS_GROUP CX_LS_SORT CX_REMOTE_CONTROL
   export CX_CONFIG_DIR CX_CONFIG_FILE CX_SSHD_DIR CX_CACHE_DIR
 }
 

@@ -53,6 +53,7 @@ bash test/unit/ask.test.sh                 # cx_ask_line / cx_ask_yn, the termin
 bash test/unit/create.test.sh              # new / wt add: --open, and asking for what is missing
 bash test/unit/chat.test.sh                # cx chat and chat-mcp, against a fake Claude that replays real stream-json
 bash test/unit/usage.test.sh               # cx usage: limits, tokens from transcripts, the incremental cache
+bash test/unit/remote-control.test.sh      # Remote Control: the default ladder, the launch, what observe reports
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -118,9 +119,9 @@ immediately after the user's own change is worse than no cache.
 **5. Servers own their registries, and record only what cannot be derived.**
 Each server's `~/.local/share/cx/projects.json` is authoritative. The client
 merges, never stores. Only non-derivable fields are recorded (`name`, `path`,
-`repo`, `created_at`); `branch`, `dirty`, `tmux_live`, `tmux_count`,
-`sessions`, `last_active` and **`worktrees`** are computed fresh on every
-`list`. Worktrees in particular come from `git worktree list --porcelain` and
+`repo`, `created_at`, and one preference, `remote_control`, set by `cx rc`);
+`branch`, `dirty`, `tmux_live`, `tmux_count`, `sessions`, `last_active` and
+**`worktrees`** are computed fresh on every `list`. Worktrees in particular come from `git worktree list --porcelain` and
 are never written down — a second copy of a fact git maintains is a copy that
 drifts, and deriving means a worktree made by hand over SSH shows up in cx and
 one deleted by hand disappears. The same goes for a worktree's **`merged`**:
@@ -159,7 +160,8 @@ explicitly on each creation, because a previous session under the same slug
 may have set a mode and a stale one makes `cx status` lie, possibly in the
 dangerous direction. Note `.sessions[$s] |= ...` on a missing key *creates* it
 holding null, so the clearing path is guarded with `has($s)`. The same rule
-covers `hooks: true` (`_session_set_hooks`), which is why an entry can exist
+covers `hooks: true` (`_session_set_hooks`) and `remote_control: true` with its
+`rc_name` (`_session_set_remote_control`), which is why an entry can exist
 with no `uuid` — anything counting pins must count only entries with one.
 
 **9. A cx session pins a Claude conversation id.** `claude --continue` means
@@ -706,6 +708,54 @@ ask for what is missing — `cx wt add web1:api`, a project with no `/name`,
 included — with the questions above, and validate names client-side
 (`cx_project_name_ok`, `cx_worktree_name_ok`) to re-ask before a round trip.
 The agent still validates; it cannot trust the client.
+
+## Remote Control
+
+`--remote-control` on `cx open`, `resume`, `new` and `wt add` starts Claude
+Code with its own Remote Control, so the session is also on claude.ai/code
+and in the Claude app. That is the whole browser and phone experience —
+messages, approvals, slash commands, interrupt — and cx rebuilds none of it.
+cx's part is starting it, naming it, and reporting it.
+
+- **The ladder is split across the wire.** The command line, the host file's
+  `#cx:remote_control=` and `CX_REMOTE_CONTROL` are the client's; the
+  project's own setting (`cx rc`, `remote_control` in `projects.json`) only
+  the agent can read. So the client sends `--rc on|off` for a decision and
+  `--rc default-on|default-off` for its default, and `_rc_resolve` puts the
+  project between them. To an agent older than 0.8.0 the client sends nothing
+  new: `--remote-control` is refused, and a default that would have turned it
+  on is said once and dropped.
+- **The name is the target with the host alias** (`--rc-name web1:api@x`),
+  built by the client because only it knows the alias. `--name <slug>` is
+  still passed too: that one shows inside the session.
+  `--remote-control-session-name-prefix` is unused, since cx never lets
+  Claude generate a name.
+- **The link is never stored.** Claude's status file carries
+  `bridgeSessionId` while Remote Control is on, and observe turns it into
+  `https://claude.ai/code/<id>` on every call, after checking its shape. This
+  also reports a session someone gave `/remote-control` by hand. The id
+  survives `cx stop` and `cx open` — Claude keeps it in the transcript and
+  resumes it.
+- **Launch-time, like the permission mode** (9a): recorded on the pin,
+  cleared on every creation, and a reattach with `--remote-control` says it
+  cannot be applied. The agent refuses an explicit request on a Claude Code
+  without the flag, before `new-session`, and starts without it when it only
+  came from a default.
+- **A Remote Control session writes its transcript the moment it starts**,
+  with no message in it (verified, Claude Code 2.1.306). observe reports
+  `transcript.empty` when it read the whole file and found none, and the
+  classifier treats that as absent — `fresh` — except for `starting`, since
+  the file proves Claude got past its startup.
+- **Claude reconnects it on resume.** `--resume` of a conversation that once
+  had Remote Control comes back on the same claude.ai link with no flag at
+  all, so `--no-remote-control` cannot take it away. Before resuming, the
+  agent looks for a `bridge-session` entry in the transcript, records the
+  session as `rc` anyway so `cx status` does not lie, and points at a new
+  conversation instead. Per conversation: a new `@label` in the same
+  directory has none.
+- **No-perms with Remote Control** means anyone signed in to that claude.ai
+  account can make the session run any command. Both the client and the
+  agent add that to the bypass warning.
 
 ## Exit codes
 

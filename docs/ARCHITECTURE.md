@@ -73,7 +73,9 @@ works identically from a second machine, and cannot drift from reality.
 `branch`, `dirty`, `tmux_live`, `tmux_count`, `sessions`, `last_active` and
 `worktrees` are computed fresh on every `list`. Only `name`, `path`, `repo`
 and `created_at` are recorded — the things that genuinely cannot be
-recomputed.
+recomputed — plus one preference, `remote_control`, which `cx rc` sets: a
+choice nothing could derive, kept on the server so every client sees the
+same one.
 
 Worktrees are the clearest case. `git worktree list --porcelain` already
 knows about them, so cx writes nothing down. The payoff is that drift is
@@ -324,6 +326,27 @@ with no client-side state and no replication between servers.
 `cx goal dod` records the previous text in `revisions` rather than overwriting
 it. Changing the definition of done halfway through is normal, and afterwards
 the only way to know what a session was actually asked for is to have kept it.
+
+## Remote Control
+
+`cx open --remote-control` starts Claude Code with its own Remote Control, so
+the session is also on claude.ai/code and in the Claude app, where it can be
+read, sent messages, have its prompts approved and be interrupted. cx builds
+none of that. It starts the session with the flag, names it after the target
+(`web1:api@review`, host alias included, which only the client knows), and
+reports it: `rc` in MODE, and in `cx peek --json` the link, which observe
+derives from the `bridgeSessionId` in Claude's status file on every call
+rather than storing it.
+
+Whether a session gets it is the first of: the command line, the project's own
+setting on its server (`cx rc`), the host file's `#cx:remote_control=`, and
+`CX_REMOTE_CONTROL`. The second is visible only to the agent, so the client
+sends either a decision or a default and the agent puts the project's setting
+between them. It is fixed when the session starts, like the permission mode.
+
+claude.ai is a remote screen on the one process that writes the conversation,
+not a second writer, so invariant 8 holds. Design notes, what was verified and
+the threat model are in [WEB.md](WEB.md).
 
 ## A conversation for a program
 

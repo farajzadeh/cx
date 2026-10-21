@@ -11,7 +11,7 @@
 . "$CX_HOME/lib/pick.sh"
 
 _open_common() {
-  local mode="$1" target="" detach=0 nohooks=0 verb="$1"
+  local mode="$1" target="" detach=0 nohooks=0 verb="$1" rcflag=""
   shift
   # The command as the user typed it, for messages: mode "continue" is cx open.
   [ "$mode" != continue ] || verb=open
@@ -48,6 +48,10 @@ _open_common() {
       # Claude's status file, exactly as it does for a session started by an
       # older cx.
       --no-hooks) nohooks=1 ;;
+      # Remote Control: the session on claude.ai/code and in the Claude app.
+      # Launch-time, like the permission mode; see _open_rc_args.
+      --remote-control) rcflag=on ;;
+      --no-remote-control) rcflag=off ;;
       -*)
         err "unknown option: $1"
         hint "to pass it to Claude Code instead: cx $mode <target> -- $1"
@@ -67,7 +71,7 @@ _open_common() {
   fi
 
   if [ "$mode" = shell ] &&
-    { cx_claude_needs_agent || [ ${#passthru[@]} -gt 0 ]; }; then
+    { cx_claude_needs_agent || [ ${#passthru[@]} -gt 0 ] || [ "$rcflag" = on ]; }; then
     err "cx shell starts no Claude, so Claude options have no effect"
     hint "use cx open for a Claude session"
     return 3
@@ -102,6 +106,8 @@ _open_common() {
   fi
   _open_bar_args "$ver"
   hookargs=("${hookargs[@]+"${hookargs[@]}"}" "${_OPEN_BAR_ARGS[@]+"${_OPEN_BAR_ARGS[@]}"}")
+  _open_rc_args "$ver" "$rcflag" "$mode" || return $?
+  hookargs=("${hookargs[@]+"${hookargs[@]}"}" "${_OPEN_RC_ARGS[@]+"${_OPEN_RC_ARGS[@]}"}")
 
   # A live session means work is already in flight; opening it is safe even if
   # Claude was never signed in on this server, so only warn when creating one.
@@ -128,6 +134,14 @@ _open_common() {
       # either. Worth saying out loud, because this combination is the one that
       # runs unsupervised.
       note "  Detached, so no one will see it ask — because it will not ask."
+    fi
+    # Remote Control as well: the pane is now reachable from anywhere your
+    # claude.ai account is signed in, and nothing it is told will be checked.
+    # Only when the client knows it will be on; a project's own setting is
+    # resolved on the server, and the agent repeats this warning there.
+    if [ "$_OPEN_RC_WANT" = 1 ]; then
+      note "  With Remote Control: anyone signed in to your claude.ai account can"
+      note "  make it run any command on $CX_T_HOST, without a prompt."
     fi
     say ""
   fi
@@ -156,11 +170,19 @@ _open_common() {
       return 0
     fi
     cx_state_seed "$(cx_target_str)" starting
-    local created="" tname=""
+    local created="" tname="" rcname=""
     created=$(printf '%s' "$out" | jq -r '.created' 2>/dev/null) || true
     tname=$(printf '%s' "$out" | jq -r '.tmux // empty' 2>/dev/null) || true
+    rcname=$(printf '%s' "$out" |
+      jq -r 'select(.remote_control.enabled == true) | .remote_control.name // empty' 2>/dev/null) || true
     if [ "$created" = true ]; then
       say "started $(cx_target_str)  ($tname)"
+      if [ -n "$rcname" ]; then
+        # The link exists only once Claude has registered with claude.ai, a
+        # few seconds from now, so the name is what can be said here.
+        say "  Remote Control: $rcname"
+        hint "its claude.ai link, once it is up: cx peek $(cx_target_str) --json"
+      fi
       # Claude takes a few seconds to come up, and on the very first run in a
       # directory it asks whether to trust the folder and then writes nothing
       # until answered — so "started" is not "ready".
@@ -208,6 +230,65 @@ _open_bar_args() {
   elif [ "${CX_BAR_ICONS:-unicode}" = nerd ]; then
     _OPEN_BAR_ARGS=(--bar nerd)
   fi
+  return 0
+}
+
+# _open_rc_args AGENT_VERSION FLAG MODE — what to tell the agent about Remote
+# Control, in _OPEN_RC_ARGS; _OPEN_RC_WANT is 1 when the client knows it will
+# be on.
+#
+# Four places can say, and the first that does wins: the command line
+# (FLAG, on or off), the project's own setting on its server (cx rc), the
+# host's `#cx:remote_control=` line, and CX_REMOTE_CONTROL. Only the agent can
+# read the project's setting, so the client sends what it knows as either a
+# decision (--rc on|off, from the command line) or a default (--rc
+# default-on|default-off), and the agent puts the project's setting between
+# them.
+#
+# The name is the target as the user types it, host alias included, which is
+# what makes a session findable on claude.ai among a dozen others. Only the
+# client knows the alias.
+#
+# An agent older than 0.8.0 gets exactly the argv it always did. Asking it for
+# Remote Control by flag is refused; a default that would have turned it on
+# is said once and then ignored, because a default must not stop a session
+# from opening on a server not yet re-provisioned.
+_open_rc_args() {
+  local ver="$1" flag="$2" mode="$3" def rc
+  _OPEN_RC_ARGS=()
+  _OPEN_RC_WANT=0
+  [ "$mode" != shell ] || return 0
+
+  def=$(cx_host_meta "$CX_T_HOST" remote_control 2>/dev/null) || def=""
+  case "$def" in
+    '') def="${CX_REMOTE_CONTROL:-0}" ;;
+    0 | 1) ;;
+    *)
+      err "#cx:remote_control must be 0 or 1 for $CX_T_HOST (got: $def)"
+      hint "fix it with: cx host edit $CX_T_HOST"
+      return 78
+      ;;
+  esac
+
+  case "$flag" in
+    on) rc=on ;;
+    off) rc=off ;;
+    *) if [ "$def" = 1 ]; then rc=default-on; else rc=default-off; fi ;;
+  esac
+  case "$rc" in on | default-on) _OPEN_RC_WANT=1 ;; esac
+
+  if ! cx_version_ge "${ver:-0}" 0.8.0; then
+    if [ "$rc" = on ]; then
+      cx_agent_supports "$CX_T_HOST" "Remote Control" 0.8.0 "$ver" || return 1
+    fi
+    if [ "$rc" = default-on ]; then
+      warn "Remote Control is on by default, but the agent on $CX_T_HOST is too old for it"
+      hint "update it with: cx provision $CX_T_HOST"
+    fi
+    _OPEN_RC_WANT=0
+    return 0
+  fi
+  _OPEN_RC_ARGS=(--rc "$rc" --rc-name "$(cx_target_str)")
   return 0
 }
 
@@ -261,6 +342,7 @@ ${C_BOLD}cx open${C_RESET} — attach a Claude session
   cx open <host>:<project>/<worktree>       a worktree of the project
   cx open <host>:<project>/<worktree>@<label>
   cx open -d <target>                       start it, do not attach
+  cx open --remote-control <target>         also reachable from claude.ai/code and the Claude app
   cx open --no-hooks <target>               without the hooks that report its state
   cx open                                   choose from a menu (at a terminal)
 
@@ -308,6 +390,14 @@ ${C_BOLD}OPTIONS${C_RESET}
       for sandboxes with no internet access.
   --model <model>       opus, sonnet, haiku, or a full model id
   --effort <level>      low, medium, high, xhigh, max
+  --remote-control      also put the session on claude.ai/code and in the Claude
+                        app, named after its target (local:api@review), where
+                        you can read it, send it messages, approve its prompts
+                        and interrupt it. Needs Claude Code signed in with a
+                        claude.ai account.
+  --no-remote-control   not this time, whatever the defaults say. The defaults
+                        are, in order: cx rc (per project, on its server), the
+                        host file's #cx:remote_control=1, CX_REMOTE_CONTROL
   -- <args...>          everything after -- goes to Claude Code verbatim
 
 All of these apply when the session is ${C_BOLD}created${C_RESET}, not when you reattach: a
@@ -343,7 +433,8 @@ Note that what you choose in the picker is not remembered: the next cx open
 goes back to that session's own conversation. To keep a second thread you can
 return to by name, use a label — cx open <target>@<label>.
 
-Takes --dangerously-skip-permissions as cx open does; see cx open --help.
+Takes --dangerously-skip-permissions and --remote-control as cx open does;
+see cx open --help.
 Omit the target at a terminal to pick one from a menu.
 EOF
       return 0

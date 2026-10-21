@@ -112,7 +112,18 @@ EOF
 # user's setting and because a pure function is the only part of this that a
 # unit test can pin.
 _peek_rows() {
-  local host="$1" file="$2" now="$3" h target state attached quiet age
+  local host="$1" file="$2" now="$3" h target state attached quiet age modes mode
+
+  # MODE, per target, from the same payload in one jq: how the session was
+  # started, as cx status shows it. Joined by target rather than by position,
+  # since cx_activity_rows skips anything without one.
+  modes=$(jq -r '
+    .sessions[]?
+    | [ .target,
+        ([ (if .perm_mode == "bypassPermissions" then "no-perms" else (.perm_mode // empty) end),
+           (if .remote_control.enabled == true then "rc" else empty end)
+         ] | join("+") | if . == "" then "—" else . end)
+      ] | @tsv' "$file" 2>/dev/null) || modes=""
 
   cx_activity_rows "$host" "$file" "$now" |
     while IFS='	' read -r h target state attached quiet age; do
@@ -120,9 +131,10 @@ _peek_rows() {
       # column, so that a blank field cannot shift every later one left.
       [ "$quiet" = - ] && quiet=""
       [ "$age" = - ] && age=""
+      mode=$(printf '%s\n' "$modes" | awk -F'\t' -v t="$target" '$1 == t { print $2; exit }')
 
-      printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$h" "$target" "$state" \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$h" "$target" "$state" "${mode:-—}" \
         "$([ "$attached" = true ] && printf 'you' || printf '—')" \
         "$(_peek_age "$quiet" "$age" "$state")"
     done
@@ -174,6 +186,10 @@ Reads each session's own conversation and reports one of:
   ${C_DIM}starting${C_RESET}   Claude has not finished starting — often the trust-this-folder
              prompt of a new directory; answer it with cx open
   ${C_DIM}unknown${C_RESET}    no pinned conversation, or nothing readable
+
+MODE is how the session was started, as in cx status: its permission mode
+(no-perms for none at all) and ${C_BOLD}rc${C_RESET} for Remote Control. With --json, each session
+has ${C_BOLD}remote_control.url${C_RESET}, its claude.ai link, while it is running.
 
 QUIET is how long the conversation has been silent. A session counts as
 working until it has been quiet for ${C_BOLD}\$CX_IDLE_GRACE${C_RESET} seconds (currently $CX_IDLE_GRACE), after
@@ -329,10 +345,10 @@ EOF
 
   if [ -n "$rows" ]; then
     {
-      printf 'HOST\tSESSION\tSTATE\tWHO\tQUIET\n'
+      printf 'HOST\tSESSION\tSTATE\tMODE\tWHO\tQUIET\n'
       printf '%s\n' "$rows" |
-        while IFS='	' read -r h t s w q; do
-          printf '%s\t%s\t%s\t%s\t%s\n' "$h" "$t" "$(cx_activity_color "$s")" "$w" "$q"
+        while IFS='	' read -r h t s m w q; do
+          printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$h" "$t" "$(cx_activity_color "$s")" "$m" "$w" "$q"
         done
     } | cx_table
     say ""

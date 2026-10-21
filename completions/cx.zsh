@@ -40,6 +40,7 @@ _cx_cmd_desc=(
   'ask:one-shot question, printed here'
   'chat:a conversation as JSON lines, for a program'
   'status:live sessions across servers'
+  'rc:Remote Control, per project'
   'stop:end a session'
   'forget:drop a finished session from the lists'
   'peek:what each session is doing now'
@@ -97,6 +98,10 @@ _cx_sub_desc() {
       'status:what is cached, and how old'
       'clear:drop cached data'
       'refresh:re-fetch one server') ;;
+    rc) reply=(
+      'on:always, for this project'
+      'off:never, for this project'
+      'default:follow the host and CX_REMOTE_CONTROL again') ;;
     *) reply=() ;;
   esac
 }
@@ -110,6 +115,11 @@ _cx_specs() {
     '--model[model]:model:(opus sonnet haiku)'
     '--effort[reasoning effort]:level:(low medium high xhigh max)'
   )
+  local -a rc
+  rc=(
+    '(--no-remote-control)--remote-control[also on claude.ai/code and the Claude app]'
+    '(--remote-control)--no-remote-control[not this time, whatever the defaults say]'
+  )
   # What `new` and `wt add` take to open the thing they have just made.
   local -a open_after
   open_after=(
@@ -118,6 +128,7 @@ _cx_specs() {
     '(-d --detach)'{-d,--detach}'[open it, but do not attach]'
     '--label[open it as a named session]:label: '
     '--no-hooks[without the hooks that report its state]'
+    $rc
     $claude
   )
   reply=()
@@ -171,6 +182,7 @@ _cx_specs() {
       '1:worktree:_cx_target units') ;;
     open | resume) reply=(
       $claude
+      $rc
       '(-d --detach)'{-d,--detach}'[start it, do not attach]'
       '--no-hooks[without the hooks that report its state]'
       '1:target:_cx_target all') ;;
@@ -194,6 +206,7 @@ _cx_specs() {
       '1:target:_cx_target all') ;;
     stop) reply=('--all[every session of the project]' '1:session:_cx_target live') ;;
     forget) reply=('1:session:_cx_target known') ;;
+    'rc on' | 'rc off' | 'rc default') reply=('1:project:_cx_target projects') ;;
     peek) reply=(
       '--all[list finished sessions too]'
       '--tail[include the last N messages in --json]:N: '

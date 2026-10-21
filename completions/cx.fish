@@ -123,6 +123,7 @@ for c in \
     'ask	one-shot question' \
     'chat	a conversation as JSON lines, for a program' \
     'status	live sessions' \
+    'rc	Remote Control, per project' \
     'stop	end a session' \
     'forget	drop a finished session from the lists' \
     'peek	what each session is doing now' \
@@ -147,6 +148,7 @@ complete -c cx -n '__cx_needs_sub host' -a 'add import ls test edit rm'
 complete -c cx -n '__cx_needs_sub wt' -a 'add ls rm'
 complete -c cx -n '__cx_needs_sub goal' -a 'new ls show dod member pause resume done log on-stop rm'
 complete -c cx -n '__cx_needs_sub cache' -a 'status clear refresh'
+complete -c cx -n '__cx_needs_sub rc' -a 'on off default'
 
 # Arguments.
 complete -c cx -n '__cx_sub host test edit rm; or __cx_using provision login doctor usage ls; or __cx_sub cache clear refresh' -a '(__cx_hosts)'
@@ -156,6 +158,7 @@ complete -c cx -n '__cx_using open resume shell code ask chat peek rm find pick;
 complete -c cx -n '__cx_sub wt add' -a '(__cx_targets | string match -v -r "[/@]" | string replace -r "^([^\t]*:[^\t]+)\t.*" "\$1/")'
 complete -c cx -n '__cx_using stop nudge' -a '(__cx_targets live)'
 complete -c cx -n '__cx_using forget' -a '(__cx_targets known)'
+complete -c cx -n '__cx_sub rc on off default' -a '(__cx_targets | string match -v -r "[/@]")'
 complete -c cx -n '__cx_sub goal show dod pause resume done log on-stop rm member' -a '(__cx_goals)'
 complete -c cx -n '__cx_sub goal member' -a 'add rm'
 complete -c cx -n '__cx_using completion' -a 'bash zsh fish'
@@ -193,6 +196,8 @@ complete -c cx -n '__cx_sub wt rm' -l force -d 'discard uncommitted changes'
 complete -c cx -n '__cx_sub wt rm' -l merged -d 'every merged worktree'
 complete -c cx -n '__cx_using open resume shell' -s d -l detach -d 'start it, do not attach'
 complete -c cx -n '__cx_using open resume shell new; or __cx_sub wt add' -l no-hooks -d 'without the hooks that report its state'
+complete -c cx -n '__cx_using open resume new; or __cx_sub wt add' -l remote-control -d 'also on claude.ai/code and the Claude app'
+complete -c cx -n '__cx_using open resume new; or __cx_sub wt add' -l no-remote-control -d 'not this time, whatever the defaults say'
 complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add' -l permission-mode -x -a 'acceptEdits auto bypassPermissions manual dontAsk plan' -d 'how much Claude asks'
 complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add' -l dangerously-skip-permissions -d 'bypass ALL permission checks'
 complete -c cx -n '__cx_using open resume ask chat new; or __cx_sub wt add; or __cx_sub goal on-stop' -l model -x -a 'opus sonnet haiku' -d 'model'

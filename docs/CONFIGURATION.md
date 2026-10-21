@@ -46,6 +46,7 @@ never changes how your other SSH sessions behave.
 | `CX_OPEN_AFTER_CREATE` | `ask` | Whether `cx new` and `cx wt add` open a session in what they just created, when neither `--open` nor `--no-open` says. `ask` asks at a terminal and never otherwise — a script, `--json` and `-y` are never asked and never get a session they did not ask for. `always` opens whenever there is a terminal to attach. `never` does not. Anything else is a config error (exit 78). |
 | `CX_LS_GROUP` | `none` | How `cx ls` lays out its table. `host` puts a heading over each server's projects instead of a HOST column; `none` is the flat table. `--group` overrides it. `--json` is never grouped. |
 | `CX_LS_SORT` | `none` | The order `cx ls` lists projects in: `name`, `active` (most recent first), `sessions` (most first), `host`, or `none` for the order the servers keep them in. `active` and `sessions` count a project's worktrees as part of it. `--sort` overrides it. |
+| `CX_REMOTE_CONTROL` | `0` | `1` starts sessions with Claude Code's Remote Control, so each is also on claude.ai/code and in the Claude app, named after its target (`local:api@review`). Fixed when a session is created, like the permission mode. In order of precedence: `--remote-control` / `--no-remote-control`, the project's own setting (`cx rc on\|off`, kept on its server), the host file's `#cx:remote_control=0\|1`, then this. Needs agent 0.8.0, and Claude Code signed in with a claude.ai account. |
 
 ## Environment-only
 
@@ -133,6 +134,7 @@ plus `#cx:` metadata comments, which `ssh` ignores:
 ```
 #cx:root=/srv/work        project root on this server
 #cx:import=web1           present only for imported hosts
+#cx:remote_control=1      start this server's sessions with Remote Control
 
 Host web1
     HostName 10.0.0.5

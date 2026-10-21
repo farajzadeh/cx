@@ -14,6 +14,7 @@ cmd_status() {
 ${C_BOLD}cx status${C_RESET} — Claude sessions running right now
 
   cx status
+  cx status --json      the same facts, for a script or cx web
 
 Shows live tmux sessions on every server, whether anyone is attached, and how
 long each has been running. This always queries the servers: a cached answer
@@ -30,7 +31,9 @@ they are what you type after the host:
 MODE is the permission mode the session was started with — ${C_BOLD}acceptEdits${C_RESET},
 ${C_BOLD}plan${C_RESET}, and so on, with bypassPermissions shown as ${C_BOLD}no-perms${C_RESET}. Blank means
 Claude's default. A live session's permission mode cannot be changed and is
-invisible from inside it, so this is the only place it shows.
+invisible from inside it, so this is the only place it shows. ${C_BOLD}rc${C_RESET} is added,
+as in ${C_BOLD}no-perms+rc${C_RESET}, when the session was started with Remote Control: it
+is also on claude.ai/code and in the Claude app. cx peek --json has its link.
 EOF
       return 0
       ;;
@@ -53,6 +56,28 @@ EOF
   done
   wait
 
+  # The agent's own facts, one object per session with its host added. An
+  # agent older than 0.8.0 has no remote_control; it is false here, as it is
+  # for any session such an agent started.
+  if [ "${CX_JSON:-0}" = 1 ]; then
+    # Unreachable hosts are collected first: the loop that prints sessions
+    # feeds a pipe, so it runs in a subshell and anything it set is lost.
+    local down=""
+    for h in $hosts; do
+      safe=$(cx_sanitize "$h")
+      jq -e . "$tmp/$safe.json" >/dev/null 2>&1 || down="$down$h
+"
+    done
+    for h in $hosts; do
+      safe=$(cx_sanitize "$h")
+      jq -c --arg h "$h" '.sessions[]? | {host: $h} + . + {remote_control: (.remote_control == true)}' \
+        "$tmp/$safe.json" 2>/dev/null || true
+    done | jq -sc --arg down "$down" \
+      '{sessions: ., unreachable: ($down | split("\n") | map(select(length > 0)))}'
+    rm -rf "$tmp"
+    return 0
+  fi
+
   local rows="" any=0 failed=""
   for h in $hosts; do
     safe=$(cx_sanitize "$h")
@@ -71,10 +96,14 @@ EOF
             # bypassPermissions gets the blunt name: it is the one worth
             # spotting across a screenful of sessions. `.dangerous` alone is
             # what a pre-0.3.0 agent reports.
-            (if   .mode == "bypassPermissions" then "no-perms"
-             elif .mode != null                then .mode
-             elif .dangerous                   then "no-perms"
-             else "" end),
+            # Remote Control is joined on with "+": it is not a permission
+            # mode, and no-perms+rc is the combination most worth spotting.
+            ([ (if   .mode == "bypassPermissions" then "no-perms"
+                elif .mode != null                then .mode
+                elif .dangerous                   then "no-perms"
+                else empty end),
+               (if .remote_control == true then "rc" else empty end)
+             ] | join("+")),
             (if .attached then "attached" else "detached" end),
             (if .created == null then "—"
              else ($now - .created) as $a

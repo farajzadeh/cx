@@ -71,6 +71,11 @@ cx_create_opt() {
       _cx_create_imply "$flag"
       return 0
       ;;
+    --remote-control | --no-remote-control)
+      CX_CREATE_OPEN_ARGS=("${CX_CREATE_OPEN_ARGS[@]+"${CX_CREATE_OPEN_ARGS[@]}"}" "$flag")
+      _cx_create_imply "$flag"
+      return 0
+      ;;
     --label)
       _cx_target_label_ok "$value" || {
         err "invalid session label: ${value:-(missing)}"

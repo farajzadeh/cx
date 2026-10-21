@@ -50,7 +50,8 @@ OPTIONS
   -d, --detach  for add: start that session without attaching
   --label L     for add: open the session as <target>/<name>@L
                 --dangerously-skip-permissions, --permission-mode, --model,
-                --effort and --no-hooks are passed to cx open as well.
+                --effort, --no-hooks, --remote-control and --no-remote-control
+                are passed to cx open as well.
                 Every option describing the session implies --open; without
                 any, CX_OPEN_AFTER_CREATE decides (default: ask at a terminal).
   --force       for rm: discard uncommitted changes in the worktree
