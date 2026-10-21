@@ -46,10 +46,13 @@ set -eu
 # 0.7.0 added usage: the account's usage limits as Claude last reported them,
 # and tokens per day and per project from the transcripts, kept fast by an
 # incremental cache.
+# 0.8.0 added Remote Control: open --rc/--rc-name, the rc verb for a
+# project's own setting, remote_control and perm_mode in observe, and tail,
+# which reads a conversation from a byte offset for cx web.
 # The client feature-gates on this: an
 # older agent would reject the new flags and verbs as unknown options, which
 # says nothing about needing to re-provision.
-CX_AGENT_VERSION="0.7.0"
+CX_AGENT_VERSION="0.8.0"
 
 CX_DATA_DIR="${CX_DATA_DIR:-$HOME/.local/share/cx}"
 CX_REGISTRY="${CX_REGISTRY:-$CX_DATA_DIR/projects.json}"
@@ -679,6 +682,45 @@ _session_hooked() {
   jq -e --arg s "$1" '.sessions[$s].hooks == true' "$CX_SESSIONS" >/dev/null 2>&1
 }
 
+# _session_set_remote_control SLUG 0|1 [NAME] — record whether a session was
+# STARTED with Remote Control, and the name it was given on claude.ai.
+#
+# Fixed at launch like the permission mode: it is a flag on the claude process
+# the pane runs. The same rules as _session_set_hooks: only the positive is
+# stored, and clearing is explicit because a previous session under the same
+# slug may have set it. The link itself is NOT recorded. observe reads it from
+# Claude's status file for the running process, every time.
+_session_set_remote_control() {
+  if [ "$2" != 1 ] && [ ! -e "$CX_SESSIONS" ]; then
+    return 0
+  fi
+  _sessions_ensure
+  _lock
+  # shellcheck disable=SC2064
+  trap "_unlock" EXIT INT TERM
+  jq --arg s "$1" --arg on "$2" --arg n "${3:-}" '
+    if $on == "1" then
+      .sessions[$s] = ((.sessions[$s] // {}) + {remote_control: true}
+        + (if $n == "" then {} else {rc_name: $n} end))
+    elif (.sessions | has($s)) then
+      .sessions[$s] |= (del(.remote_control) | del(.rc_name))
+      | if .sessions[$s] == {} then del(.sessions[$s]) else . end
+    else . end' \
+    "$CX_SESSIONS" >"$CX_SESSIONS.new" || {
+    _unlock
+    return 1
+  }
+  mv -f "$CX_SESSIONS.new" "$CX_SESSIONS"
+  _unlock
+  trap - EXIT INT TERM
+}
+
+# _session_remote_control SLUG — true if it was started with Remote Control.
+_session_remote_control() {
+  [ -e "$CX_SESSIONS" ] || return 1
+  jq -e --arg s "$1" '.sessions[$s].remote_control == true' "$CX_SESSIONS" >/dev/null 2>&1
+}
+
 # _session_perm_mode SLUG — the recorded mode, or empty.
 # Falls back to the boolean `dangerous` that 0.2.1 wrote, so a session started
 # before an agent upgrade is still reported correctly while it keeps running.
@@ -1024,6 +1066,87 @@ cmd_new() {
 }
 
 # ---------------------------------------------------------------------------
+# rc — a project's own Remote Control setting
+# ---------------------------------------------------------------------------
+#
+# A preference, which nothing can derive, so it is recorded in the registry
+# beside name and path (invariant 5). On the server rather than in the
+# client's config so that every machine running cx, a laptop and an always-on
+# host serving cx web alike, sees the same setting. Absent means "follow the
+# client's default"; false is a real value, "never for this project".
+
+# _rc_resolve NAME WANT — 1 or 0: should a session of project NAME start with
+# Remote Control? WANT is open's --rc: on and off are the command line and
+# win; default-on and default-off are the client's default, which the
+# project's own setting beats.
+_rc_resolve() {
+  local name="$1" want="$2" p=""
+  case "$want" in
+    on)
+      printf 1
+      return 0
+      ;;
+    off)
+      printf 0
+      return 0
+      ;;
+  esac
+  p=$(jq -r --arg n "$name" '
+    .projects[]? | select(.name == $n)
+    | if .remote_control == true then "1" elif .remote_control == false then "0" else empty end' \
+    "$CX_REGISTRY" 2>/dev/null | head -1) || p=""
+  if [ -n "$p" ]; then
+    printf '%s' "$p"
+  elif [ "$want" = default-on ]; then
+    printf 1
+  else
+    printf 0
+  fi
+}
+
+cmd_rc() {
+  local sub="${1:-}"
+  [ $# -gt 0 ] && shift
+  _registry_ensure
+  case "$sub" in
+    ls | list)
+      # has(), not `// null`: the alternative operator treats false as
+      # missing, and "off for this project" is exactly the value to show.
+      jq -c '{projects: [.projects[]? | {name,
+        remote_control: (if has("remote_control") then .remote_control else null end)}]}' \
+        "$CX_REGISTRY"
+      ;;
+    set)
+      local name="${1:-}" val="${2:-}"
+      [ -n "$name" ] && [ -n "$val" ] || die "usage: cx-agent rc set <name> on|off|default" 3
+      case "$val" in
+        on | off | default) ;;
+        *) die "rc set takes on, off or default, not: $val" 3 ;;
+      esac
+      [ -n "$(_project_get "$name")" ] || die "no project named '$name' on this server" 2
+      _lock
+      # shellcheck disable=SC2064
+      trap "_unlock" EXIT INT TERM
+      jq --arg n "$name" --arg v "$val" '
+        .projects |= map(if .name != $n then .
+          elif $v == "on" then . + {remote_control: true}
+          elif $v == "off" then . + {remote_control: false}
+          else del(.remote_control) end)' \
+        "$CX_REGISTRY" >"$CX_REGISTRY.new" || {
+        _unlock
+        die "failed to update the registry" 1
+      }
+      mv -f "$CX_REGISTRY.new" "$CX_REGISTRY"
+      _unlock
+      trap - EXIT INT TERM
+      jq -nc --arg n "$name" --arg v "$val" \
+        '{name: $n, remote_control: (if $v == "on" then true elif $v == "off" then false else null end)}'
+      ;;
+    *) die "usage: cx-agent rc ls | rc set <name> on|off|default" 3 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # rm
 # ---------------------------------------------------------------------------
 
@@ -1191,7 +1314,7 @@ EOF
 #     parallel sessions in one directory both resolve to the same way.
 cmd_open() {
   local name="" wt="" label="" mode="continue" dangerous=0 detach=0 hooks=1 hooked=0
-  local perm_mode="" model="" effort="" bar=unicode
+  local perm_mode="" model="" effort="" bar=unicode rc=default-off rc_name="" rc_on=0
   # Everything after `--`, quoted individually and handed to claude verbatim.
   local passthru=()
   while [ $# -gt 0 ]; do
@@ -1233,6 +1356,24 @@ cmd_open() {
         effort="${1:-}"
         ;;
       --dangerous) dangerous=1 ;;
+      # Remote Control. on/off is what the command line said, and beats the
+      # project's own setting; default-on/default-off is the client's default
+      # (the host's #cx:remote_control, then CX_REMOTE_CONTROL), which the
+      # project's setting beats. Only the agent can see the project's setting,
+      # which is why the client sends a default rather than deciding.
+      --rc)
+        shift
+        case "${1:-}" in
+          on | off | default-on | default-off) rc="$1" ;;
+          *) die "--rc takes on, off, default-on or default-off" 3 ;;
+        esac
+        ;;
+      # The name claude.ai/code shows. The client builds it from its own alias
+      # for this server, which the agent cannot know.
+      --rc-name)
+        shift
+        rc_name="${1:-}"
+        ;;
       --)
         shift
         while [ $# -gt 0 ]; do
@@ -1248,6 +1389,12 @@ cmd_open() {
   done
 
   [ -n "$name" ] || die "usage: cx-agent open <name> [--worktree W] [--session L] [--mode MODE] [OPTIONS] [-- ARGS]" 3
+  # The name becomes one argument inside the pane's command line, through
+  # cx_q, so quoting is not the concern. A newline or a control character is:
+  # it would show on claude.ai as garbage, and nothing cx makes contains one.
+  case "$rc_name" in
+    *[[:cntrl:]]*) die "--rc-name cannot contain control characters" 3 ;;
+  esac
   have tmux || die "tmux is not installed on this server" 1
   if [ -n "$wt" ]; then _validate_label "worktree name" "$wt"; fi
   if [ -n "$label" ]; then _validate_label "session label" "$label"; fi
@@ -1267,7 +1414,7 @@ cmd_open() {
     # A shell session runs no Claude, so every one of these would be dropped
     # on the floor. Saying so beats appearing to honour them.
     if [ -n "$perm_mode" ] || [ -n "$model" ] || [ -n "$effort" ] ||
-      [ ${#passthru[@]} -gt 0 ]; then
+      [ ${#passthru[@]} -gt 0 ] || [ "$rc" = on ]; then
       die "--mode shell starts no Claude, so Claude options have no effect" 3
     fi
   fi
@@ -1322,6 +1469,25 @@ cmd_open() {
       opts="$opts --effort $(cx_q "$effort")"
     fi
 
+    # Remote Control: the command line, then the project's own setting, then
+    # the client's default. Asked for explicitly on a Claude Code that lacks
+    # it is a refusal, before new-session like everything else that can fail;
+    # arriving by default it is a note, because a default must not stop a
+    # session from starting on an older server.
+    if [ "$mode" != shell ]; then
+      rc_on=$(_rc_resolve "$name" "$rc")
+      if [ "$rc_on" = 1 ] && ! _claude_supports "$claude_bin" --remote-control; then
+        [ "$rc" = on ] &&
+          die "the Claude Code on this server has no --remote-control; upgrade it" 1
+        log "note: this server's Claude Code has no Remote Control; starting $slug without it"
+        rc_on=0
+      fi
+      if [ "$rc_on" = 1 ]; then
+        [ -n "$rc_name" ] || rc_name="$slug"
+        opts="$opts --remote-control $(cx_q "$rc_name")"
+      fi
+    fi
+
     # Name the session after its cx slug so it is identifiable from INSIDE:
     # Claude shows it in the prompt box, the /resume picker and the terminal
     # title. Added silently and only when supported — it is a convenience, and
@@ -1360,6 +1526,10 @@ cmd_open() {
     if [ "$perm_mode" = bypassPermissions ]; then
       log "WARNING: starting $slug with ALL permission checks bypassed"
       log "         Claude will not ask before editing files or running commands"
+      if [ "$rc_on" = 1 ]; then
+        log "         and with Remote Control: anyone signed in to this claude.ai"
+        log "         account can make it run any command here"
+      fi
     elif [ -n "$perm_mode" ]; then
       log "note: starting $slug with permission mode $perm_mode"
     fi
@@ -1395,6 +1565,25 @@ cmd_open() {
           [ -f "$(_session_dir "$dir")/$uuid.jsonl" ] && flag=--resume
           tmux send-keys -t "$pane" \
             "exec $(cx_q "$claude_bin") $flag $(cx_q "$uuid")$opts" C-m
+
+          # Claude Code reconnects Remote Control BY ITSELF when it resumes a
+          # conversation that had it: the transcript keeps a bridge-session
+          # entry, and `--resume` with no --remote-control came back on the
+          # same claude.ai link (verified, Claude Code 2.1.306). So it is on,
+          # whatever was asked, and the pin says so; otherwise cx status
+          # would report a session reachable from claude.ai as not being.
+          if [ "$flag" = --resume ] && [ "$rc_on" != 1 ] &&
+            grep -q '"type":"bridge-session"' "$(_session_dir "$dir")/$uuid.jsonl" 2>/dev/null; then
+            rc_on=1
+            if [ "$rc" = off ]; then
+              log "note: $slug resumes a conversation that had Remote Control, and Claude Code"
+              log "      turns it back on when it resumes one. For a session without it, start"
+              log "      a new conversation: a new @label, or cx stop then cx forget."
+            else
+              log "note: $slug resumes a conversation that had Remote Control; Claude Code"
+              log "      reconnects it, on the same claude.ai link."
+            fi
+          fi
         else
           # No id could be generated (no uuidgen, no /dev/urandom, no procfs).
           # Degrade to the old single-session behavior rather than refusing.
@@ -1423,6 +1612,7 @@ cmd_open() {
     if [ "$mode" != shell ]; then
       _session_set_perm_mode "$slug" "$perm_mode" || true
       _session_set_hooks "$slug" "$hooked" || true
+      _session_set_remote_control "$slug" "$rc_on" "$rc_name" || true
     fi
   else
     # Reattaching. Everything above was fixed when the pane's claude launched,
@@ -1446,6 +1636,14 @@ cmd_open() {
     if [ -n "$model" ] || [ -n "$effort" ] || [ ${#passthru[@]} -gt 0 ]; then
       log "note: $slug is already running; model, effort and passed-through"
       log "      options only apply when a session is created."
+    fi
+    # Only what was asked for explicitly: a default is not a request, and
+    # repeating it on every reattach would be noise.
+    if [ "$rc" = on ] && ! _session_remote_control "$slug"; then
+      log "note: $slug is already running without Remote Control, which can only"
+      log "      be turned on when a session starts: cx stop, then cx open --remote-control."
+    elif [ "$rc" = off ] && _session_remote_control "$slug"; then
+      log "note: $slug is already running with Remote Control; cx stop it to drop it."
     fi
   fi
 
@@ -1471,10 +1669,15 @@ cmd_open() {
   # lie in exactly the case a driver most needs the truth.
   if [ "$detach" = 1 ]; then
     [ -n "$uuid" ] || uuid=$(_session_uuid_get "$slug" 2>/dev/null) || uuid=""
-    local live_perm
+    local live_perm live_rc=false live_rc_name=""
     live_perm=$(_session_perm_mode "$slug")
+    if _session_remote_control "$slug"; then
+      live_rc=true
+      live_rc_name=$(jq -r --arg s "$slug" '.sessions[$s].rc_name // empty' "$CX_SESSIONS" 2>/dev/null) || live_rc_name=""
+    fi
     jq -nc --arg target "$slug" --arg tmux "$tname" --arg dir "$dir" \
       --arg uuid "$uuid" --arg mode "$mode" --arg perm "$live_perm" \
+      --argjson rc "$live_rc" --arg rcname "$live_rc_name" \
       --argjson created "$created" '{
         target:  $target,
         tmux:    $tmux,
@@ -1484,6 +1687,9 @@ cmd_open() {
         created: $created,
         permission_mode: (if $perm == "" then null else $perm end),
         dangerous: ($perm == "bypassPermissions"),
+        # The link is not known yet: Claude registers with claude.ai once it
+        # is up. cx peek reports it from then on.
+        remote_control: {enabled: $rc, name: (if $rcname == "" then null else $rcname end)},
         attached: false
       }'
     return 0
@@ -1707,7 +1913,9 @@ cmd_sessions() {
                           | $e.perm_mode
                             // (if $e.dangerous == true then "bypassPermissions" else null end)),
               dangerous: (($pins.sessions[$target] as $e
-                           | $e.perm_mode == "bypassPermissions" or $e.dangerous == true) // false)
+                           | $e.perm_mode == "bypassPermissions" or $e.dangerous == true) // false),
+              # Started with Remote Control. Launch-time, like the mode.
+              remote_control: ($pins.sessions[$target].remote_control == true)
             })
       | {host: $host, attach_detaches: $detaches, sessions: .}'
 }
@@ -1894,7 +2102,10 @@ _observe_load() {
   if [ -e "$CX_SESSIONS" ]; then
     _OBS_PINS=$(jq -r '(.sessions // {}) | to_entries[]
       | select(.value.uuid != null)
-      | [.key, .value.uuid, (if .value.hooks == true then "1" else "0" end)] | @tsv' \
+      | [.key, .value.uuid, (if .value.hooks == true then "1" else "0" end),
+         (if .value.remote_control == true then "1" else "0" end),
+         (.value.rc_name // ""),
+         (.value.perm_mode // (if .value.dangerous == true then "bypassPermissions" else "" end))] | @tsv' \
       "$CX_SESSIONS" 2>/dev/null) || _OBS_PINS=""
   fi
 }
@@ -1903,6 +2114,10 @@ _observe_load() {
 # line per process that is verifiably still alive:
 #
 #   session_id TAB tmux_session TAB status TAB status_at TAB kind TAB pid
+#   TAB bridge_session_id
+#
+# The last is Remote Control's id for the session on claude.ai, present only
+# while it is on, whether cx started it so or someone typed /remote-control.
 #
 # Claude Code keeps $CX_CLAUDE_DIR/sessions/<pid>.json up to date with
 # `status` (busy or idle), `kind` (interactive or bg), the tmux pane it runs
@@ -1916,7 +2131,7 @@ _observe_load() {
 # at the moment the file records. Two real files on the machine this was
 # written on passed `kill -0` for pids that had been reused by something else.
 _observe_claude() {
-  local d="$CX_CLAUDE_DIR/sessions" f row sid tmx st at kind pid start
+  local d="$CX_CLAUDE_DIR/sessions" f row sid tmx st at kind pid start bridge
   [ -d "$d" ] || return 0
   for f in "$d"/*.json; do
     [ -f "$f" ] || continue
@@ -1929,14 +2144,15 @@ _observe_claude() {
         (((.statusUpdatedAt // 0) / 1000 | floor) | f),
         (.kind | f),
         (.pid | tostring),
-        (.procStart | f)
+        (.procStart | f),
+        (.bridgeSessionId | f)
       ] | @tsv' "$f" 2>/dev/null) || continue
     [ -n "$row" ] || continue
-    IFS='	' read -r sid tmx st at kind pid start <<EOF
+    IFS='	' read -r sid tmx st at kind pid start bridge <<EOF
 $row
 EOF
     _proc_started "$pid" "$start" || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$tmx" "$st" "$at" "$kind" "$pid"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$tmx" "$st" "$at" "$kind" "$pid" "${bridge:--}"
   done
 }
 
@@ -2021,7 +2237,7 @@ _observe_worktrees() {
 #
 #   slug project worktree label dir uuid tmux_name alive attached created
 #   activity pane_command session_store_dir claude_status claude_status_at
-#   claude_kind claude_pid
+#   claude_kind claude_pid hooked remote_control rc_name perm_mode bridge
 #
 # with "-" for anything empty. The note on IFS in lib/activity.sh applies to
 # every TSV read back with `read`, and this one is: a blank middle column would
@@ -2052,12 +2268,16 @@ _observe_resolve() {
       load("_OR_PINS", uuid, 1)
       load("_OR_WTS", wt, 2)
       load("_OR_ROWS", row, 0)
-      # Which sessions were started with hooks: the third column of the pins.
+      # How each session was started: with hooks, with Remote Control (and
+      # under what name), in which permission mode. Columns 3 to 6 of the pins.
       np = split(ENVIRON["_OR_PINS"], PL, "\n")
       for (i = 1; i <= np; i++) {
         if (PL[i] == "") continue
         split(PL[i], pf, "\t")
         if (pf[3] == "1") hk[pf[1]] = 1
+        if (pf[4] == "1") rcp[pf[1]] = 1
+        rcn[pf[1]] = pf[5]
+        pm[pf[1]] = pf[6]
       }
       # Claude processes, reachable by the conversation they hold and by the
       # tmux session they run in. The conversation is the better key: it is
@@ -2105,16 +2325,17 @@ _observe_resolve() {
         sd = ""
         if (d != "") { e = d; gsub(/[^A-Za-z0-9-]/, "-", e); sd = cdir "/projects/" e }
 
-        cs = "-"; cat = "-"; ck = "-"; cp = "-"
+        cs = "-"; cat = "-"; ck = "-"; cp = "-"; br = "-"
         c = ""
         if (u != "" && (u in bysid)) c = bysid[u]
         else if (tname in bytmux) c = bytmux[tname]
-        if (c != "") { split(c, cf, "\t"); cs = cf[3]; cat = cf[4]; ck = cf[5]; cp = cf[6] }
+        if (c != "") { split(c, cf, "\t"); cs = cf[3]; cat = cf[4]; ck = cf[5]; cp = cf[6]; br = cf[7] }
 
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
           s, dash(proj), dash(w), dash(label), dash(d), dash(u), tname, \
           alive, att, dash(cr), dash(ac), dash(pc), dash(sd), cs, cat, ck, cp, \
-          ((s in hk) ? "true" : "false")
+          ((s in hk) ? "true" : "false"), ((s in rcp) ? "true" : "false"), \
+          dash(rcn[s]), dash(pm[s]), dash(br)
       }
     }'
 }
@@ -2213,13 +2434,13 @@ EOF
 
   local facts="" msgs="" m="" keep line
   local s proj w lbl dir uuid tname alive att created activity pcmd sdir
-  local cstatus cat ckind cpid estate eat evia hooked
-  local tfile present seen shell mtime bytes
+  local cstatus cat ckind cpid estate eat evia hooked rcpin rcname permm bridge
+  local tfile present seen shell mtime bytes tempty
   local chatpid chatpend chatat crow since
   keep="$tail_n"
   [ "$keep" -ge 1 ] || keep=1
 
-  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir cstatus cat ckind cpid hooked; do
+  while IFS='	' read -r s proj w lbl dir uuid tname alive att created activity pcmd sdir cstatus cat ckind cpid hooked rcpin rcname permm bridge; do
     [ -n "$s" ] || continue
     [ "$proj" = - ] && proj=""
     [ "$w" = - ] && w=""
@@ -2234,6 +2455,9 @@ EOF
     [ "$cat" = - ] && cat=""
     [ "$ckind" = - ] && ckind=""
     [ "$cpid" = - ] && cpid=""
+    [ "$rcname" = - ] && rcname=""
+    [ "$permm" = - ] && permm=""
+    [ "$bridge" = - ] && bridge=""
 
     # A cx chat holding this conversation: no tmux at all, and very much
     # running. Its claim says since when, and how many of its requests are
@@ -2304,6 +2528,7 @@ $s
 
     mtime=""
     bytes=""
+    tempty=""
     if [ "$present" = true ]; then
       mtime=$(_mtime "$tfile" 2>/dev/null) || mtime=""
       bytes=$(_file_bytes "$tfile")
@@ -2318,6 +2543,14 @@ $s
       # `last` is null for a session that is not running.
       if [ "$alive" = true ] || [ -n "$chatpid" ] || [ "$tail_n" -gt 0 ]; then
         m=$(_transcript_messages "$tfile" "$keep")
+        # On disk with not one message in it, and read whole, so that is
+        # certain rather than a window full of sidechains. A Remote Control
+        # session writes its transcript the moment it starts, verified with
+        # Claude Code 2.1.306, so "there is a file" no longer means "the
+        # conversation has begun".
+        if [ -z "$m" ] && [ "${bytes:-0}" -le "$CX_OBSERVE_BYTES" ]; then
+          tempty=true
+        fi
         if [ -n "$m" ]; then
           # Only what the answer uses: the last message, or the tail asked
           # for. The window can hold hundreds.
@@ -2337,7 +2570,7 @@ EOF
       fi
     fi
 
-    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia	$hooked	$chatpid	$chatpend
+    facts="$facts$s	$proj	$w	$lbl	$dir	$tname	$uuid	$tfile	$created	$activity	$pcmd	$mtime	$bytes	$alive	$att	$shell	$present	$seen	$cstatus	$cat	$ckind	$cpid	$estate	$eat	$evia	$hooked	$chatpid	$chatpend	$rcpin	$rcname	$permm	$bridge	$tempty
 "
   done <<EOF
 $resolved
@@ -2390,6 +2623,9 @@ EOF
                 # first-run prompt (trust this folder?) is the likely reason
                 # nothing is written.
                 dir_seen: ($f[17] == "true"),
+                # Present, read whole, and holding no message yet. Only
+                # known for a session that was read: null otherwise.
+                empty:    (if ($f[32] // "") == "true" then true elif $f[16] == "true" and ($f[13] == "true" or ($f[26] // "") != "" or $tail_n > 0) then false else null end),
                 mtime:    ($f[11] | num),
                 bytes:    ($f[12] | num)
               },
@@ -2417,6 +2653,20 @@ EOF
                 pid:     ($f[26] | num),
                 pending: ($f[27] | num)
               } end),
+              # How the session was started, as recorded at creation (9a).
+              perm_mode: (($f[30] // "") | cell),
+              # Remote Control. The link is never stored: it comes from the
+              # bridge id in the status file Claude keeps for the RUNNING process, so
+              # a stopped session has none. It also catches a session given
+              # /remote-control by hand. The id is checked for shape before it
+              # becomes part of a URL.
+              remote_control: (($f[31] // "") as $b
+                | ($b | test("^session_[A-Za-z0-9_-]+$")) as $ok
+                | {
+                    enabled: (($f[28] // "") == "true" or $ok),
+                    name:    (($f[29] // "") | cell),
+                    url:     (if $ok then "https://claude.ai/code/" + $b else null end)
+                  }),
               last: ($m | last),
               tail: (if $tail_n <= 0 then [] else $m[-$tail_n:] end)
             }))
@@ -5354,7 +5604,10 @@ cx-agent — server-side helper for cx (not intended for direct use)
   open <name> [--worktree W] [--session L] [--detach] [--no-hooks]
               --mode continue|resume|shell [--bar on|nerd|off]
               [--permission-mode M] [--model M] [--effort E] [--dangerous]
+              [--rc on|off|default-on|default-off] [--rc-name N]
               [-- CLAUDE_ARGS...]
+  rc ls                         every project's own Remote Control setting
+  rc set <name> on|off|default  set or clear it
   stop <name> [--worktree W] [--session L] [--all]
   sessions                      live cx tmux sessions
   observe [--all | <name> [--worktree W] [--session L]] [--tail N]
@@ -5459,6 +5712,7 @@ main() {
     observe) cmd_observe "$@" ;;
     nudge) cmd_nudge "$@" ;;
     forget) cmd_forget "$@" ;;
+    rc) cmd_rc "$@" ;;
     goal) cmd_goal "$@" ;;
     ask) cmd_ask "$@" ;;
     chat) cmd_chat "$@" ;;
