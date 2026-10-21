@@ -369,6 +369,7 @@ install_tree() {
       # breaks on any path containing whitespace.
       local paths="bin lib server completions config.example"
       [ -d "$src/docs" ] && paths="$paths docs"
+      [ -d "$src/web" ] && paths="$paths web"
       # shellcheck disable=SC2086
       (cd "$src" && tar -cf - $paths) | (cd "$CX_SHARE" && tar -xf -)
       # docs/ ships for the driver subagent and the reference pages, but not
@@ -377,6 +378,9 @@ install_tree() {
       # excluded from it, because tar's --exclude matches differently in GNU
       # and BSD tar. Only ever in the copy: $CX_SHARE is never $src here.
       rm -rf "$CX_SHARE/docs/media" "$CX_SHARE/docs/demo"
+      # A server binary in the source tree is that tree's own build, for
+      # whatever version it was; install_web puts the release's in its place.
+      rm -rf "$CX_SHARE/web/bin"
       row ok "source" "copied from $src"
     fi
   else
@@ -404,6 +408,89 @@ install_tree() {
 
   chmod 755 "$CX_SHARE/bin/cx" "$CX_SHARE/server/cx-agent" 2>/dev/null || true
   return 0
+}
+
+# web_platform — the release binary's name for this machine, or nothing
+# when no release is built for it.
+web_platform() {
+  local os arch
+  case "$(uname -s 2>/dev/null)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m 2>/dev/null)" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  printf 'cx-web-%s-%s' "$os" "$arch"
+}
+
+# sha256_of FILE — the hex digest, from whichever tool this system has.
+sha256_of() {
+  # portable-ok on both: guarded, and shasum is the BSD fallback.
+  if have sha256sum; then             # portable-ok
+    sha256sum "$1" | awk '{print $1}' # portable-ok
+  elif have shasum; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# fetch URL DEST — https (or a local file:// release, for tests) only, and no
+# redirect may leave https.
+fetch() {
+  if have curl; then
+    curl -fsSL --proto '=https,file' --proto-redir '=https' -o "$2" "$1" 2>/dev/null
+  elif have wget; then
+    case "$1" in https://*) wget -q -O "$2" "$1" ;; *) return 1 ;; esac
+  else
+    return 1
+  fi
+}
+
+# install_web — the cx web server for this release, when one was built.
+#
+# Optional twice over: cx web is the only command that needs it, and it
+# builds its own with Go when there is none. So nothing here fails the
+# install. The download is checked against the release's SHA256SUMS before
+# it is put anywhere it can run from, and one that does not match is thrown
+# away rather than kept "just in case".
+install_web() {
+  local ver name base tmp want sum
+  [ -d "$CX_SHARE/web" ] || return 0
+  ver=$(sed -n 's/^CX_VERSION="\(.*\)"$/\1/p' "$CX_SHARE/bin/cx" 2>/dev/null | head -1)
+  if ! name=$(web_platform) || [ -z "$ver" ]; then
+    row opt "cx web" "no release build for this platform" "cx web builds its own with Go 1.21+"
+    return 0
+  fi
+  if [ -x "$CX_SHARE/web/bin/cx-web" ] &&
+    [ "$("$CX_SHARE/web/bin/cx-web" --version 2>/dev/null)" = "$ver" ]; then
+    row ok "cx web" "server $ver already installed"
+    return 0
+  fi
+  base="${CX_RELEASE_URL:-$CX_REPO_URL/releases/download}/v$ver"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/cx-web.XXXXXX") || return 0
+  if ! fetch "$base/$name" "$tmp/$name" || ! fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
+    rm -rf "$tmp"
+    row opt "cx web" "no release binary for $ver" "cx web builds its own with Go 1.21+"
+    return 0
+  fi
+  want=$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1; exit}' "$tmp/SHA256SUMS")
+  sum=$(sha256_of "$tmp/$name") || sum=""
+  if [ -z "$want" ] || [ "$sum" != "$want" ]; then
+    rm -rf "$tmp"
+    row miss "cx web" "the downloaded server did not match SHA256SUMS; discarded" \
+      "cx web builds its own with Go 1.21+"
+    return 0
+  fi
+  mkdir -p "$CX_SHARE/web/bin" &&
+    chmod 755 "$tmp/$name" &&
+    mv -f "$tmp/$name" "$CX_SHARE/web/bin/cx-web"
+  rm -rf "$tmp"
+  row ok "cx web" "server $ver ($name), checksum verified"
 }
 
 install_shim() {
@@ -663,6 +750,7 @@ setup_shell() {
 
 do_install() {
   install_tree || return 1
+  install_web
   install_shim
   install_completions
   install_config
@@ -761,6 +849,8 @@ EXIT CODES
 ENVIRONMENT
   CX_PREFIX        Same as --prefix.
   CX_REPO_URL      Source repository (default: the upstream project).
+  CX_RELEASE_URL   Where release binaries are (default: CX_REPO_URL's
+                   GitHub releases). Only cx web's server comes from there.
   NO_COLOR         Disable colored output.
 EOF
 }

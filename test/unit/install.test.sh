@@ -167,4 +167,46 @@ assert_not_contains "$_out" "docs/demo"
 it "does not ship the tests"
 assert_not_contains "$_out" "./test/"
 
+describe "install_web: the cx web server from the release"
+
+# A release on disk, served as file://, so this needs no network: the binary
+# for this machine and a SHA256SUMS naming it.
+_wtmp=$(mktemp -d "${TMPDIR:-/tmp}/cx-instweb.XXXXXX")
+_wname=$(web_platform) || _wname=""
+if [ -z "$_wname" ] || ! sha256_of /dev/null >/dev/null 2>&1 || ! have curl; then
+  printf '  (skipped: no release platform, sha256 tool or curl here)\n'
+else
+  web_run() {
+    (
+      # shellcheck disable=SC2034  # read by install_web
+      CX_SHARE="$_wtmp/share" CX_RELEASE_URL="file://$_wtmp/rel" NO_COLOR=1
+      install_web
+      if [ -x "$CX_SHARE/web/bin/cx-web" ]; then echo "installed=$("$CX_SHARE/web/bin/cx-web" --version)"; fi
+    ) 2>&1
+  }
+  mkdir -p "$_wtmp/share/bin" "$_wtmp/share/web" "$_wtmp/rel/v9.9.9"
+  printf 'CX_VERSION="9.9.9"\n' >"$_wtmp/share/bin/cx"
+  printf '#!/bin/sh\necho 9.9.9\n' >"$_wtmp/rel/v9.9.9/$_wname"
+  printf '%s  %s\n' "$(sha256_of "$_wtmp/rel/v9.9.9/$_wname")" "$_wname" >"$_wtmp/rel/v9.9.9/SHA256SUMS"
+
+  it "installs the binary for this machine when its checksum matches"
+  assert_contains "$(web_run)" "installed=9.9.9"
+  it "and leaves one already installed for this version alone"
+  assert_contains "$(web_run)" "already installed"
+
+  it "discards a download that does not match SHA256SUMS"
+  rm -rf "$_wtmp/share/web/bin"
+  printf '#!/bin/sh\necho tampered\n' >"$_wtmp/rel/v9.9.9/$_wname"
+  _o=$(web_run)
+  assert_contains "$_o" "did not match"
+  assert_not_contains "$_o" "installed="
+
+  it "is not an error when the release has no binary"
+  rm -f "$_wtmp/rel/v9.9.9/$_wname"
+  _o=$(web_run)
+  assert_contains "$_o" "no release binary for 9.9.9"
+  assert_not_contains "$_o" "installed="
+fi
+rm -rf "$_wtmp"
+
 summary
