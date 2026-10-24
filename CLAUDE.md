@@ -81,14 +81,16 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/tmp/gocache 
 
 CI additionally runs `shellcheck` and `shfmt -d -i 2 -ci`. Run them through
 containers if not installed locally — **pass `--user` or they write files back
-owned by root**:
+owned by root** — and **use the shfmt CI pins (v3.8.0, in `ci.yml`)**: newer
+ones accept `a; shift` on one line where 3.8.0 splits it, so a clean run with
+`latest` can still fail CI's Lint job, which is how `lib/pick.sh` did:
 
 ```sh
 FILES=$(git ls-files '*.sh' bin/cx server/cx-agent | grep -v 'completions/cx.\(zsh\|fish\)')
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/w -w /w \
   koalaman/shellcheck-alpine:stable shellcheck -x -e SC1091 -S warning $FILES
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/w -w /w \
-  mvdan/shfmt:latest -w -i 2 -ci $FILES
+  mvdan/shfmt:v3.8.0 -w -i 2 -ci $FILES
 ```
 
 Integration tests spin up throwaway `sshd` containers with real key auth and

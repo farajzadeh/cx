@@ -97,16 +97,20 @@ cx_pick() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --prompt)
-        prompt="$2"; shift
+        prompt="$2"
+        shift
         ;;
       --header)
-        header="$2"; shift
+        header="$2"
+        shift
         ;;
       --preview)
-        preview="$2"; shift
+        preview="$2"
+        shift
         ;;
       --query)
-        _CX_PICK_QUERY="$2"; shift
+        _CX_PICK_QUERY="$2"
+        shift
         ;;
       --always-ask) _CX_PICK_ALWAYS=1 ;;
     esac
