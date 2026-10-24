@@ -15,6 +15,10 @@
 #   --continue             the most recent conversation here
 #   --dangerously-skip-permissions   recorded, so tests can assert it was
 #                          passed to exactly the sessions that asked for it
+#   auth status            {"loggedIn": ...} as real Claude prints it, exit 1
+#                          when false; signed in only once ~/.cx-stub-signed-in
+#                          exists, so a fresh node is a server nobody signed
+#                          in to
 #
 # The distinction between `--resume UUID` and a bare `--resume` is the whole
 # point: cx pins an id per named session, and getting that wrong is what makes
@@ -58,6 +62,15 @@ if [ "${CX_STUB_TUI:-0}" != 1 ] && [ -x "${HOME:-}/.local/bin/claude-tui" ]; the
   exec "$HOME/.local/bin/claude-tui" "$0" "$@"
 fi
 
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  if [ -e "$HOME/.cx-stub-signed-in" ]; then
+    printf '{\n  "loggedIn": true,\n  "authMethod": "claude.ai"\n}\n'
+    exit 0
+  fi
+  printf '{\n  "loggedIn": false,\n  "authMethod": "none"\n}\n'
+  exit 1
+fi
+
 session=""
 mode=interactive
 tag=plain
@@ -98,6 +111,9 @@ Options:
   --json-schema <schema>                JSON Schema for structured output
   --max-budget-usd <amount>             Maximum dollar amount
   -p, --print                           Print response and exit
+
+Commands:
+  auth                                  Manage authentication
 HELP
       exit 0
       ;;

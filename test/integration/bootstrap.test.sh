@@ -100,6 +100,43 @@ assert_not_contains "$_out" 'installing Claude Code'
 
 # ---------------------------------------------------------------------------
 
+describe "a fresh server is not signed in"
+
+# Claude writes ~/.claude.json the first time it runs at all, so its being
+# there is no sign-in. Three provisions in one container: a first run's file
+# only, then Claude's own auth status saying yes, then a claude.ai token in
+# the file. The stub stands in for Claude and answers `auth status`.
+_out=$(run_in ubuntu:24.04 '
+  mkdir -p $HOME/.local/bin
+  cp /w/test/integration/node/claude-stub.sh $HOME/.local/bin/claude
+  chmod 755 $HOME/.local/bin/claude
+  provision() {
+    cp /w/server/cx-agent /tmp/cx-agent.incoming
+    sh /w/server/bootstrap.sh >/tmp/o 2>/dev/null
+    printf "%s=%s\n" "$1" "$(tail -1 /tmp/o)"
+  }
+  mkdir -p $HOME/.claude/backups
+  printf "{\n  \"firstStartTime\": \"2026-10-24T22:40:11Z\",\n  \"machineID\": \"0f3c\"\n}\n" >$HOME/.claude.json
+  provision FIRST_RUN
+  touch $HOME/.cx-stub-signed-in
+  provision AUTH_STATUS
+  rm $HOME/.cx-stub-signed-in
+  printf "{\n  \"oauthAccount\": {\n    \"accountUuid\": \"x\"\n  }\n}\n" >$HOME/.claude.json
+  provision TOKEN
+')
+
+it "reports not signed in with only a first run's ~/.claude.json"
+assert_contains "$_out" 'FIRST_RUN={"ok":true'
+assert_contains "$(printf '%s\n' "$_out" | grep '^FIRST_RUN=')" '"claude_logged_in":false'
+
+it "reports signed in when Claude's auth status says so"
+assert_contains "$(printf '%s\n' "$_out" | grep '^AUTH_STATUS=')" '"claude_logged_in":true'
+
+it "reports signed in with a claude.ai account in ~/.claude.json"
+assert_contains "$(printf '%s\n' "$_out" | grep '^TOKEN=')" '"claude_logged_in":true'
+
+# ---------------------------------------------------------------------------
+
 describe "Alpine 3.20 — apk, busybox ash, bash absent"
 
 # The hardest case: /bin/sh is busybox ash, and bash — which cx-agent needs —

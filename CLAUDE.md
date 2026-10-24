@@ -60,6 +60,7 @@ bash test/unit/remote-control.test.sh      # Remote Control: the default ladder,
 bash test/unit/tail.test.sh                # cx tail: the cursor cx web streams with
 bash test/unit/web.test.sh                 # which cx web server runs, and what it is told
 bash test/unit/view.test.sh                # cx open --view: read-only, never creates
+bash test/unit/signin.test.sh              # doctor's "signed in": a token or Claude's word, never a file
 bash test/integration/hosts.test.sh        # a single integration suite
 bash test/integration/worktrees.test.sh    # worktrees end to end
 bash test/integration/driving.test.sh      # observe, nudge and goals end to end
@@ -956,6 +957,23 @@ rows does the sums. Delete the cache and the next run is slow and answers the
 same — invariant 4. The limits come from `_limits_readings`, the same function
 the tmux bar uses, so the two cannot disagree; only the usage figures leave
 `~/.claude.json`, which also holds the account's id and email.
+
+### Whether Claude is signed in
+
+**`~/.claude.json` existing is not a sign-in.** Claude writes it the first
+time it runs at all — `firstStartTime`, `machineID`, migration flags —
+so `cx doctor` used to report a server nobody had signed in to as signed in.
+`_claude_signed_in` in the agent (and `claude_signed_in` in `bootstrap.sh`,
+the same check with `grep`, since jq may not be there yet) looks for what a
+sign-in leaves: `claudeAiOauth` in `.credentials.json`, `oauthAccount` or
+`primaryApiKey` in `~/.claude.json`. Failing that it asks Claude with
+`claude auth status`, which prints `{"loggedIn": …}` and exits 1 for false,
+so stdout is read rather than the status. That costs about 0.4 s, which is
+why the files come first: `cx open` runs `doctor` every time. And only where
+`claude --help` lists `auth`, because a Claude Code without that command
+takes `auth status` as a prompt and starts a session with it. The test stub
+answers `auth status` too, signed in only once `~/.cx-stub-signed-in`
+exists.
 
 ### Claude's own status, and its hooks
 

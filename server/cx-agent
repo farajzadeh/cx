@@ -5744,18 +5744,43 @@ tool_version() {
   esac
 }
 
+# _claude_signed_in — has anyone signed Claude Code in on this server?
+#
+# Not "is ~/.claude.json there": Claude writes that file the first time it
+# runs at all, signed in or not — firstStartTime, machineID and a few
+# migration flags (verified, Claude Code 2.1.307) — so a server nobody had
+# signed in to was reported signed in. What a sign-in leaves is a token:
+# claudeAiOauth in .credentials.json, and oauthAccount (claude.ai) or
+# primaryApiKey (an API key) in ~/.claude.json. Reading those costs nothing.
+#
+# Anything else — the macOS Keychain, ANTHROPIC_API_KEY, a cloud provider —
+# only Claude can see, so then ask it: `claude auth status` prints
+# {"loggedIn": ...}, and exits 1 when that is false, so its stdout is read
+# rather than its status. That is about 0.4 s, paid only by a server the
+# files could not vouch for. Only where --help lists `auth`, because a
+# Claude Code without the command takes `auth status` as a prompt and starts
+# a session with it. Advisory either way: cx never blocks on the answer.
+_claude_signed_in() {
+  local f c out
+  for f in "$CX_CLAUDE_DIR/.credentials.json" "$CX_CLAUDE_DIR/credentials.json" \
+    "$HOME/.config/claude/.credentials.json"; do
+    [ -s "$f" ] && jq -e '.claudeAiOauth | type == "object"' "$f" >/dev/null 2>&1 && return 0
+  done
+  [ -s "$CX_CLAUDE_JSON" ] &&
+    jq -e '(.oauthAccount | type == "object")
+      or (.primaryApiKey | type == "string" and length > 0)' \
+      "$CX_CLAUDE_JSON" >/dev/null 2>&1 && return 0
+
+  c=$(_find_claude) || return 1
+  "$c" --help </dev/null 2>/dev/null | grep -qE '^ +auth( |$)' || return 1
+  out=$("$c" auth status </dev/null 2>/dev/null) || true
+  printf '%s' "$out" | jq -e '.loggedIn == true' >/dev/null 2>&1
+}
+
 cmd_doctor() {
   local claude_logged_in=false registry_ok=false root tmux_running=false
 
-  # Best effort. Claude Code has used more than one location for credentials,
-  # and on macOS it may use the Keychain, which is not visible from here — so
-  # a false negative is possible. Treated as advisory: cx never blocks on it.
-  if [ -s "$CX_CLAUDE_DIR/.credentials.json" ] ||
-    [ -s "$HOME/.claude.json" ] ||
-    [ -s "$CX_CLAUDE_DIR/credentials.json" ] ||
-    [ -s "$HOME/.config/claude/.credentials.json" ]; then
-    claude_logged_in=true
-  fi
+  _claude_signed_in && claude_logged_in=true
 
   if [ -r "$CX_REGISTRY" ] && jq -e . "$CX_REGISTRY" >/dev/null 2>&1; then
     registry_ok=true
@@ -5790,7 +5815,7 @@ cmd_doctor() {
       # For diagnosis only — `cx doctor` shows what a server can do. The
       # feature gates deliberately use `version` instead: that is one cheap
       # line, where reaching this verb costs _find_claude, five tool_version
-      # calls and four credential stats, and a gate runs before every call.
+      # calls and _claude_signed_in, and a gate runs before every call.
       capabilities: ["units", "detach", "observe", "nudge", "goals", "chat", "usage"],
       hostname: $hostname,
       project_root: $root,

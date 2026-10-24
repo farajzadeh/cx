@@ -310,13 +310,26 @@ else
 fi
 
 # Credentials are a separate, interactive step. Detect rather than attempt.
+#
+# A sign-in, not ~/.claude.json, which Claude writes the first time it runs at
+# all. The agent's _claude_signed_in is the same check with jq, which this
+# cannot count on yet; keep the two in step.
+claude_signed_in() {
+  grep -qE '"claudeAiOauth": *[{]' "$HOME/.claude/.credentials.json" 2>/dev/null && return 0
+  grep -qE '"(oauthAccount": *[{]|primaryApiKey": *"[^"])' "$HOME/.claude.json" 2>/dev/null &&
+    return 0
+  [ "$CLAUDE_PRESENT" = 1 ] || return 1
+  # An older Claude Code without `auth` would take `auth status` as a prompt.
+  claude --help </dev/null 2>/dev/null | grep -qE '^ +auth( |$)' || return 1
+  claude auth status </dev/null 2>/dev/null | grep -qE '"loggedIn": *true'
+}
+
 CLAUDE_LOGGED_IN=0
-if [ -d "$HOME/.claude" ] &&
-  { [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.claude.json" ]; }; then
+if claude_signed_in; then
   CLAUDE_LOGGED_IN=1
-  log "credentials present"
+  log "signed in"
 else
-  log "no credentials yet"
+  log "not signed in yet"
 fi
 
 # ---------------------------------------------------------------------------

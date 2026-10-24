@@ -65,6 +65,13 @@ release sets both to the same number. After upgrading the client, run
 
 ### Fixed
 
+- **`cx doctor` no longer calls a server signed in because `~/.claude.json`
+  exists.** Claude Code writes that file the first time it runs, signed in
+  or not, so a server nobody had signed in to was reported signed in, and
+  `cx open` skipped its warning. The agent now looks for a sign-in's token
+  in Claude's files and otherwise asks `claude auth status`, which also
+  recognises the macOS Keychain and an API key. `cx provision` uses the same
+  check. Needs agent 0.8.0.
 - A session whose transcript holds no message yet is `fresh`, not `idle` or
   `unknown`. A Remote Control session writes its transcript the moment it
   starts, so a file on disk no longer meant the conversation had begun.

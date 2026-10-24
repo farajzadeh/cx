@@ -166,6 +166,26 @@ assert_eq "$(printf '%s' "$_doctor" | jq -r '.claude.installed')" 'true'
 
 # ---------------------------------------------------------------------------
 
+describe "a server nobody has signed in to is not signed in"
+
+# Claude writes ~/.claude.json the first time it runs at all, so a non-empty
+# one used to count as a sign-in. Write what a first run leaves, and nothing
+# a sign-in would.
+_rssh() { ssh -F "$HOME_DIR/.ssh/config" -o BatchMode=yes cx-test-web1 "$@" 2>/dev/null; }
+_rssh 'printf "%s\n" "{\"firstStartTime\": \"2026-10-24T22:40:11Z\", \"machineID\": \"0f3c\", \"migrationVersion\": 11}" >$HOME/.claude.json'
+
+it "says not signed in, with a first run's ~/.claude.json on the server"
+assert_eq "$(_rssh '$HOME/.local/bin/cx-agent doctor' | jq -r '.claude.logged_in')" 'false'
+it "and so does cx host test"
+assert_contains "$(cx_run "$HOME_DIR" host test cx-test-web1)" 'NOT SIGNED IN'
+
+_rssh 'touch $HOME/.cx-stub-signed-in'
+it "says signed in once Claude's own auth status does"
+assert_eq "$(_rssh '$HOME/.local/bin/cx-agent doctor' | jq -r '.claude.logged_in')" 'true'
+_rssh 'rm -f $HOME/.cx-stub-signed-in $HOME/.claude.json'
+
+# ---------------------------------------------------------------------------
+
 describe "cx doctor"
 
 _out=$(cx_run "$HOME_DIR" doctor)
